@@ -3,7 +3,11 @@
 
 Só biblioteca padrão. Funciona no Python 3.9 do macOS e nos mais novos.
 """
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+    import msvcrt
 import json
 import os
 import re
@@ -264,13 +268,29 @@ def editar_quadro(funcao, caminho=None):
     """
     caminho = Path(caminho or arquivo_do_quadro())
     caminho.parent.mkdir(parents=True, exist_ok=True)
-    with open(str(caminho) + ".trava", "w") as trava:
-        fcntl.flock(trava, fcntl.LOCK_EX)
+    with open(str(caminho) + ".trava", "a+b") as trava:
+        if fcntl is not None:
+            fcntl.flock(trava, fcntl.LOCK_EX)
+        else:
+            # O byte existe antes de travar; todos usam a mesma posição.
+            trava.seek(0, os.SEEK_END)
+            if trava.tell() == 0:
+                trava.write(b"\0")
+                trava.flush()
+            trava.seek(0)
+            msvcrt.locking(trava.fileno(), msvcrt.LK_LOCK, 1)
         try:
-            quadro = carregar_quadro(caminho)
-        except ValueError as erro:
-            raise ErroDeEntrada("%s está ilegível (%s). Conserte ou apague o arquivo." % (caminho, erro))
-        resultado = funcao(quadro)
-        quadro["editado_em"] = iso(agora())
-        gravar_atomico(caminho, json.dumps(quadro, ensure_ascii=False, indent=1) + "\n")
-        return resultado
+            try:
+                quadro = carregar_quadro(caminho)
+            except ValueError as erro:
+                raise ErroDeEntrada("%s está ilegível (%s). Conserte ou apague o arquivo." % (caminho, erro))
+            resultado = funcao(quadro)
+            quadro["editado_em"] = iso(agora())
+            gravar_atomico(caminho, json.dumps(quadro, ensure_ascii=False, indent=1) + "\n")
+            return resultado
+        finally:
+            if fcntl is not None:
+                fcntl.flock(trava, fcntl.LOCK_UN)
+            else:
+                trava.seek(0)
+                msvcrt.locking(trava.fileno(), msvcrt.LK_UNLCK, 1)

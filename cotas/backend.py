@@ -150,27 +150,38 @@ def parse_cli_output(harness, output):
     return normalize(harness, data)
 
 
-def stop_process(process):
-    # Only the newly spawned query group is signalled, never an existing terminal.
+def _novo_grupo_kwargs():
+    if os.name == 'nt':
+        return {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {'start_new_session': True}
+
+
+def _encerrar(process, forcado):
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        if os.name == 'nt':
+            if process.poll() is None:
+                (process.kill if forcado else process.terminate)()
+        else:
+            os.killpg(process.pid, signal.SIGKILL if forcado else signal.SIGTERM)
     except ProcessLookupError:
         pass
+
+
+def stop_process(process):
+    # Only the newly spawned query group is signalled, never an existing terminal.
+    _encerrar(process, False)
     try:
         process.wait(timeout=0.5)
     except subprocess.TimeoutExpired:
         pass
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    _encerrar(process, True)
     process.wait()
 
 
 def codex_query(executable, env, timeout):
     process = subprocess.Popen([executable, 'app-server', '--stdio'], env=env,
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                               stderr=subprocess.DEVNULL, start_new_session=True)
+                               stderr=subprocess.DEVNULL, **_novo_grupo_kwargs())
     deadline = time.monotonic() + timeout
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
@@ -259,7 +270,7 @@ def collect(account, executable=None, timeout=40):
 
 def run_cli(command, env, deadline):
     process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                               start_new_session=True, text=True)
+                               text=True, **_novo_grupo_kwargs())
     try:
         try:
             output, _ = process.communicate(timeout=max(0, deadline - time.monotonic()))

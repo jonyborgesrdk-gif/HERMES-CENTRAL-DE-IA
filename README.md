@@ -38,6 +38,27 @@ cp agentes.exemplo.json agentes.json
 
 Deixe o `./painel.sh` rodando e abra `publico/index.html` no navegador. A página atualiza sozinha. `Ctrl-C` para parar.
 
+## Windows
+
+O interpretador oficial no Windows é `py -3.14` (Python 3.14), com
+`PYTHONUTF8=1`. No PowerShell:
+
+```powershell
+$env:PYTHONUTF8 = '1'
+py -3.14 coletor --telas telas-de-exemplo --uma-vez --sem-gh
+.\painel.cmd --sem-gh
+py -3.14 -B -m unittest discover -s testes
+```
+
+Use também `py -3.14 refresh-completo`, `py -3.14 painel-missao` e
+`py -3.14 painel-pendencia`. O `painel.cmd` define `PYTHONUTF8=1`, usa
+`py -3.14` quando esse interpretador passa na verificação (senão usa `python`) e
+reinicia o coletor com espera de 3 s. Python 3.15 não é alvo desta etapa.
+O `painel.cmd` não impede duas cópias; a instância única será responsabilidade
+do supervisor Python da tarefa de logon na etapa E5.
+O tmux não existe no Windows nativo: nesta etapa os terminais reais ainda
+aparecem como "sem leitura"; a fonte Windows vem na E2. As telas de exemplo funcionam.
+
 ## Como o painel acha os seus agentes
 
 Cada agente do `agentes.json` aponta para um terminal do tmux pelo campo `"terminal"`:

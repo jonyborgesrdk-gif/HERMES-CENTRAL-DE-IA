@@ -5,6 +5,7 @@ estado das contas é montado à mão, no formato de GET /api/state do original (
 
 Rodar:  python3 -m unittest discover -s testes -v      (na pasta do painel)
 """
+import os
 import sys
 import time
 import unittest
@@ -229,6 +230,7 @@ class MesmaCasa(unittest.TestCase):
     """Agy reaberto sem novo login não tem o log de autenticação aberto: sai sem e-mail, e a mesma casa
     (HOME) virava dois cards. O terminal sem e-mail entra no irmão da casa que provou o e-mail."""
 
+    @unittest.skipIf(os.name == "nt", "caminhos POSIX do Antigravity; não se aplica no Windows")
     def test_terminal_sem_email_entra_no_card_da_mesma_casa(self):
         A = contas.discovery.Account
         lista = [A("antigravity", "/h/agyhome-newsole", ["Agente 09"], "n@example.com"),
