@@ -1,5 +1,6 @@
 """Cota Claude observada via /usage, com cache de cinco minutos."""
 import json
+import math
 import os
 import re
 import tempfile
@@ -35,7 +36,12 @@ def ler(ctx):
 
 def atualizar(ctx):
     anterior = ler(ctx)
-    if 0 <= agora(ctx) - anterior.get('tentativa', anterior.get('hora', 0)) < 300:
+    tentativa = anterior.get('tentativa')
+    if not isinstance(tentativa, (int, float)) or isinstance(tentativa, bool) or not math.isfinite(tentativa):
+        tentativa = anterior.get('hora')
+    if not isinstance(tentativa, (int, float)) or isinstance(tentativa, bool) or not math.isfinite(tentativa):
+        tentativa = None
+    if tentativa is not None and 0 <= agora(ctx) - tentativa < 300:
         return anterior
     r = dict(anterior, tentativa=agora(ctx))
     try:
@@ -43,10 +49,13 @@ def atualizar(ctx):
                               '-p', '/usage', '--output-format', 'stream-json', '--verbose'], 60)
         textos = []
         for linha in saida.splitlines():
-            d = json.loads(linha)
-            if d.get('type') == 'assistant':
+            try:
+                d = json.loads(linha)
+            except ValueError:
+                continue
+            if isinstance(d, dict) and d.get('type') == 'assistant':
                 textos.extend(b['text'] for b in d.get('message', {}).get('content', [])
-                              if b.get('type') == 'text')
+                              if isinstance(b, dict) and b.get('type') == 'text')
         cotas = ler_usage('\n'.join(textos))
         if cotas['sessao_5h'] is None and cotas['semanal'] is None:
             raise ValueError('sem cota observada')

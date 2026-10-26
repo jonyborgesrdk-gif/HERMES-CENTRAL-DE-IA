@@ -17,7 +17,7 @@ class WireTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.calls = []
-        self.ctx = {'dir': self.tmp.name, 'http_get': self.http}
+        self.ctx = {'dir': self.tmp.name, 'http_get': self.http, 'agora': 100000}
 
     def ativar(self):
         (Path(self.tmp.name) / 'wire.conf').write_text('WIRE_TOKEN=token-sintetico\n', encoding='utf-8')
@@ -26,6 +26,8 @@ class WireTests(unittest.TestCase):
         self.calls.append((url, timeout, headers))
         if url.endswith('workspaces'):
             return {'workspaces': [{'id': 'abc', 'name': 'Exemplo'}]}
+        if url.endswith('/settings'):
+            return {'workingDirectory': 'C:/exemplo'}
         return {'items': [{'type': 'terminal', 'terminal': {'id': 't', 'name': 'Agente',
                 'agentType': 'codex', 'status': 'running', 'isRunning': True, 'preview': []}}]}
 
@@ -65,3 +67,31 @@ class WireTests(unittest.TestCase):
         r = maestri_wire.ler(self.ctx)
         self.assertTrue(r['ligado'])
         self.assertNotIn('token-sintetico', str(r))
+
+    def test_settings_pasta_cache_sessenta_segundos(self):
+        self.ativar()
+        self.assertEqual(maestri_wire.ler(self.ctx)['terminais'][0]['pasta'], 'C:/exemplo')
+        self.ctx['agora'] += 59
+        maestri_wire.ler(self.ctx)
+        self.assertEqual(sum(url.endswith('/settings') for url, _, _ in self.calls), 1)
+        self.ctx['agora'] += 1
+        maestri_wire.ler(self.ctx)
+        self.assertEqual(sum(url.endswith('/settings') for url, _, _ in self.calls), 2)
+
+    def test_config_bytes_invalidos(self):
+        (Path(self.tmp.name) / 'wire.conf').write_bytes(b'# coment\xe1rio\nWIRE_TOKEN=token-sintetico\n')
+        self.assertEqual(maestri_wire.ler(self.ctx)['terminais'][0]['pasta'], 'C:/exemplo')
+
+    def test_settings_falha_preserva_terminal_e_limita_retentativa(self):
+        self.ativar()
+        def http(url, **kw):
+            if url.endswith('/settings'):
+                self.calls.append((url, 3, {}))
+                raise TimeoutError
+            return self.http(url, **kw)
+        self.ctx['http_get'] = http
+        r = maestri_wire.ler(self.ctx)
+        self.assertIsNone(r['terminais'][0]['pasta'])
+        self.assertIn('erro', r)
+        maestri_wire.ler(self.ctx)
+        self.assertEqual(sum(url.endswith('/settings') for url, _, _ in self.calls), 1)

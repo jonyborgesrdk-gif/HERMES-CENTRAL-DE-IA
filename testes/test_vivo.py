@@ -89,6 +89,22 @@ class MontagemTests(unittest.TestCase):
         t.update(tipo='custom', workingDirectory='C:/projeto')
         self.assertEqual(len(montar_agentes(r, 100000, [])), 3)
 
+    def test_dedup_com_fonte_wire_real_http_falso(self):
+        from lib.fontes import maestri_wire
+        with tempfile.TemporaryDirectory() as pasta:
+            (Path(pasta) / 'wire.conf').write_text('WIRE_TOKEN=token-sintetico', encoding='utf-8')
+            def http(url, **kwargs):
+                if url.endswith('/workspaces'):
+                    return {'workspaces': [{'id': 'w', 'name': 'Time'}]}
+                if url.endswith('/settings'):
+                    return {'workingDirectory': 'c:\\PROJETO'}
+                return {'items': [{'type': 'terminal', 'terminal': {'id': 't',
+                    'agentType': 'codex', 'isRunning': True, 'status': 'running', 'name': 'Codex'}}]}
+            r = leituras()
+            r['maestri_wire'] = maestri_wire.ler({'dir': pasta, 'agora': 100000, 'http_get': http})
+            self.assertEqual(r['maestri_wire']['terminais'][0]['pasta'], 'c:\\PROJETO')
+            self.assertEqual(len(montar_agentes(r, 100000, [])), 2)
+
     def test_wire_preview_e_prioridades(self):
         r = leituras()
         t = r['maestri_wire']['terminais'][0]

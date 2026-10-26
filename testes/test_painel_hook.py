@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -52,3 +53,34 @@ class PainelHookTests(unittest.TestCase):
     def test_falha_de_escrita(self):
         with patch.object(painel_hook.os, 'open', side_effect=PermissionError):
             self.chamar()
+
+    def test_message_mascarada_e_cortada(self):
+        self.chamar(json.dumps({'session_id': 'a', 'message': 'sk-' + 'a' * 40 + ' texto' * 100}))
+        message = json.loads(self.arquivo.read_text(encoding='utf-8'))['message']
+        self.assertNotIn('sk-' + 'a' * 40, message)
+        self.assertLessEqual(len(message), 200)
+
+    def test_stdin_utf8_independente_do_locale(self):
+        entrada = io.TextIOWrapper(io.BytesIO(json.dumps({'session_id': 'a', 'cwd': 'C:/ação'},
+            ensure_ascii=False).encode('utf-8')), encoding='cp1252')
+        with patch.object(painel_hook.sys, 'stdin', entrada):
+            self.assertEqual(painel_hook.main(['SessionStart']), 0)
+        self.assertEqual(json.loads(self.arquivo.read_text(encoding='utf-8'))['cwd'], 'C:/ação')
+
+    def test_deadline_nao_grava_apos_stdin_bloqueado(self):
+        liberar = threading.Event()
+        terminou = threading.Event()
+        class Lento:
+            def read(self):
+                liberar.wait(3)
+                terminou.set()
+                return '{"session_id":"a"}'
+        try:
+            inicio = time.monotonic()
+            self.assertEqual(painel_hook.main(['SessionStart'], Lento()), 0)
+            self.assertLess(time.monotonic() - inicio, 1)
+        finally:
+            liberar.set()
+            terminou.wait(1)
+        # Aguarda o worker sair do parser: nenhum open de escrita pode ocorrer após deadline.
+        self.assertFalse(self.arquivo.exists())

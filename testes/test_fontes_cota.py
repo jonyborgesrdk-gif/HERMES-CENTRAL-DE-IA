@@ -73,3 +73,19 @@ class CotaTests(unittest.TestCase):
     def test_cache_corrompido(self):
         (Path(self.tmp.name) / 'cota-claude.json').write_text('{', encoding='utf-8')
         self.assertEqual(cota_claude.ler(self.ctx), {})
+
+    def test_usage_com_avisos_e_linhas_vazias(self):
+        normal = self.executar
+        self.ctx['executar'] = lambda a, **kw: '\nAviso textual\n[]\n' + normal(a, **kw) + '\n\n'
+        r = cota_claude.atualizar(self.ctx)
+        self.assertEqual(r['sessao_5h'], 6)
+        self.assertNotIn('erro', r)
+
+    def test_tentativa_nao_numerica(self):
+        for valor in ('corrompido', None, {}, True):
+            with self.subTest(valor=valor):
+                (Path(self.tmp.name) / 'cota-claude.json').write_text(
+                    json.dumps({'tentativa': valor}), encoding='utf-8')
+                r = cota_claude.atualizar(self.ctx)
+                self.assertEqual(r['sessao_5h'], 6)
+                self.assertNotIn('erro', r)

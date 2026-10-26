@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -56,6 +57,36 @@ class ServicosTests(unittest.TestCase):
         self.assertEqual([s['estado'] for s in servicos.ler(self.ctx)['servicos'][2:]], ['ok', 'ok'])
         self.ctx['agora'] += 120
         self.assertEqual([s['estado'] for s in servicos.ler(self.ctx)['servicos'][2:]], ['fora', 'fora'])
+
+    def test_vigia_json_ts_prevalece_sobre_mtime(self):
+        p = self.ctx['vigia_path']
+        p.write_text(json.dumps({'pid': 1234, 'hora': '2026-01-01T12:34:56-03:00',
+                                'ts': 99999}), encoding='utf-8')
+        os.utime(p, (10, 10))
+        vigia = servicos.ler(self.ctx)['servicos'][2]
+        self.assertEqual((vigia['estado'], vigia['detalhe']), ('ok', 'pid 1234 · 12:34:56'))
+
+    def test_vigia_json_velho_nao_usa_mtime_recente(self):
+        p = self.ctx['vigia_path']
+        p.write_text(json.dumps({'pid': 1234, 'hora': '2026-01-01T12:34:56-03:00',
+                                'ts': 99880}), encoding='utf-8')
+        os.utime(p, (99999, 99999))
+        self.assertEqual(servicos.ler(self.ctx)['servicos'][2]['estado'], 'fora')
+
+    def test_batimento_novo_durante_health_checks(self):
+        self.ctx['vigia_path'].write_text(json.dumps({'pid': 1234,
+            'hora': '2026-01-01T12:34:56-03:00', 'ts': 100002}), encoding='utf-8')
+        with patch.object(servicos.time, 'monotonic', side_effect=[10, 13]):
+            self.assertEqual(servicos.ler(self.ctx)['servicos'][2]['estado'], 'ok')
+
+    def test_vigia_json_invalido_e_erro_exato_arquivo(self):
+        p = self.ctx['vigia_path']
+        p.write_text('{"ts":"invalido","pid":1234}', encoding='utf-8')
+        r = servicos.ler(self.ctx)['servicos'][2]
+        self.assertEqual(r['estado'], 'sem leitura')
+        self.assertIn('ValueError', r['detalhe'])
+        p.unlink()
+        self.assertIn('FileNotFoundError', servicos.ler(self.ctx)['servicos'][2]['detalhe'])
 
     def test_processos_csv(self):
         self.assertEqual(processos.ler({'executar': lambda a, **kw:

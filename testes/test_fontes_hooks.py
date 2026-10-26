@@ -23,9 +23,9 @@ class HooksTests(unittest.TestCase):
     def estado(self):
         return eventos_hooks.ler(self.ctx)['sessoes'][0]['estado']
 
-    def crescer(self):
+    def crescer(self, mtime=99999):
         self.transcript.write_text('{}\n', encoding='utf-8')
-        os.utime(self.transcript, (99999, 99999))
+        os.utime(self.transcript, (mtime, mtime))
 
     def test_sem_eventos(self):
         self.assertEqual(eventos_hooks.ler(self.ctx), {'sessoes': []})
@@ -35,13 +35,51 @@ class HooksTests(unittest.TestCase):
         self.assertEqual(self.estado(), 'ocioso')
 
     def test_transcript_recente_trabalhando(self):
-        self.eventos('SessionStart')
+        self.eventos('SessionStart', hora=99990)
         self.crescer()
         self.assertEqual(self.estado(), 'trabalhando')
 
-    def test_stop_prevalece(self):
+    def test_stop_sem_progresso_posterior_ocioso(self):
         self.eventos('SessionStart', 'Stop')
         self.crescer()
+        self.assertEqual(self.estado(), 'ocioso')
+
+    def test_turno_dois_apos_stop(self):
+        self.eventos('Stop', hora=99990)
+        self.crescer()
+        self.assertEqual(self.estado(), 'trabalhando')
+
+    def test_permissao_atendida_com_progresso(self):
+        self.eventos('PermissionRequest', hora=99990)
+        self.crescer()
+        self.assertEqual(self.estado(), 'trabalhando')
+
+    def test_stop_gravacao_final_um_segundo(self):
+        self.eventos('Stop', hora=99998)
+        self.crescer()
+        self.assertEqual(self.estado(), 'ocioso')
+
+    def test_margens_dois_e_tres_segundos(self):
+        self.eventos('PermissionRequest', hora=99996)
+        self.crescer(99998)
+        self.assertEqual(self.estado(), 'esperando permissão')
+        self.crescer(99999)
+        self.assertEqual(self.estado(), 'ocioso')
+        self.crescer(100000)
+        self.assertEqual(self.estado(), 'trabalhando')
+
+    def test_rotacionado_antes_do_atual(self):
+        self.eventos('SessionStart')
+        atual = self.pasta / 'eventos.jsonl'
+        atual.rename(self.pasta / 'eventos.jsonl.1')
+        self.assertEqual(self.estado(), 'ocioso')
+        self.eventos('SessionEnd')
+        self.assertEqual(eventos_hooks.ler(self.ctx)['sessoes'], [])
+
+    def test_bytes_invalidos(self):
+        self.eventos('SessionStart')
+        with (self.pasta / 'eventos.jsonl').open('ab') as f:
+            f.write(b'\n\xff\n')
         self.assertEqual(self.estado(), 'ocioso')
 
     def test_permissao_prevalece(self):
