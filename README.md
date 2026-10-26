@@ -56,8 +56,23 @@ Use também `py -3.14 refresh-completo`, `py -3.14 painel-missao` e
 reinicia o coletor com espera de 3 s. Python 3.15 não é alvo desta etapa.
 O `painel.cmd` não impede duas cópias; a instância única será responsabilidade
 do supervisor Python da tarefa de logon na etapa E5.
-O tmux não existe no Windows nativo: nesta etapa os terminais reais ainda
-aparecem como "sem leitura"; a fonte Windows vem na E2. As telas de exemplo funcionam.
+Para descobrir sessões locais automaticamente, sem precisar de `agentes.json`:
+
+```powershell
+$env:PYTHONUTF8 = '1'
+py -3.14 coletor --vivo --sem-gh
+# Uma passada para conferir:
+py -3.14 coletor --vivo --uma-vez --sem-gh
+```
+
+O modo vivo usa hooks Claude, sessões Codex e Wire do Maestri; hooks e configuração
+Wire precisam ser preparados separadamente. `agentes.json`, quando existir, só
+fornece apelidos/overrides por pasta ou nome. A sonda que digita em terminais fica
+sempre desligada. O intervalo padrão é 2 s; serviços são consultados a cada 10 s,
+processos a cada 5 s e cota Claude a cada 5 min. `--sem-contas` usa apenas o cache
+da cota Claude. `--vivo` não pode ser combinado com `--telas`.
+O gatilho HTTP `/refresh` do modo antigo não é iniciado no modo vivo.
+Sem `--vivo`, o comportamento antigo via tmux ou telas de exemplo é preservado.
 
 ## Como o painel acha os seus agentes
 

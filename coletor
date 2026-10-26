@@ -18,6 +18,7 @@ A cada passada:
 Uso:
   coletor                      laço: telas a cada 20 s, PRs a cada 3 min
   coletor --uma-vez            uma passada e sai
+  coletor --vivo               descobre sessões Windows pelas fontes locais; padrão de 2 s, sem sonda
   coletor --telas <pasta>      lê as telas de <pasta>/<nome-sem-acento>.txt em vez do tmux (demonstração e teste)
   coletor --sem-gh             não consulta o GitHub
   coletor --sem-contas         não consulta as CLIs: as cotas ficam só com as status lines (e a sonda,
@@ -53,6 +54,7 @@ import sonda as modulo_sonda    # noqa: E402
 import prs as modulo_prs    # noqa: E402
 import contas as modulo_contas    # noqa: E402
 from terminais import Tmux    # noqa: E402
+import vivo    # noqa: E402
 
 ARQ_SONDA_DESLIGADA = comum.RAIZ / "sonda.desligada"
 NOME_DA_FERRAMENTA = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity"}
@@ -157,6 +159,8 @@ def registrar_sonda(texto):
 
 
 def sonda_para_a_pagina(fio, args):
+    if fio is None:
+        return {"ligada": False, "intervalo_s": args.intervalo_sonda, "contas": [], "bloqueados": []}
     _, situacao, bloqueados, _ = fio.sonda.foto()
     contas = []
     for config in fio.sonda.sondas:
@@ -340,6 +344,15 @@ def resumo(dados):
     trabalhando = sum(1 for v in dados["agentes"] if v["estado"] == "trabalhando")
     texto = "%s  telas: %d lidas, %d trabalhando" % (
         dados["gerado_em"][11:19], len(dados["agentes"]) - len(sem), trabalhando)
+    if dados.get("origem") == "vivo":
+        por_fonte = {}
+        for agente in dados["agentes"]:
+            fonte = agente["fonte"]
+            por_fonte[fonte] = por_fonte.get(fonte, 0) + 1
+        texto = "%s  vivo: %d agentes (%s), %d trabalhando" % (
+            dados["gerado_em"][11:19], len(dados["agentes"]),
+            ", ".join("%s=%d" % item for item in sorted(por_fonte.items())) or "sem sessões",
+            trabalhando)
     if sem:
         texto += ", %d sem leitura (%s)" % (len(sem), ", ".join(sem))
     p = dados["prs"]
@@ -404,6 +417,90 @@ def passada(mapa, estado_prs, estado_cotas, fio_da_sonda, ultimas, args, contas=
         fio_da_sonda.rodar_se_for_hora(args.intervalo_sonda)
     if args.estado:
         cotas.salvar(estado_cotas, args.estado)
+    return dados
+
+
+def fontes_vivas(sem_contas=False):
+    from fontes import eventos_hooks, transcripts_claude, sessoes_codex, cota_claude
+    from fontes import maestri_wire, processos, servicos
+    return {"eventos_hooks": eventos_hooks.ler, "transcripts_claude": transcripts_claude.ler,
+            "sessoes_codex": sessoes_codex.ler,
+            "cota_claude": cota_claude.ler if sem_contas else cota_claude.atualizar,
+            "maestri_wire": maestri_wire.ler, "processos": processos.ler, "servicos": servicos.ler}
+
+
+def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overrides=None):
+    """Fontes injetadas substituem integralmente as reais; cache pertence ao laço."""
+    from fontes import epoch
+    contexto = dict(ctx or {})
+    contexto.setdefault("agora", time.time())
+    agora = contexto["agora"]
+    agora = agora.timestamp() if hasattr(agora, "timestamp") else float(agora)
+    fontes = fontes_vivas(getattr(args, "sem_contas", False)) if fontes is None else fontes
+    cache = {} if cache is None else cache
+    leituras, situacao = {}, {}
+    intervalos = {"servicos": 10, "processos": 5, "cota_claude": 300}
+    for nome in ("eventos_hooks", "sessoes_codex", "maestri_wire", "cota_claude", "processos", "servicos"):
+        anterior = cache.get(nome)
+        if anterior and 0 <= agora - anterior["hora"] < intervalos.get(nome, 0):
+            leituras[nome], situacao[nome] = anterior["dados"], anterior["situacao"]
+            continue
+        try:
+            dado = fontes[nome](contexto) if nome in fontes else {}
+            if not isinstance(dado, dict):
+                raise ValueError("resposta inválida")
+            erro = texto_seguro(dado.get("erro"), 160)
+            meta = {"ok": not bool(erro), "erro": erro, "hora": agora}
+        except Exception as erro:
+            dado = anterior["dados"] if anterior else {}
+            meta = {"ok": False, "erro": "falha na fonte (%s)" % type(erro).__name__, "hora": agora}
+        leituras[nome], situacao[nome] = dado, meta
+        cache[nome] = {"hora": agora, "dados": dado, "situacao": meta}
+
+    transcripts, erros = {}, []
+    for sessao in leituras["eventos_hooks"].get("sessoes", []):
+        chave = sessao.get("session_id")
+        try:
+            dado = fontes["transcripts_claude"](dict(contexto, **{
+                k: sessao[k] for k in ("cwd", "transcript_path") if k in sessao
+            })) if "transcripts_claude" in fontes else {}
+            if not isinstance(dado, dict):
+                raise ValueError("resposta inválida")
+            transcripts[chave] = dado
+            if dado.get("erro"):
+                erros.append("transcript sem leitura")
+        except Exception as erro:
+            erros.append("falha no transcript (%s)" % type(erro).__name__)
+    leituras["transcripts_claude"] = transcripts
+    situacao["transcripts_claude"] = {"ok": not bool(erros), "erro": "; ".join(sorted(set(erros))) or None, "hora": agora}
+    agentes = vivo.montar_agentes(leituras, agora, overrides or [])
+    mapa = {"agentes": agentes, "repos": []}
+    if estado_prs is None:
+        estado_prs = EstadoDosPrs(mapa, consultar=not args.sem_gh)
+    else:
+        estado_prs.mapa = dict(estado_prs.mapa, agentes=agentes)
+    estado_prs.atualizar_se_for_hora(args.intervalo_prs, esperar=args.uma_vez)
+    grupo_do, grupos = {}, {}
+    for agente in agentes:
+        grupo = (agente.get("grupo_cota") or "vivo:claude") if agente["ferramenta"] == "claude" else (
+            "vivo:%s:%s" % (agente["ferramenta"], agente.get("session_id") or agente["nome"]))
+        grupo_do[agente["nome"]] = grupo
+        cota = agente["cotas"]
+        g = grupos.setdefault(grupo, {"membros": [], "origem": "vivo", "fonte": agente["fonte"],
+            "sessao_5h_pct": cota.get("sessao_5h"), "semanal_pct": cota.get("semanal"),
+            "lido_em_epoch": epoch(cota.get("hora")) or None, "evidencia": None,
+            "renova_sessao": cota.get("reset_5h") if isinstance(cota.get("reset_5h"), str) else None,
+            "renova_semanal": cota.get("reset_semanal") if isinstance(cota.get("reset_semanal"), str) else None,
+            "renova_sessao_epoch": cota.get("reset_5h") if isinstance(cota.get("reset_5h"), (int, float)) else None,
+            "renova_semanal_epoch": cota.get("reset_semanal") if isinstance(cota.get("reset_semanal"), (int, float)) else None})
+        g["membros"].append(agente["nome"])
+    dados = montar(mapa, {a["nome"]: a for a in agentes}, estado_prs,
+                   (grupo_do, {}, grupos), None, args)
+    for registro, agente in zip(dados["agentes"], agentes):
+        registro.update({k: v for k, v in agente.items() if k not in ("missao", "prs", "grupo_cota")})
+    dados.update(origem="vivo", servicos=leituras["servicos"].get("servicos", []),
+                 processos=leituras["processos"], fontes=situacao)
+    gravar(dados, args.saida)
     return dados
 
 
@@ -491,7 +588,9 @@ def main():
     analisador = argparse.ArgumentParser(description="Coletor do Overview-Painel.", add_help=False)
     analisador.add_argument("-h", "--help", "--ajuda", action="store_true")
     analisador.add_argument("--uma-vez", action="store_true")
-    analisador.add_argument("--telas", metavar="PASTA")
+    origem = analisador.add_mutually_exclusive_group()
+    origem.add_argument("--telas", metavar="PASTA")
+    origem.add_argument("--vivo", action="store_true")
     analisador.add_argument("--sem-gh", action="store_true")
     analisador.add_argument("--sem-sonda", action="store_true")
     analisador.add_argument("--com-sonda", action="store_true")
@@ -499,19 +598,37 @@ def main():
     analisador.add_argument("--intervalo-sonda", type=int, default=300, metavar="SEGUNDOS")
     analisador.add_argument("--saida", metavar="PASTA", default=str(comum.PASTA_PUBLICA))
     analisador.add_argument("--estado", metavar="ARQUIVO")
-    analisador.add_argument("--intervalo", type=int, default=20, metavar="SEGUNDOS")
+    analisador.add_argument("--intervalo", type=int, metavar="SEGUNDOS")
     analisador.add_argument("--intervalo-prs", type=int, default=180, metavar="SEGUNDOS")
     analisador.add_argument("--porta", type=int, default=PORTA_PADRAO, metavar="PORTA")
     args = analisador.parse_args()
     if args.help:
         print(__doc__.strip())
         return 0
-    args.intervalo = max(5, args.intervalo)
+    args.intervalo = max(1 if args.vivo else 5, args.intervalo if args.intervalo is not None else (2 if args.vivo else 20))
     args.intervalo_prs = max(180, args.intervalo_prs)    # PRs e CI: a cada 3 minutos no máximo
     args.intervalo_sonda = max(120, args.intervalo_sonda)
     if args.telas and not Path(args.telas).is_dir():
         print("coletor: a pasta de telas não existe: %s" % args.telas, file=sys.stderr)
         return 2
+
+    if args.vivo:
+        # Sem mapa de exemplo, Tmux, Contas legadas ou FioDaSonda neste caminho.
+        mapa = comum.carregar_mapa(comum.ARQ_AGENTES) if comum.ARQ_AGENTES.exists() else {"agentes": [], "repos": []}
+        mapa.setdefault("repos", [])
+        estado_prs = EstadoDosPrs(mapa, consultar=not args.sem_gh)
+        cache = {}
+        while True:
+            inicio = time.time()
+            try:
+                print(resumo(passada_viva(args, estado_prs, cache=cache, overrides=mapa["agentes"])), flush=True)
+            except Exception as erro:
+                print("coletor: erro na passada viva (%s)" % type(erro).__name__, file=sys.stderr, flush=True)
+                if args.uma_vez:
+                    return 1
+            if args.uma_vez:
+                return 0
+            time.sleep(max(0.1, args.intervalo - (time.time() - inicio)))
 
     if not args.estado and not args.telas:      # telas de arquivo são teste: não mexem na memória real
         args.estado = str(comum.RAIZ / "estado.json")
