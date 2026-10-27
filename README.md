@@ -140,6 +140,40 @@ node --test testes/js/*.test.js     # opcional: testes da página, só com Node 
 
 `testes/telas/` e `telas-de-exemplo/` guardam telas **sintéticas** de terminal, com texto genérico.
 
+## Alertas
+
+A sentinela é opcional e fica desligada no servidor por padrão. Para ligar,
+defina `$env:SENTINELA = '1'` antes de iniciar `painel.cmd` (ou o servidor com
+`--com-coletor`). Ela também roda sozinha: `py -3.14 sentinela.py`.
+Para conferir sem enviar nada: `py -3.14 sentinela.py --ensaio --uma-vez`.
+
+As regras avisam sobre espera por mais de 60 s, atividade sem mudança por mais
+de 15 min, agente parado, cotas usadas a partir de 85%, serviço fora em duas
+avaliações, fonte falhando em três e dados velhos por mais de 60 s.
+Cada avaliação ocorre a cada 5 s; a mesma chave espera pelo menos 30 min para
+novo aviso. Agente parado avisa uma vez por ocorrência; cota só rearma abaixo
+de 70%. Fechamentos são registrados uma vez, sem toast extra.
+
+Dados ficam em `PAINEL_IAS_DIR` ou `%LOCALAPPDATA%\painel-ias`: estado em
+`alertas-estado.json`, log rotativo em `sentinela.log`, fila em
+`alertas-pendentes.jsonl`. O ensaio usa `alertas-ensaio-estado.json`, não lê
+configurações de canais nem modifica a deduplicação de produção.
+Toast usa o PowerShell existente; falhas não bloqueiam outros canais.
+Para webhook, crie `webhook.conf` nessa pasta com as chaves `WEBHOOK_URL` e
+`WEBHOOK_KEY`. Sem arquivo, o canal fica desligado. Redirecionamentos são falha;
+a fila tenta novamente a cada 5 min com `atrasado: true` e desiste após
+24 h ou 50 tentativas. Credenciais não são gravadas na fila nem no log.
+
+## Hindsight
+
+Opt-in separado: `PAINEL_HINDSIGHT=1` e token em `HINDSIGHT_API_TOKEN` ou na
+chave de mesmo nome em `hindsight.conf` dentro de `PAINEL_IAS_DIR`.
+Sem opt-in ou token, não há conexão. O banco separado é `ops-painel`.
+São gravadas apenas aberturas/fechamentos de alertas e um resumo diário às
+23:55 (quantidade por tipo, agentes vistos e cotas máximas). Não são enviados
+atividade, preview, texto de tela, credenciais ou texto completo do alerta.
+Falhas são registradas e o painel continua. Ensaio nunca escreve no Hindsight.
+
 ## Privacidade
 
 Nos cards de cota, o miolo do e-mail aparece como uma tarja de pixels que varia com a inclinação do card; o botão

@@ -206,11 +206,12 @@ class JobWindows:
 
 
 class Supervisor:
-    def __init__(self, extras=(), popen=None, job_factory=None):
+    def __init__(self, extras=(), popen=None, job_factory=None, filho='coletor'):
         self.parar = threading.Event()
         self.processo = None
         self.popen = popen or subprocess.Popen
-        self.comando = [sys.executable, '-B', str(RAIZ / 'coletor'), '--vivo', *extras]
+        self.comando = [sys.executable, '-B', str(RAIZ / filho),
+                        *(['--vivo'] if filho == 'coletor' else []), *extras]
         self.job = (job_factory() if job_factory else JobWindows()) if os.name == 'nt' else None
         self.fio = threading.Thread(target=self.rodar, daemon=True)
 
@@ -254,7 +255,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     pasta = Path(os.environ.get('PAINEL_IAS_DIR') or
                  Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'painel-ias')
-    servidor = supervisor = trava = handler = None
+    servidor = supervisor = sentinela = trava = handler = None
     logger = logging.getLogger('painel.servidor')
     logger.setLevel(logging.INFO)
     logger.propagate = False
@@ -272,6 +273,9 @@ def main(argv=None):
         if args.com_coletor:
             supervisor = Supervisor(extras)
             supervisor.fio.start()
+            if os.environ.get('SENTINELA', '0') == '1':
+                sentinela = Supervisor(filho='sentinela.py')
+                sentinela.fio.start()
         logger.info('subida porta=%d com_coletor=%s sem_gh=%s sem_contas=%s',
                     servidor.server_port, args.com_coletor, args.sem_gh, args.sem_contas)
         print('Overview-Painel: http://127.0.0.1:%d/' % servidor.server_port, flush=True)
@@ -287,6 +291,8 @@ def main(argv=None):
             servidor.server_close()
         if supervisor:
             supervisor.close()
+        if sentinela:
+            sentinela.close()
         if handler:
             logger.removeHandler(handler)
             handler.close()
