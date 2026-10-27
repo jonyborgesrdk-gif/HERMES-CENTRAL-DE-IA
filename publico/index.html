@@ -174,6 +174,11 @@
   .estado.trabalhando i { background: var(--bom); }
   .estado.ocioso { color: var(--tinta2); font-weight: 400; }
   .estado.ocioso i { border: 1.5px solid var(--apagado); }
+  .estado.esperando { color: var(--aviso-tinta); }
+  .estado.esperando i { background: var(--aviso); }
+  .estado.parado { color: var(--apagado); }
+  .estado.parado i { background: var(--barra); }
+  .icone-maestri { color: var(--apagado); margin-right: 5px; }
   .estado.indeterminado { color: var(--tinta2); font-weight: 400; }
   .estado.indeterminado i { background: var(--aviso); border-radius: 1px; transform: rotate(45deg); width: 7px; height: 7px; }
   .estado.sem_leitura { color: var(--apagado); font-weight: 400; }
@@ -286,6 +291,17 @@
 
   .rodape { margin: 12px 0 0; color: var(--apagado); font-size: 11px; }
   .rodape .erro { color: var(--critico-tinta); font-weight: 600; }
+  #infraestrutura { margin-top: 12px; padding-bottom: 12px; }
+  #infraestrutura[hidden] { display: none; }
+  .servicos-grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 8px; padding: 4px 16px 10px; }
+  .servico { border: 1px solid var(--fio); border-radius: 8px; padding: 10px 12px; min-width: 0; background: var(--sup2); }
+  .servico strong { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
+  .servico p { color: var(--tinta2); margin: 6px 0; overflow-wrap: anywhere; }
+  .servico small { color: var(--apagado); }
+  .saude-ok { color: var(--bom-tinta); }
+  .saude-fora, .saude-erro { color: var(--critico-tinta); }
+  .saude-sem { color: var(--apagado); }
+  .infra-linha { margin: 4px 16px; color: var(--tinta2); line-height: 1.7; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -336,6 +352,12 @@
     <div id="precisa-corpo"></div>
   </section>
 
+  <section class="cartao" id="infraestrutura" aria-label="Serviços, processos e fontes" hidden>
+    <div class="cabeca"><h2>Serviços</h2></div>
+    <div class="servicos-grade" id="servicos-grade"></div>
+    <p class="infra-linha"><strong>Processos</strong> · <span id="processos-lista"></span></p>
+    <p class="infra-linha"><strong>Fontes</strong> · <span id="fontes-lista"></span></p>
+  </section>
   <p class="rodape" id="rodape" hidden></p>
 </main>
 
@@ -351,6 +373,7 @@ var LER_A_CADA_MS = 5000;
 var JANELA_DO_GRUPO_MS = 30 * 60 * 1000;   /* pedidos com até 30 min entre si ficam no mesmo grupo */
 var VELHO_DEPOIS_DE_S = 60;      // coletor parado há mais de 1 minuto: aviso com destaque
 var dados = null;
+var estadoTransporte = "Conectando…";
 var abertoEm = Date.now();
 /* Os cards de cota ficam em cotas.js (ao lado), que usa o cartao-apoio.js (a aritmética da cápsula e as regras de privacidade).
    Os dois são carregados com a hora na URL para o portal não reaproveitar uma versão antiga. Se um arquivo faltar, a página
@@ -496,13 +519,14 @@ function ligarBrilho(cena) {
 function lb(i, html, classe) { return '<div class="lb' + (classe ? " " + classe : "") + '" style="--i:' + i + '">' + html + "</div>"; }
 
 /* ---------- células ---------- */
-var ROTULO_ESTADO = { trabalhando: "Trabalhando", ocioso: "Ocioso", indeterminado: "Indeterminado", sem_leitura: "Sem leitura" };
+var ROTULO_ESTADO = { trabalhando: "Trabalhando", ocioso: "Ocioso", esperando: "Esperando", parado: "Parado", indeterminado: "Indeterminado", sem_leitura: "Sem leitura" };
 var ROTULO_CI = { passou: ["✓", "passou"], rodando: ["◐", "rodando"], falhou: ["✕", "falhou"], sem_ci: ["", "sem CI"] };
 
 function celAgente(v) {     /* nome e modelo; conta, plano e e-mail ficam nos cards de cota */
   var modelo = v.modelo ? String(v.modelo).replace(/^[\s\u2500-\u257f-]+/, "").replace(/\s*\([^)]*\)\s*$/, "") + (v.esforco && v.ferramenta === "codex" ? " " + v.esforco : "") : "";
   var dica = [v.ferramenta_nome, modelo, v.esforco ? "esforço " + v.esforco : "", v.conta].filter(Boolean).join(" · ");
-  return '<div class="nome" title="' + esc(dica) + '">' + esc(v.nome) + "</div>" +
+  var icone = v.ferramenta === "maestri" ? '<span class="icone-maestri" aria-hidden="true">◇</span>' : "";
+  return '<div class="nome" title="' + esc(dica) + '">' + icone + esc(v.nome) + "</div>" +
          '<div class="sub" title="' + esc(dica) + '">' + esc([v.ferramenta_nome, modelo].filter(Boolean).join(" · ")) + "</div>";
 }
 function celEstado(v) {
@@ -949,6 +973,28 @@ function textoDaEdicao(agoraS) {
   if (!q.editado_em || isNaN(t)) return "ainda não foram preenchidas";
   return "foram editadas pela última vez " + quando(q.editado_em) + " (há " + haMinutos(agoraS - t / 1000) + ")";
 }
+function desenharInfraestrutura(agoraS) {
+  var secao = el("infraestrutura");
+  secao.hidden = dados.origem !== "vivo";
+  if (secao.hidden) return;
+  var lista = Array.isArray(dados.servicos) ? dados.servicos : [];
+  por(el("servicos-grade"), lista.map(function (s) {
+    var classeEstado = s.estado === "ok" ? "ok" : s.estado === "fora" ? "fora" : "sem";
+    var idade = typeof s.hora === "number" ? "há " + ha(Math.max(0, agoraS - s.hora)) : "sem horário";
+    return '<article class="servico"><strong>' + esc(s.nome) + '<span class="saude-' + classeEstado + '">' +
+      esc(s.estado || "sem leitura") + '</span></strong><p>' + esc(s.detalhe || "—") + '</p><small>' + esc(idade) + '</small></article>';
+  }).join(""));
+  var processos = dados.processos || {};
+  por(el("processos-lista"), Object.keys(processos).sort().map(function (nome) {
+    return esc(nome) + ": " + esc(processos[nome]);
+  }).join(" · ") || "sem processos observados");
+  var fontes = dados.fontes || {};
+  por(el("fontes-lista"), Object.keys(fontes).sort().map(function (nome) {
+    var f = fontes[nome] || {};
+    return '<span class="saude-' + (f.ok ? "ok" : "erro") + '" title="' + esc(f.erro || "") + '">' +
+      esc(nome) + ": " + esc(f.ok ? "ok" : f.erro || "erro") + '</span>';
+  }).join(" · ") || "sem fontes observadas");
+}
 function desenhar() {
   var agoraS = Date.now() / 1000;
   var vivo = el("vivo"), alerta = el("alerta");
@@ -956,7 +1002,7 @@ function desenhar() {
     var esperando = (Date.now() - abertoEm) / 1000;
     if (esperando > 8) {
       classe(vivo, "sem", true);
-      por(el("vivo-texto"), "Sem dados");
+      por(el("vivo-texto"), esc(estadoTransporte));
       por(el("alerta-titulo"), "O painel ainda não recebeu dados");
       por(el("alerta-texto"), "O arquivo dados.js não está ao lado desta página. Suba o coletor com painel.sh no terminal “Painel”.");
       alerta.hidden = false;
@@ -967,7 +1013,8 @@ function desenhar() {
   var velho = idade > VELHO_DEPOIS_DE_S;
   classe(vivo, "sem", false);
   classe(vivo, "velho", velho);
-  por(el("vivo-texto"), (velho ? "Parado há " : "Atualizado há ") + esc(ha(idade)));
+  por(el("vivo-texto"), esc(estadoTransporte));
+  vivo.title = (velho ? "Parado há " : "Atualizado há ") + ha(idade);
   classe(document.body, "velho-dado", velho);
   if (velho) {
     por(el("alerta-titulo"), "Dados velhos: o coletor não atualiza há " + esc(ha(idade)));
@@ -979,6 +1026,7 @@ function desenhar() {
 
   desenharTabela(agoraS);
   desenharResumo();
+  desenharInfraestrutura(agoraS);
   desenharPrs(agoraS);
   if (window.__painelContas) window.__painelContas.desenhar(dados.contas, agoraS);    /* cards de cota (cotas.js) */
   desenharPrecisa(agoraS);
@@ -1003,6 +1051,34 @@ function carregar() {
   s.src = "dados.js?t=" + Date.now();      /* sem isto o navegador reaproveita o arquivo antigo */
   s.onload = s.onerror = function () { s.remove(); };
   document.head.appendChild(s);
+}
+
+/* Transporte isolado para testar seleção, queda e reconexão sem DOM. */
+function iniciarTransporte(ambiente, receber, estado, carregarFallback, intervaloMs) {
+  var fonte = null, timer = null;
+  function fallback() {
+    if (timer !== null) return;
+    carregarFallback();
+    timer = ambiente.setInterval(carregarFallback, intervaloMs);
+    estado("atualizando a cada " + (intervaloMs / 1000) + " s");
+  }
+  if (/^http/.test(ambiente.location.protocol) && ambiente.EventSource) {
+    try {
+      fonte = new ambiente.EventSource('/eventos');
+      fonte.onopen = function () {
+        if (timer !== null) { ambiente.clearInterval(timer); timer = null; }
+        estado("ao vivo");
+      };
+      fonte.addEventListener('dados', function (evento) {
+        try { receber(JSON.parse(evento.data)); } catch (e) { /* aguarda próxima publicação */ }
+      });
+      fonte.onerror = function () { fallback(); estado("desconectado"); };
+    } catch (e) { fallback(); }
+  } else { fallback(); }
+  return function () {
+    if (fonte) fonte.close();
+    if (timer !== null) ambiente.clearInterval(timer);
+  };
 }
 
 /* ---------- botão de refresh completo ---------- */
@@ -1064,8 +1140,11 @@ el("tema").addEventListener("click", function () {
   try { localStorage.setItem("painel-tema", tema); } catch (e) { /* idem */ }
 });
 
-carregar();
-setInterval(carregar, LER_A_CADA_MS);
+var fecharTransporte = iniciarTransporte(window, window.__painelDados, function (estado) {
+  estadoTransporte = estado;
+  por(el("vivo-texto"), esc(estado));
+}, carregar, LER_A_CADA_MS);
+window.addEventListener("beforeunload", fecharTransporte);
 setInterval(desenhar, 1000);     /* relógios: "atualizado há", "faltam", aviso de dados velhos */
 })();
 </script>

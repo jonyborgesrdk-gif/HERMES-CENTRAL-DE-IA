@@ -73,7 +73,7 @@ def ler(ctx):
             mtime, detalhe = batimento
             # ctx.agora é o snapshot da passada; os health checks já consumiram tempo.
             observado = hora + (time.monotonic() - inicio)
-            estado = 'ok' if 0 <= observado - mtime < ctx.get('batimento_max_s', 120) else 'fora'
+            estado = 'ok' if abs(observado - mtime) < ctx.get('batimento_max_s', 120) else 'fora'
         except (OSError, ValueError, TypeError, KeyError) as erro:
             detalhe = '%s: %s' % (type(erro).__name__, erro)
         servicos.append(dict(nome=nome, estado=estado, detalhe=detalhe, hora=hora))

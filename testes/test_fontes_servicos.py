@@ -73,6 +73,11 @@ class ServicosTests(unittest.TestCase):
         os.utime(p, (99999, 99999))
         self.assertEqual(servicos.ler(self.ctx)['servicos'][2]['estado'], 'fora')
 
+    def test_vigia_tres_segundos_no_futuro(self):
+        self.ctx['vigia_path'].write_text(json.dumps({'pid': 1234,
+            'hora': '2026-01-01T12:34:56-03:00', 'ts': 100003}), encoding='utf-8')
+        self.assertEqual(servicos.ler(self.ctx)['servicos'][2]['estado'], 'ok')
+
     def test_batimento_novo_durante_health_checks(self):
         self.ctx['vigia_path'].write_text(json.dumps({'pid': 1234,
             'hora': '2026-01-01T12:34:56-03:00', 'ts': 100002}), encoding='utf-8')

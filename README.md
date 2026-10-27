@@ -53,9 +53,15 @@ py -3.14 -B -m unittest discover -s testes
 Use também `py -3.14 refresh-completo`, `py -3.14 painel-missao` e
 `py -3.14 painel-pendencia`. O `painel.cmd` define `PYTHONUTF8=1`, usa
 `py -3.14` quando esse interpretador passa na verificação (senão usa `python`) e
-reinicia o coletor com espera de 3 s. Python 3.15 não é alvo desta etapa.
-O `painel.cmd` não impede duas cópias; a instância única será responsabilidade
-do supervisor Python da tarefa de logon na etapa E5.
+chama `servidor.py --com-coletor`. Abra **http://127.0.0.1:7421/**.
+O servidor impede duas instâncias por trava de arquivo, reinicia o coletor após
+3 s se ele cair e encerra o filho ao sair. Python 3.15 não é alvo desta etapa.
+"Ao vivo" indica uma conexão SSE recebendo atualizações sem recarregar a página.
+Se a conexão cair, aparece "desconectado" e a leitura periódica assume até reconectar.
+Em `file://` ou sem EventSource, o painel continua lendo `dados.js` a cada 5 s.
+O modo vivo também mostra Serviços, Processos e Fontes, com tema claro/escuro.
+Use `py -3.14 servidor.py --com-coletor --sem-gh` para iniciar diretamente;
+`--porta` ou `PAINEL_PORTA` muda a porta (padrão 7421). O refresh legado fica na 7420.
 Para descobrir sessões locais automaticamente, sem precisar de `agentes.json`:
 
 ```powershell
