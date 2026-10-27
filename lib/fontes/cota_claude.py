@@ -62,6 +62,17 @@ def atualizar(ctx):
         r = dict(cotas, hora=agora(ctx), tentativa=agora(ctx))
     except Exception:
         r['erro'] = 'consulta de cota falhou'
+    # Identidade acompanha a mesma tentativa/cooldown do /usage, sem ler credenciais em disco.
+    try:
+        identidade = json.loads(executar(ctx, ['claude', 'auth', 'status', '--json'], 10))
+        if not isinstance(identidade, dict):
+            raise ValueError('identidade inválida')
+        r['email'] = identidade.get('email') if isinstance(identidade.get('email'), str) else None
+        r['plano'] = identidade.get('subscriptionType') if isinstance(identidade.get('subscriptionType'), str) else None
+        r.pop('erro_auth', None)
+    except Exception:
+        r['email'], r['plano'] = anterior.get('email'), anterior.get('plano')
+        r['erro_auth'] = 'identidade Claude sem leitura'
     pasta = diretorio(ctx)
     tmp = None
     try:

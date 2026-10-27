@@ -370,7 +370,7 @@ document.head.appendChild(folha);
 var NUMERO = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 });
 var FORMATO_DATA = new Intl.DateTimeFormat("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 var INTERVALO_PADRAO = { claude: 300, codex: 300, agy: 1200 };
-var NOME_DA_ORIGEM = { cli: "consulta à CLI", tela: "status line", sonda: "sonda de cota" };
+var NOME_DA_ORIGEM = { cli: "consulta à CLI", tela: "status line", sonda: "sonda de cota", sessao: "sessão Codex" };
 var COMO_SOUBE = { trabalhando: "o terminal estava trabalhando", mudou: "os números da tela mudaram", hora_na_tela: "pela hora escrita na tela; aproximada" };
 
 function numero(v) { return typeof v === "number" && isFinite(v); }
@@ -414,6 +414,7 @@ function dataDoReset(epoch) {
   return (p.weekday || "").replace(".", "") + " " + p.day + "/" + p.month + " " + p.hour + ":" + p.minute;
 }
 function reabre(b, agoraS) {
+  if (b && b.renova_texto && !numero(b.renova_epoch)) return 'reset ' + b.renova_texto;
   if (!b || !numero(b.renova_epoch)) return "reabertura sem dados";
   var d = duracao(b.renova_epoch - agoraS);
   return d === "a confirmar" ? "reabertura a confirmar" : "reabre em " + d;
@@ -703,7 +704,7 @@ function encherJanela(bloco, b, agoraS, comSegundos) {
   var t = tempoDaJanela(b, agoraS), usado = b ? b.usado_pct : null;
   bloco.cheio.parentNode.classList.toggle("is-weekly", !!b && b.tipo === "semana");
   texto(bloco.rotulo, b ? b.rotulo : "");
-  texto(bloco.reset, dataDoReset(b && b.renova_epoch));
+  texto(bloco.reset, b && b.renova_texto && !numero(b.renova_epoch) ? b.renova_texto : dataDoReset(b && b.renova_epoch));
   texto(bloco.tempo, duracao(b && numero(b.renova_epoch) ? b.renova_epoch - agoraS : null, comSegundos));
   texto(bloco.usada, pct(usado));
   texto(bloco.livre, numero(usado) ? pct(Math.max(0, 100 - usado)) : "sem dados");
@@ -718,6 +719,7 @@ function encherJanela(bloco, b, agoraS, comSegundos) {
 }
 function origemDaBarra(b) {
   if (!b || !b.origem) return "";
+  if (b.origem === "sessao") return "registro da sessão Codex";
   if (b.origem === "cli") return "consulta à CLI (" + (b.fonte || "") + "), sem token";
   if (b.origem === "sonda") return "sonda de cota no terminal " + (b.fonte || "");
   return "status line de " + (b.fonte || "") + (COMO_SOUBE[b.evidencia] ? " (" + COMO_SOUBE[b.evidencia] + ")" : "");
@@ -1053,7 +1055,7 @@ function tique(agoraS) {
       if (comTempo) { variavel(barra.visual, "--t", String(Math.round(t.cursor * 10) / 10)); escreverCortes(barra, b, t.cursor); }
       realcar(barra); escreverRelogio(barra, agoraS);
       atributo(barra.alvo, "aria-label", (b ? b.rotulo : "") + ": " + pct(temUso ? b.usado_pct : null) + " usado. " +
-        (barra.tipo === "5h" ? barra.reabre.textContent : "Reset " + dataDoReset(b && b.renova_epoch)) + "." + (comTempo ? " " + Math.round(t.cursor) + "% do período decorrido." : "") +
+        (barra.tipo === "5h" ? barra.reabre.textContent : "Reset " + (b && b.renova_texto && !numero(b.renova_epoch) ? b.renova_texto : dataDoReset(b && b.renova_epoch))) + "." + (comTempo ? " " + Math.round(t.cursor) + "% do período decorrido." : "") +
         (t.alerta ? " Consumo em alerta." : "") + " Clique para ver o detalhe.");
     });
     if (card.barraVirada) encherVerso(card, agoraS);

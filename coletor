@@ -451,6 +451,8 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
                 raise ValueError("resposta inválida")
             erro = texto_seguro(dado.get("erro"), 160)
             meta = {"ok": not bool(erro), "erro": erro, "hora": agora}
+            if erro and anterior:
+                dado = anterior["dados"]
         except Exception as erro:
             dado = anterior["dados"] if anterior else {}
             meta = {"ok": False, "erro": "falha na fonte (%s)" % type(erro).__name__, "hora": agora}
@@ -499,7 +501,8 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
     for registro, agente in zip(dados["agentes"], agentes):
         registro.update({k: v for k, v in agente.items() if k not in ("missao", "prs", "grupo_cota")})
     dados.update(origem="vivo", servicos=leituras["servicos"].get("servicos", []),
-                 processos=leituras["processos"], fontes=situacao)
+                 processos=leituras["processos"], fontes=situacao,
+                 contas=vivo.montar_contas(leituras, agora, agentes, disponiveis=fontes, saude=situacao))
     gravar(dados, args.saida)
     return dados
 

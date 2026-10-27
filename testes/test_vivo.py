@@ -20,7 +20,7 @@ loader = SourceFileLoader('coletor_vivo_tests', str(RAIZ / 'coletor'))
 spec = spec_from_loader(loader.name, loader)
 coletor = module_from_spec(spec)
 loader.exec_module(coletor)
-from vivo import montar_agentes
+from vivo import montar_agentes, montar_contas
 
 
 def setUpModule():
@@ -72,6 +72,56 @@ class MontagemTests(unittest.TestCase):
             {'nome': 'Codex · projeto', 'conta': 'Conta sintética'}])
         self.assertEqual(r[0]['nome'], 'Revisor')
         self.assertEqual(r[1]['conta'], 'Conta sintética')
+
+    def test_override_de_pasta_respeita_ferramenta_e_modelo_lido(self):
+        r = leituras()
+        r['sessoes_codex']['sessoes'][0]['pasta'] = 'C:/exemplo'
+        a = montar_agentes(r, 100000, [{'pasta': 'C:/exemplo', 'ferramenta': 'claude',
+            'nome': 'Revisor', 'modelo': 'modelo-fallback'}])
+        self.assertEqual((a[0]['nome'], a[0]['modelo']), ('Revisor', 'modelo-claude'))
+        self.assertEqual(a[1]['nome'], 'Codex · exemplo')
+        self.assertEqual(a[1]['modelo'], 'modelo-codex')
+        r['transcripts_claude']['claude-1']['modelo'] = None
+        self.assertEqual(montar_agentes(r, 100000, [{'pasta': 'C:/exemplo',
+            'ferramenta': 'claude', 'modelo': 'fallback'}])[0]['modelo'], 'fallback')
+
+    def test_contas_claude_plano_email_usado_reset(self):
+        r = leituras()
+        r['cota_claude'].update(plano='Max', email='conta@example.com', reset_5h='Oct 27, 1am')
+        antes = copy.deepcopy(r)
+        contas = montar_contas(r, 100000, montar_agentes(r, 100000, []))
+        self.assertTrue(contas['consultadas'])
+        c = contas['lista'][0]
+        self.assertEqual((c['titulo'], c['email']), ('Claude · Max', 'conta@example.com'))
+        self.assertEqual([b['usado_pct'] for b in c['barras']], [6, 42])
+        self.assertEqual(c['barras'][0]['renova_texto'], 'Oct 27, 1am')
+        self.assertIsNone(c['barras'][0]['renova_epoch'])
+        self.assertEqual(r, antes)
+
+    def test_contas_codex_agrupa_e_usa_ultima_leitura(self):
+        r = leituras()
+        s = r['sessoes_codex']['sessoes'][0]
+        s['limit_id'] = 'conta-a'
+        r['sessoes_codex']['sessoes'] += [dict(s, session_id='outro', hora=100100, sessao_5h=33),
+            dict(s, session_id='terceiro', limit_id='conta-b', hora=100050, sessao_5h=70)]
+        codex = [c for c in montar_contas(r, 100200)['lista'] if c['ferramenta'] == 'codex']
+        self.assertEqual(len(codex), 2)
+        self.assertEqual([c['barras'][0]['usado_pct'] for c in codex], [33, 70])
+        self.assertEqual(codex[0]['barras'][0]['renova_epoch'], 200000)
+        self.assertEqual(codex[0]['barras'][0]['origem'], 'sessao')
+
+    def test_contas_codex_sem_identidade_um_card_e_sem_dado(self):
+        r = leituras()
+        s = r['sessoes_codex']['sessoes'][0]
+        r['sessoes_codex']['sessoes'].append(dict(s, session_id='outro', hora=100100, sessao_5h=66))
+        codex = [c for c in montar_contas(r, 100200)['lista'] if c['ferramenta'] == 'codex']
+        self.assertEqual(len(codex), 1)
+        self.assertEqual((codex[0]['titulo'], codex[0]['barras'][0]['usado_pct']), ('Codex', 66))
+        contas = montar_contas({}, 100000, disponiveis={'sessoes_codex', 'cota_claude'})
+        self.assertTrue(contas['consultadas'])
+        self.assertTrue(all(c['situacao'] == 'sem dado' for c in contas['lista']))
+        self.assertTrue(all(b['usado_pct'] is None for c in contas['lista'] for b in c['barras']))
+        self.assertFalse(montar_contas({}, 100000, disponiveis=set())['consultadas'])
 
     def test_pureza(self):
         r = leituras()
@@ -230,6 +280,16 @@ class PassadaTests(unittest.TestCase):
         d = self.passada(cache=cache, agora=100005)
         self.assertEqual(d['processos'], {'codex.exe': 2})
         self.assertFalse(d['fontes']['processos']['ok'])
+
+    def test_erro_retornado_mantem_snapshot_e_marca_fonte(self):
+        cache = {}
+        antes = self.passada(cache=cache)
+        self.fontes['maestri_wire'] = lambda ctx: {'erro': 'Wire fora'}
+        d = self.passada(cache=cache, agora=100002)
+        self.assertEqual([a['nome'] for a in d['agentes']], [a['nome'] for a in antes['agentes']])
+        self.assertEqual(d['fontes']['maestri_wire']['erro'], 'Wire fora')
+        self.assertFalse(d['fontes']['maestri_wire']['ok'])
+        self.assertGreaterEqual(len(d['contas']['lista']), 1)
 
     def test_cotas_codex_nao_misturadas_por_pasta(self):
         a = self.r['sessoes_codex']['sessoes'][0]

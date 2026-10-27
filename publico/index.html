@@ -602,6 +602,8 @@ function celAgora(v) {
   return html;
 }
 function medidorDeContexto(valor, dicaSemDado) {
+  if (valor != null) valor = Number(valor);
+  if (!Number.isFinite(valor)) valor = null;
   if (valor == null) {
     return '<div class="medidor sem" title="' + esc(dicaSemDado) + '"><div class="trilho"></div><span class="valor">—</span></div>';
   }
@@ -1046,20 +1048,26 @@ window.__painelDados = function (d) {
   }
   desenhar();
 };
-function carregar() {
+function carregar(depois) {
   var s = document.createElement("script");
   s.src = "dados.js?t=" + Date.now();      /* sem isto o navegador reaproveita o arquivo antigo */
-  s.onload = s.onerror = function () { s.remove(); };
+  s.onload = function () { s.remove(); if (typeof depois === "function") depois(); };
+  s.onerror = function () { s.remove(); };
   document.head.appendChild(s);
 }
 
 /* Transporte isolado para testar seleção, queda e reconexão sem DOM. */
 function iniciarTransporte(ambiente, receber, estado, carregarFallback, intervaloMs) {
   var fonte = null, timer = null;
+  function carregarPeriodico() {
+    carregarFallback(function () {
+      if (timer !== null) estado("atualizando a cada " + (intervaloMs / 1000) + " s");
+    });
+  }
   function fallback() {
     if (timer !== null) return;
-    carregarFallback();
-    timer = ambiente.setInterval(carregarFallback, intervaloMs);
+    carregarPeriodico();
+    timer = ambiente.setInterval(carregarPeriodico, intervaloMs);
     estado("atualizando a cada " + (intervaloMs / 1000) + " s");
   }
   if (/^http/.test(ambiente.location.protocol) && ambiente.EventSource) {
@@ -1077,7 +1085,7 @@ function iniciarTransporte(ambiente, receber, estado, carregarFallback, interval
   } else { fallback(); }
   return function () {
     if (fonte) fonte.close();
-    if (timer !== null) ambiente.clearInterval(timer);
+    if (timer !== null) { ambiente.clearInterval(timer); timer = null; }
   };
 }
 

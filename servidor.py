@@ -43,11 +43,17 @@ class PainelHTTP(ThreadingHTTPServer):
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
+    server_version = 'painel'
+    sys_version = ''
+    timeout = 60
+
+    def version_string(self):
+        return self.server_version
 
     def handle(self):
         try:
             super().handle()
-        except (ConnectionResetError, BrokenPipeError, TimeoutError):
+        except (ConnectionError, TimeoutError):
             pass  # cliente encerrou uma conexão keep-alive ou SSE
 
     def log_message(self, *args):
@@ -56,6 +62,7 @@ class Handler(BaseHTTPRequestHandler):
     def end_headers(self):
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Cross-Origin-Resource-Policy', 'same-origin')
         super().end_headers()
 
     def permitido(self):
@@ -63,7 +70,20 @@ class Handler(BaseHTTPRequestHandler):
         hosts = {'127.0.0.1:%d' % self.server.server_port, 'localhost:%d' % self.server.server_port}
         origin = self.headers.get('Origin')
         if host not in hosts or (origin is not None and origin != 'http://' + host):
-            self.send_error(403)
+            self.negar()
+            return False
+        return True
+
+    def negar(self):
+        self.send_response(403)
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+    def permitido_dados(self):
+        site = self.headers.get('Sec-Fetch-Site')
+        if (site is not None and site not in ('same-origin', 'none')) or (
+                site is None and self.headers.get('Referer') is not None):
+            self.negar()
             return False
         return True
 
@@ -80,6 +100,9 @@ class Handler(BaseHTTPRequestHandler):
         if '\\' in caminho or '\x00' in caminho or '..' in caminho.split('/'):
             self.send_error(403)
             return
+        caminho = '/' + '/'.join(p for p in caminho.split('/') if p not in ('', '.'))
+        if caminho.casefold() in ('/dados.js', '/dados.json', '/eventos') and not self.permitido_dados():
+            return
         if caminho == '/eventos':
             if cabeca:
                 self.send_error(405)
@@ -95,6 +118,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not arquivo.is_relative_to(self.server.publico) or not arquivo.is_file():
                     self.send_error(404)
                     return
+                if arquivo.name.casefold() in ('dados.js', 'dados.json') and not self.permitido_dados():
+                    return
                 corpo = arquivo.read_bytes()
                 tipo = mimetypes.guess_type(arquivo.name)[0] or 'application/octet-stream'
             self.send_response(200)
@@ -103,6 +128,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             if not cabeca:
                 self.wfile.write(corpo)
+        except (ConnectionError, TimeoutError):
+            raise
         except (OSError, ValueError):
             self.send_error(503)
 
@@ -112,7 +139,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Connection', 'close')
         self.end_headers()
         self.close_connection = True
-        self.connection.settimeout(2)
         ultimo, ping = None, time.monotonic()
         try:
             self.wfile.write(b'retry: 2000\n\n')
@@ -126,7 +152,7 @@ class Handler(BaseHTTPRequestHandler):
                         self.wfile.write(('event: dados\ndata: ' + dados + '\n\n').encode('ascii'))
                         self.wfile.flush()
                         ultimo, ping = versao, time.monotonic()
-                except (FileNotFoundError, ValueError):
+                except (FileNotFoundError, PermissionError, ValueError):
                     pass  # arquivo ainda não publicado ou em troca; manter conexão
                 if time.monotonic() - ping >= 15:
                     self.wfile.write(b': ping\n\n')
@@ -157,7 +183,18 @@ class Trava:
             raise RuntimeError('já existe um servidor do painel em execução (trava ocupada)') from erro
 
     def close(self):
-        self.arquivo.close()  # fechar libera a trava; não remover o inode compartilhado
+        if self.arquivo.closed:
+            return
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                self.arquivo.seek(0)
+                msvcrt.locking(self.arquivo.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.arquivo, fcntl.LOCK_UN)
+        finally:
+            self.arquivo.close()  # não remover o inode compartilhado
 
 
 class JobWindows:
@@ -253,6 +290,9 @@ def main(argv=None):
     parser.add_argument('--sem-gh', action='store_true')
     parser.add_argument('--sem-contas', action='store_true')
     args = parser.parse_args(argv)
+    if not 0 <= args.porta <= 65535:
+        print('servidor: porta deve estar entre 0 e 65535', file=sys.stderr)
+        return 2
     pasta = Path(os.environ.get('PAINEL_IAS_DIR') or
                  Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'painel-ias')
     servidor = supervisor = sentinela = trava = handler = None

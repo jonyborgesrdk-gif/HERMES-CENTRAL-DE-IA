@@ -1,5 +1,7 @@
 """Servidor em loopback efêmero, dados sintéticos e coletor sempre falso."""
 import http.client
+from contextlib import redirect_stderr
+import io
 import json
 import os
 from pathlib import Path
@@ -79,6 +81,48 @@ class ServidorTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(corpo)['origem'], 'vivo')
         self.assertIn('application/json', headers['Content-Type'])
+        self.assertEqual(headers['Server'], 'painel')
+
+    def test_dados_recusam_cross_site_sem_corpo(self):
+        for path in ('/dados.js', '/dados.json', '/eventos', '/./dados.js', '/DADOS.JS'):
+            for site in ('cross-site', 'same-site'):
+                with self.subTest(path=path, site=site):
+                    status, headers, corpo = self.get(path, {'Sec-Fetch-Site': site})
+                    self.assertEqual(status, 403)
+                    self.assertEqual(corpo, b'')
+                    self.assertEqual(headers['Server'], 'painel')
+
+    def test_dados_sem_fetch_site_exigem_referer_ausente(self):
+        self.assertEqual(self.get('/dados.js')[0], 200)
+        self.assertEqual(self.get('/dados.json', {'Referer': 'http://exemplo.invalid/'})[0], 403)
+        self.assertEqual(self.get('/dados.js', {'Sec-Fetch-Site': 'same-origin',
+                            'Referer': 'http://127.0.0.1/'} )[0], 200)
+        self.assertEqual(self.get('/dados.json', {'Sec-Fetch-Site': 'none'})[0], 200)
+        status, _, corpo = self.get('/dados.js', {'Sec-Fetch-Site': 'cross-site', 'Origin': 'http://exemplo.invalid'})
+        self.assertEqual((status, corpo), (403, b''))
+
+    def test_estaticos_permanecem_disponiveis(self):
+        self.assertEqual(self.get('/', {'Sec-Fetch-Site': 'cross-site'})[0], 200)
+
+    def test_sse_permission_error_nao_fecha_stream(self):
+        valor = servidor.ler_dados(self.publico)
+        with patch.object(servidor, 'ler_dados', side_effect=[PermissionError, valor]):
+            conn = self.conexao()
+            conn.request('GET', '/eventos', headers={'Sec-Fetch-Site': 'same-origin'})
+            r = conn.getresponse()
+            self.assertEqual(r.getheader('Server'), 'painel')
+            self.assertEqual(self.evento(r)['numero'], 1)
+            r.close()
+
+    def test_socket_recebe_timeout_de_sessenta_segundos(self):
+        observado = []
+        setup = servidor.Handler.setup
+        def configurar(handler):
+            setup(handler)
+            observado.append(handler.connection.gettimeout())
+        with patch.object(servidor.Handler, 'setup', configurar):
+            self.assertEqual(self.get('/')[0], 200)
+        self.assertEqual(observado, [60])
 
     def test_sse_primeiro_evento_e_mudanca(self):
         conn = self.conexao()
@@ -132,8 +176,17 @@ class ServidorTests(unittest.TestCase):
 class SupervisorTests(unittest.TestCase):
     def test_cliente_resetado_fecha_sem_excecao(self):
         handler = object.__new__(servidor.Handler)
-        with patch.object(servidor.BaseHTTPRequestHandler, 'handle', side_effect=ConnectionResetError):
-            handler.handle()
+        for erro in (ConnectionResetError, ConnectionAbortedError, ConnectionError):
+            with patch.object(servidor.BaseHTTPRequestHandler, 'handle', side_effect=erro):
+                handler.handle()
+
+    def test_porta_invalida_retorna_dois_sem_traceback(self):
+        for porta in ('-1', '65536'):
+            saida = io.StringIO()
+            with redirect_stderr(saida):
+                self.assertEqual(servidor.main(['--porta', porta]), 2)
+            self.assertIn('0 e 65535', saida.getvalue())
+            self.assertNotIn('Traceback', saida.getvalue())
 
     def test_trava_unica_e_liberacao(self):
         with tempfile.TemporaryDirectory() as pasta:

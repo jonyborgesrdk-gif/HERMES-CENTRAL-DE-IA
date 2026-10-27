@@ -28,6 +28,8 @@ class CotaTests(unittest.TestCase):
 
     def executar(self, argv, timeout):
         self.calls.append((argv, timeout))
+        if argv[1:3] == ['auth', 'status']:
+            return json.dumps({'email': 'conta@example.com', 'subscriptionType': 'plano-teste'})
         return json.dumps({'type': 'assistant', 'message': {'content': [{'type': 'text', 'text': USAGE}]}})
 
     def test_percentuais(self):
@@ -52,10 +54,10 @@ class CotaTests(unittest.TestCase):
         cota_claude.atualizar(self.ctx)
         self.ctx['agora'] += 299
         cota_claude.atualizar(self.ctx)
-        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(len(self.calls), 2)
         self.ctx['agora'] += 1
         cota_claude.atualizar(self.ctx)
-        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(len(self.calls), 4)
 
     def test_falha_preserva_cache_e_limita_retentativa(self):
         cota_claude.atualizar(self.ctx)
@@ -68,7 +70,7 @@ class CotaTests(unittest.TestCase):
         self.assertIn('erro', r)
         self.ctx.update(agora=100301, executar=self.executar)
         cota_claude.atualizar(self.ctx)
-        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(len(self.calls), 2)
 
     def test_cache_corrompido(self):
         (Path(self.tmp.name) / 'cota-claude.json').write_text('{', encoding='utf-8')
@@ -89,3 +91,25 @@ class CotaTests(unittest.TestCase):
                 r = cota_claude.atualizar(self.ctx)
                 self.assertEqual(r['sessao_5h'], 6)
                 self.assertNotIn('erro', r)
+
+    def test_auth_status_no_mesmo_cache(self):
+        r = cota_claude.atualizar(self.ctx)
+        self.assertEqual((r['email'], r['plano']), ('conta@example.com', 'plano-teste'))
+        self.assertEqual(self.calls[1], (['claude', 'auth', 'status', '--json'], 10))
+        self.assertEqual(cota_claude.ler(self.ctx)['email'], 'conta@example.com')
+        self.ctx['agora'] += 100
+        cota_claude.atualizar(self.ctx)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_auth_falha_nao_apaga_cota_e_preserva_identidade(self):
+        cota_claude.atualizar(self.ctx)
+        normal = self.executar
+        def executar(argv, **kw):
+            if argv[1:3] == ['auth', 'status']:
+                raise TimeoutError
+            return normal(argv, **kw)
+        self.ctx.update(executar=executar, agora=100300)
+        r = cota_claude.atualizar(self.ctx)
+        self.assertEqual(r['sessao_5h'], 6)
+        self.assertEqual(r['email'], 'conta@example.com')
+        self.assertIn('erro_auth', r)

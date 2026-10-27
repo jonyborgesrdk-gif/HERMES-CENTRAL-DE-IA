@@ -80,6 +80,19 @@ da cota Claude. `--vivo` não pode ser combinado com `--telas`.
 O gatilho HTTP `/refresh` do modo antigo não é iniciado no modo vivo.
 Sem `--vivo`, o comportamento antigo via tmux ou telas de exemplo é preservado.
 
+No modo vivo, os cartões de cota usam as fontes Claude/Codex: 5 h e semanal são
+porcentagens **usadas**, sem estimativas quando falta leitura. Plano/e-mail do
+Claude vêm de `claude auth status --json`, no mesmo cache de 5 min do `/usage`;
+a privacidade do e-mail continua sendo a tarja já existente na página.
+Sessões Codex com identidade de conta disponível são agrupadas; sem identidade,
+há um cartão "Codex" com a leitura mais recente disponível. `--sem-contas`
+impede novas consultas Claude, mas ainda permite mostrar seu cache e as cotas
+passivas Codex. Reset textual permanece textual, sem inventar um horário para
+o cronômetro. Maestri mantém workspace/terminal como título e o tipo no subtítulo.
+O servidor recusa outros sites nos endpoints de dados; `curl` sem `Referer`
+continua permitido no host local. O indicador de fallback volta a mostrar a
+leitura periódica após uma carga bem-sucedida.
+
 ## Como o painel acha os seus agentes
 
 Cada agente do `agentes.json` aponta para um terminal do tmux pelo campo `"terminal"`:
