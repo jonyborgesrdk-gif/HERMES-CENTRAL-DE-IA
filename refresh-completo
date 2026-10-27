@@ -26,13 +26,14 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 
 import comum  # noqa: E402
+from semjanela import sem_janela_kwargs  # noqa: E402
 
 
 def consultar_estado_pr(gh_repo, numero):
     """Consulta o estado do PR via gh (só leitura). Devolve 'OPEN', 'MERGED', 'CLOSED' ou None."""
     try:
         cmd = ["gh", "pr", "view", str(numero), "-R", gh_repo, "--json", "state"]
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10, **sem_janela_kwargs())
         if res.returncode == 0:
             dados = json.loads(res.stdout)
             return dados.get("state")

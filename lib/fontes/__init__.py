@@ -13,6 +13,11 @@ import time
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+try:
+    from ..semjanela import sem_janela_kwargs
+except ImportError:
+    from semjanela import sem_janela_kwargs
+
 
 def diretorio(ctx):
     return Path(ctx.get('dir') or os.environ.get('PAINEL_IAS_DIR') or
@@ -39,7 +44,7 @@ def executar(ctx, argv, timeout):
     if 'executar' in ctx:
         return ctx['executar'](argv, timeout=timeout)
     return subprocess.run(argv, capture_output=True, text=True, encoding='utf-8',
-                          errors='replace', timeout=timeout, check=True).stdout
+                          errors='replace', timeout=timeout, check=True, **sem_janela_kwargs()).stdout
 
 
 def http_get(ctx, url, timeout, headers=None):

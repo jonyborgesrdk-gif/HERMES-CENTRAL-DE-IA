@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 from leitor import mascarar
+from semjanela import sem_janela_kwargs
 
 CAMPOS = "number,title,headRefName,headRefOid,url,isDraft,statusCheckRollup"
 PASSOU = {"SUCCESS", "NEUTRAL", "SKIPPED"}
@@ -75,7 +76,7 @@ def ler_prs(repos):
             p = subprocess.run(
                 ["gh", "pr", "list", "-R", repo["gh"], "--state", "open", "--limit", "50", "--json", CAMPOS],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                timeout=ESPERA_GH, env=ambiente)
+                timeout=ESPERA_GH, env=ambiente, **sem_janela_kwargs())
         except FileNotFoundError:
             raise RuntimeError("gh não está no PATH")
         except subprocess.TimeoutExpired:
@@ -96,7 +97,7 @@ def _git(pasta, *args):
     try:
         p = subprocess.run(["git", "-C", str(pasta), "--no-optional-locks"] + list(args),
                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                           timeout=ESPERA_GIT)
+                           timeout=ESPERA_GIT, **sem_janela_kwargs())
     except (OSError, subprocess.TimeoutExpired):
         return None
     return p.stdout.decode("utf-8", "replace").strip() if p.returncode == 0 else None

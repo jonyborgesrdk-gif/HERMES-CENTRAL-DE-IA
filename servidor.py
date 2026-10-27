@@ -16,6 +16,8 @@ import threading
 import time
 from urllib.parse import unquote, urlsplit
 
+from lib.semjanela import sem_janela_kwargs
+
 sys.dont_write_bytecode = True
 RAIZ = Path(__file__).resolve().parent
 PREFIXO = 'window.__painelDados && window.__painelDados('
@@ -256,7 +258,7 @@ class Supervisor:
         while not self.parar.is_set():
             try:
                 self.processo = self.popen(self.comando, cwd=RAIZ, stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **sem_janela_kwargs())
                 if self.job:
                     self.job.associar(self.processo)
                 while not self.parar.wait(0.2):

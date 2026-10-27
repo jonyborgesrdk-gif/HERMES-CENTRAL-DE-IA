@@ -7,6 +7,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from semjanela_cotas import sem_janela_kwargs
+
 ALLOWED_ENV = {'TMUX_PANE', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'HOME'}
 
 
@@ -35,7 +37,7 @@ def read_antigravity_email(pid, home):
         return None
     try:
         opened = subprocess.run(['lsof', '-p', str(pid), '-Fn'], capture_output=True,
-                                text=True, check=True, timeout=5).stdout
+                                text=True, check=True, timeout=5, **sem_janela_kwargs()).stdout
     except (OSError, subprocess.SubprocessError):
         return None
     root = (Path(home) / '.gemini/antigravity-cli/log').resolve()
@@ -47,7 +49,7 @@ def read_antigravity_email(pid, home):
         try:
             filtered = subprocess.run(['/usr/bin/awk',
                 '/OAuth: authenticated successfully as / { print substr($0, index($0, "OAuth:")) }',
-                str(log)], capture_output=True, text=True, check=True, timeout=2).stdout
+                str(log)], capture_output=True, text=True, check=True, timeout=2, **sem_janela_kwargs()).stdout
         except (OSError, subprocess.SubprocessError):
             continue
         for line in filtered.splitlines():
@@ -108,7 +110,7 @@ ENV_FILTER = r'''
 def read_processes():
     listed = subprocess.run(
         ['/bin/ps', '-axo', 'pid=,comm='], check=True,
-        capture_output=True, text=True, timeout=10,
+        capture_output=True, text=True, timeout=10, **sem_janela_kwargs(),
     ).stdout
     environments = {}
     for line in listed.splitlines():
@@ -117,12 +119,12 @@ def read_processes():
             continue
         with subprocess.Popen(
             ['/bin/ps', 'eww', '-p', parts[0], '-o', 'command='],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **sem_janela_kwargs(),
         ) as process:
             try:
                 filtered = subprocess.run(
                     ['/usr/bin/awk', ENV_FILTER], stdin=process.stdout,
-                    capture_output=True, text=True, check=True, timeout=5,
+                    capture_output=True, text=True, check=True, timeout=5, **sem_janela_kwargs(),
                 )
                 process.stdout.close()
                 process.wait(timeout=5)
@@ -200,7 +202,7 @@ def list_tmux_panes():
     """Todos os painéis do tmux: [{'id': '%3', 'name': 'sessao:0.1'}]. Sem tmux ou sem servidor, lista vazia."""
     try:
         out = subprocess.run(['tmux', 'list-panes', '-a', '-F', '#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}'],
-                             capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL)
+                             capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL, **sem_janela_kwargs())
     except (OSError, subprocess.SubprocessError):
         return []
     panes = []

@@ -54,6 +54,7 @@ import sonda as modulo_sonda    # noqa: E402
 import prs as modulo_prs    # noqa: E402
 import contas as modulo_contas    # noqa: E402
 from terminais import Tmux    # noqa: E402
+from semjanela import sem_janela_kwargs    # noqa: E402
 import vivo    # noqa: E402
 
 ARQ_SONDA_DESLIGADA = comum.RAIZ / "sonda.desligada"
@@ -548,7 +549,8 @@ class HandlerRefresh(http.server.BaseHTTPRequestHandler):
                 subprocess.run(
                     [sys.executable, "-I", str(comum.RAIZ / "refresh-completo")],
                     capture_output=True,
-                    timeout=30
+                    timeout=30,
+                    **sem_janela_kwargs()
                 )
             except Exception as erro:
                 print("coletor: erro ao executar refresh-completo: %s" % erro, file=sys.stderr, flush=True)

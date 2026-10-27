@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 
 from discovery import InjectedDiscovery, TmuxDiscovery
 from sessions import SessionMetadata
+from semjanela_cotas import sem_janela_kwargs
 
 INTERVALS = {'codex': 300, 'claude': 300, 'antigravity': 1200}
 EXECUTABLES = {'codex': 'codex', 'claude': 'claude', 'antigravity': 'agy'}
@@ -49,7 +50,7 @@ def parse_antigravity_email(output):
 def filtered_log(path, pattern):
     # Filter at the file boundary: Python receives only the requested identifiers.
     result = subprocess.run(['/usr/bin/awk', pattern, str(path)], stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, text=True, timeout=2, check=True)
+                            stderr=subprocess.DEVNULL, text=True, timeout=2, check=True, **sem_janela_kwargs())
     return result.stdout
 
 
@@ -152,7 +153,7 @@ def parse_cli_output(harness, output):
 
 def _novo_grupo_kwargs():
     if os.name == 'nt':
-        return {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
+        return {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP | sem_janela_kwargs().get('creationflags', 0)}
     return {'start_new_session': True}
 
 

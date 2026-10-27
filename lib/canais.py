@@ -14,9 +14,11 @@ from urllib.error import HTTPError
 try:
     from .comum import gravar_atomico
     from .leitor import mascarar
+    from .semjanela import sem_janela_kwargs
 except ImportError:
     from comum import gravar_atomico
     from leitor import mascarar
+    from semjanela import sem_janela_kwargs
 
 
 def config(pasta, nome):
@@ -85,7 +87,7 @@ class Toast:
             if self.executar:
                 retorno = self.executar(argv, timeout=10)
             else:
-                retorno = subprocess.run(argv, capture_output=True, timeout=10, check=True)
+                retorno = subprocess.run(argv, capture_output=True, timeout=10, check=True, **sem_janela_kwargs())
             return getattr(retorno, 'returncode', retorno) == 0
         except Exception:
             self.logger.warning('toast falhou')

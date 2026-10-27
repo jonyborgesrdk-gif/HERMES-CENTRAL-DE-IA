@@ -8,6 +8,8 @@ vale o próprio nome do agente. Só biblioteca padrão.
 import re
 import subprocess
 
+from semjanela import sem_janela_kwargs
+
 ESPERA_TMUX = 8
 
 # Os escapes que o painel usa para teclas cruas: \n é Enter, \e é Esc, \x7f é apagar.
@@ -31,7 +33,7 @@ class Tmux:
         try:
             p = subprocess.run(["tmux", "display-message", "-p", "-t", self.alvo(nome), "#{pane_id}"],
                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                               timeout=ESPERA_TMUX)
+                               timeout=ESPERA_TMUX, **sem_janela_kwargs())
         except (OSError, subprocess.TimeoutExpired):
             return None
         achado = p.stdout.decode("utf-8", "replace").strip()
@@ -41,7 +43,7 @@ class Tmux:
         """(texto, None) ou (None, motivo). A tela visível do terminal, sem alterar nada."""
         try:
             p = subprocess.run(["tmux", "capture-pane", "-p", "-t", self.alvo(nome)], stdin=subprocess.DEVNULL,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=ESPERA_TMUX)
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=ESPERA_TMUX, **sem_janela_kwargs())
         except FileNotFoundError:
             return None, "tmux não está instalado (ou não está no PATH)"
         except subprocess.TimeoutExpired:
@@ -68,7 +70,7 @@ class Tmux:
                 comando = ["tmux", "send-keys", "-t", alvo, "-l", "--", pedaco]
             try:
                 p = subprocess.run(comando, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, timeout=ESPERA_TMUX)
+                                   stderr=subprocess.DEVNULL, timeout=ESPERA_TMUX, **sem_janela_kwargs())
             except (OSError, subprocess.TimeoutExpired):
                 return False
             if p.returncode != 0:

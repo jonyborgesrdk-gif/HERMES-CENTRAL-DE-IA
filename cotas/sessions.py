@@ -6,6 +6,8 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+from semjanela_cotas import sem_janela_kwargs
+
 
 def record_time(value, fallback):
     try:
@@ -57,7 +59,8 @@ class SessionMetadata:
                 # Keep only the selected model and timestamp, never other log lines.
                 output = subprocess.run(['/usr/bin/awk',
                     '/Propagating selected model override to backend: label=/ { print }', str(path)],
-                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=2, check=True).stdout
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=2, check=True,
+                    **sem_janela_kwargs()).stdout
                 for line in output.splitlines():
                     match = re.search(r'Propagating selected model override to backend: label="([^"]+)"', line)
                     if not match:
