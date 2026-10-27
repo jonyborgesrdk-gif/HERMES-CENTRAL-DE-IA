@@ -24,7 +24,8 @@ def montar_agentes(leituras_das_fontes, agora, overrides):
                          _pasta(v.get('pasta')) == _pasta(pasta) and
                          (not v.get('ferramenta') or v['ferramenta'] == ferramenta)), None)
         if override is None:
-            override = next((v for v in (overrides or []) if v.get('nome') == nome), {})
+            override = next((v for v in (overrides or []) if v.get('nome') == nome and
+                             (not v.get('ferramenta') or v['ferramenta'] == ferramenta)), {})
         nome = override.get('nome') or nome
         base, numero = nome, 2
         while nome in nomes:

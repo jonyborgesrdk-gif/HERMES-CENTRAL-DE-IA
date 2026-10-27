@@ -446,19 +446,27 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
         if anterior and 0 <= agora - anterior["hora"] < intervalos.get(nome, 0):
             leituras[nome], situacao[nome] = anterior["dados"], anterior["situacao"]
             continue
+        ultima_ok = anterior.get("ultima_leitura_ok") if anterior else None
         try:
             dado = fontes[nome](contexto) if nome in fontes else {}
             if not isinstance(dado, dict):
                 raise ValueError("resposta inválida")
             erro = texto_seguro(dado.get("erro"), 160)
-            meta = {"ok": not bool(erro), "erro": erro, "hora": agora}
-            if erro and anterior:
-                dado = anterior["dados"]
-        except Exception as erro:
-            dado = anterior["dados"] if anterior else {}
-            meta = {"ok": False, "erro": "falha na fonte (%s)" % type(erro).__name__, "hora": agora}
+        except Exception as exc:
+            dado = {}
+            erro = "falha na fonte (%s)" % type(exc).__name__
+        retido = False
+        if erro and anterior:
+            # Tentativas ruins não rejuvenescem o último snapshot bom.
+            retido = ultima_ok is not None and 0 <= agora - ultima_ok <= 300
+            dado = anterior["dados"] if retido else {}
+        elif not erro:
+            ultima_ok = agora
+        meta = {"ok": not bool(erro), "erro": erro, "hora": agora,
+                "ultima_leitura_ok": ultima_ok, "desatualizado": retido}
         leituras[nome], situacao[nome] = dado, meta
-        cache[nome] = {"hora": agora, "dados": dado, "situacao": meta}
+        cache[nome] = {"hora": agora, "dados": dado, "situacao": meta,
+                       "ultima_leitura_ok": ultima_ok}
 
     transcripts, erros = {}, []
     anteriores = cache.get("transcripts_claude", {}).get("dados", {})
