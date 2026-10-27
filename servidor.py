@@ -3,6 +3,7 @@ import argparse
 import ctypes
 from ctypes import wintypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import hashlib
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -65,6 +66,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Cross-Origin-Resource-Policy', 'same-origin')
+        # Só diretivas que não dependem dos scripts/estilos inline da página: anti-clickjacking e base/form.
+        self.send_header('Content-Security-Policy', "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
         super().end_headers()
 
     def permitido(self):
@@ -141,19 +144,27 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Connection', 'close')
         self.end_headers()
         self.close_connection = True
-        ultimo, ping = None, time.monotonic()
+        ultimo, resumo_ultimo, ping = None, None, time.monotonic()
+        arquivo = self.server.publico / 'dados.js'
         try:
             self.wfile.write(b'retry: 2000\n\n')
             self.wfile.flush()
             while not self.server.parar.is_set():
                 try:
-                    stat = (self.server.publico / 'dados.js').stat()
+                    stat = arquivo.stat()
                     versao = (stat.st_mtime_ns, stat.st_size)
-                    if versao != ultimo:
+                    # mtime tem granularidade grosseira no NTFS: duas publicações no mesmo tick e com o
+                    # mesmo tamanho passam despercebidas. Nos 2 s após a escrita (arquivo pequeno)
+                    # confere também o hash do conteúdo; fora disso basta o stat.
+                    recente = abs(time.time_ns() - stat.st_mtime_ns) < 2_000_000_000
+                    resumo = None
+                    if (versao != ultimo or recente) and stat.st_size <= 4_000_000:
+                        resumo = hashlib.blake2b(arquivo.read_bytes(), digest_size=16).digest()
+                    if versao != ultimo or (resumo is not None and resumo != resumo_ultimo):
                         dados = json.dumps(ler_dados(self.server.publico), ensure_ascii=True)
                         self.wfile.write(('event: dados\ndata: ' + dados + '\n\n').encode('ascii'))
                         self.wfile.flush()
-                        ultimo, ping = versao, time.monotonic()
+                        ultimo, resumo_ultimo, ping = versao, resumo, time.monotonic()
                 except (FileNotFoundError, PermissionError, ValueError):
                     pass  # arquivo ainda não publicado ou em troca; manter conexão
                 if time.monotonic() - ping >= 15:
@@ -264,10 +275,17 @@ class Supervisor:
                 while not self.parar.wait(0.2):
                     if self.processo.poll() is not None:
                         break
-            except OSError:
+            except OSError as erro:
+                logging.getLogger('painel.servidor').warning('filho %s: falha ao iniciar/associar (%s)',
+                                                             Path(self.comando[2]).name, type(erro).__name__)
                 if self.processo is not None and self.processo.poll() is None:
                     self.processo.kill()
                     self.processo.wait()
+            else:
+                if not self.parar.is_set():
+                    logging.getLogger('painel.servidor').warning(
+                        'filho %s saiu (rc=%s); reiniciando em 3 s', Path(self.comando[2]).name,
+                        self.processo.returncode)
             if not self.parar.is_set():
                 self.parar.wait(3)
 

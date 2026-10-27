@@ -993,8 +993,10 @@ function desenharInfraestrutura(agoraS) {
   var fontes = dados.fontes || {};
   por(el("fontes-lista"), Object.keys(fontes).sort().map(function (nome) {
     var f = fontes[nome] || {};
-    return '<span class="saude-' + (f.ok ? "ok" : "erro") + '" title="' + esc(f.erro || "") + '">' +
-      esc(nome) + ": " + esc(f.ok ? "ok" : f.erro || "erro") + '</span>';
+    var retido = f.desatualizado === true ? " · dado retido" + (typeof f.ultima_leitura_ok === "number"
+      ? " de há " + ha(Math.max(0, agoraS - f.ultima_leitura_ok)) : "") : "";
+    return '<span class="saude-' + (f.ok && !retido ? "ok" : "erro") + '" title="' + esc(f.erro || "") + '">' +
+      esc(nome) + ": " + esc((f.ok ? "ok" : f.erro || "erro") + retido) + '</span>';
   }).join(" · ") || "sem fontes observadas");
 }
 function desenhar() {
