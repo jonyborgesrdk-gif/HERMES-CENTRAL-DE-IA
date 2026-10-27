@@ -26,14 +26,23 @@ def ler(ctx):
                     sessoes[chave] = evento
     resultado = []
     for chave, evento in sessoes.items():
+        if 'maestri-usage-' in str(evento.get('cwd') or '').casefold():
+            continue
         recente = False
         mtime = None
         hora_evento = epoch(evento.get('hora'))
+        caminho = evento.get('transcript_path')
+        ausente = not caminho
         try:
-            mtime = Path(evento['transcript_path']).stat().st_mtime
-            recente = 0 <= agora(ctx) - mtime < 20
-        except (OSError, KeyError, TypeError):
+            if caminho:
+                mtime = Path(caminho).stat().st_mtime
+                recente = 0 <= agora(ctx) - mtime < 20
+        except (FileNotFoundError, NotADirectoryError):
+            ausente = True
+        except (OSError, TypeError):
             pass
+        if ausente and agora(ctx) - hora_evento > 120:
+            continue
         if agora(ctx) - epoch(evento.get('hora')) >= 43200 and not recente:
             continue
         ultimo = evento.get('evento')

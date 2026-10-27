@@ -56,6 +56,15 @@ class MontagemTests(unittest.TestCase):
         self.assertEqual(a['atividade'], 'pede permissão: Read')
         self.assertEqual((a['sessao_5h_pct'], a['semanal_pct']), (6, 42))
 
+    def test_sessao_sobrevivente_sem_transcript_mantem_agente(self):
+        r = leituras()
+        r['transcripts_claude']['claude-1'] = None
+        agentes = montar_agentes(r, 100000, [])
+        self.assertEqual(agentes[0]['ferramenta'], 'claude')
+        self.assertEqual(agentes[0]['nome'], 'Claude · exemplo')
+        self.assertIsNone(agentes[0]['modelo'])
+        self.assertEqual(agentes[0]['estado'], 'esperando')
+
     def test_codex_usado_proprio(self):
         a = montar_agentes(leituras(), 100000, [])[1]
         self.assertEqual((a['sessao_5h_pct'], a['semanal_pct']), (17, 29))
@@ -255,6 +264,33 @@ class PassadaTests(unittest.TestCase):
         self.assertFalse(dados['fontes']['cota_claude']['ok'])
         self.assertFalse(dados['fontes']['transcripts_claude']['ok'])
         self.assertEqual(len(dados['agentes']), 3)
+
+    def test_sessao_sem_transcript_nao_e_erro_da_fonte(self):
+        self.fontes['transcripts_claude'] = lambda ctx: None
+        dados = self.passada()
+        claude = next(a for a in dados['agentes'] if a['ferramenta'] == 'claude')
+        self.assertEqual(claude['nome'], 'Claude · exemplo')
+        self.assertIsNone(claude['modelo'])
+        self.assertTrue(dados['fontes']['transcripts_claude']['ok'])
+        self.assertIsNone(dados['fontes']['transcripts_claude']['erro'])
+
+    def test_erro_transcript_preserva_snapshot_por_sessao(self):
+        cache = {}
+        self.passada(cache=cache)
+        self.r['transcripts_claude']['claude-1'] = {'erro': 'arquivo sem leitura'}
+        dados = self.passada(cache=cache, agora=100002)
+        claude = next(a for a in dados['agentes'] if a['ferramenta'] == 'claude')
+        self.assertEqual(claude['modelo'], 'modelo-claude')
+        self.assertEqual(claude['ultima_fala'], 'Resposta sintética')
+        self.assertFalse(dados['fontes']['transcripts_claude']['ok'])
+        self.assertEqual(dados['fontes']['transcripts_claude']['erro'], 'transcript sem leitura')
+        self.assertEqual(cache['transcripts_claude']['dados']['claude-1']['modelo'], 'modelo-claude')
+
+    def test_so_none_e_ausencia_normal_outro_tipo_e_invalido(self):
+        self.fontes['transcripts_claude'] = lambda ctx: 42
+        dados = self.passada()
+        self.assertFalse(dados['fontes']['transcripts_claude']['ok'])
+        self.assertIn('ValueError', dados['fontes']['transcripts_claude']['erro'])
 
     def test_cadencias(self):
         cache = {}

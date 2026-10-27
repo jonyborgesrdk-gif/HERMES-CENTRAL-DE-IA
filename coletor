@@ -460,21 +460,30 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
         cache[nome] = {"hora": agora, "dados": dado, "situacao": meta}
 
     transcripts, erros = {}, []
+    anteriores = cache.get("transcripts_claude", {}).get("dados", {})
     for sessao in leituras["eventos_hooks"].get("sessoes", []):
         chave = sessao.get("session_id")
         try:
             dado = fontes["transcripts_claude"](dict(contexto, **{
                 k: sessao[k] for k in ("cwd", "transcript_path") if k in sessao
             })) if "transcripts_claude" in fontes else {}
+            if dado is None:
+                transcripts[chave] = None
+                continue
             if not isinstance(dado, dict):
                 raise ValueError("resposta inválida")
-            transcripts[chave] = dado
             if dado.get("erro"):
+                transcripts[chave] = anteriores.get(chave)
                 erros.append("transcript sem leitura")
+            else:
+                transcripts[chave] = dado
         except Exception as erro:
+            transcripts[chave] = anteriores.get(chave)
             erros.append("falha no transcript (%s)" % type(erro).__name__)
     leituras["transcripts_claude"] = transcripts
     situacao["transcripts_claude"] = {"ok": not bool(erros), "erro": "; ".join(sorted(set(erros))) or None, "hora": agora}
+    cache["transcripts_claude"] = {"dados": transcripts, "hora": agora,
+                                    "situacao": situacao["transcripts_claude"]}
     agentes = vivo.montar_agentes(leituras, agora, overrides or [])
     mapa = {"agentes": agentes, "repos": []}
     if estado_prs is None:

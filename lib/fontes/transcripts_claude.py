@@ -20,10 +20,14 @@ def interpretar(linhas):
 
 
 def ler(ctx):
+    if not ctx.get('transcript_path'):
+        return None
     try:
         resultado = interpretar(linhas_finais(ctx['transcript_path']))
         if resultado['pasta'] is None:
             resultado['pasta'] = ctx.get('cwd')
         return resultado
-    except (OSError, KeyError):
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError:
         return {'erro': 'transcript sem leitura'}

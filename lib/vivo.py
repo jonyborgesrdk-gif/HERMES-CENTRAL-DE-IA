@@ -50,7 +50,7 @@ def montar_agentes(leituras_das_fontes, agora, overrides):
 
     cota = leituras.get('cota_claude', {})
     for sessao in leituras.get('eventos_hooks', {}).get('sessoes', []):
-        transcript = leituras.get('transcripts_claude', {}).get(sessao.get('session_id'), {})
+        transcript = leituras.get('transcripts_claude', {}).get(sessao.get('session_id')) or {}
         pasta = sessao.get('cwd') or transcript.get('pasta')
         estado = sessao.get('estado', 'ocioso')
         permissao = estado == 'esperando permissão'

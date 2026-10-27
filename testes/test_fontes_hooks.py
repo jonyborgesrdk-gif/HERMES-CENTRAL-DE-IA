@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from lib.fontes import eventos_hooks, transcripts_claude
 
 
@@ -121,4 +122,38 @@ class HooksTests(unittest.TestCase):
         self.assertEqual(transcripts_claude.ler({'transcript_path': self.transcript})['modelo'], 'ultimo')
 
     def test_transcript_ausente(self):
-        self.assertIn('erro', transcripts_claude.ler({'transcript_path': self.transcript}))
+        self.assertIsNone(transcripts_claude.ler({'transcript_path': self.transcript}))
+
+    def test_maestri_usage_descartado_imediatamente(self):
+        self.eventos('SessionStart')
+        arquivo = self.pasta / 'eventos.jsonl'
+        evento = json.loads(arquivo.read_text(encoding='utf-8'))
+        evento['cwd'] = 'C:/Temp/MAESTRI-UsAgE-exemplo'
+        arquivo.write_text(json.dumps(evento), encoding='utf-8')
+        self.assertEqual(eventos_hooks.ler(self.ctx)['sessoes'], [])
+        self.crescer()
+        self.assertEqual(eventos_hooks.ler(self.ctx)['sessoes'], [])
+
+    def test_sem_transcript_descarta_so_apos_cento_vinte(self):
+        self.eventos('SessionStart', hora=99880)
+        self.assertEqual(len(eventos_hooks.ler(self.ctx)['sessoes']), 1)
+        self.ctx['agora'] += 1
+        self.assertEqual(eventos_hooks.ler(self.ctx)['sessoes'], [])
+
+    def test_transcript_aparece_na_carencia_e_sessao_continua(self):
+        self.eventos('SessionStart', hora=99900)
+        self.assertEqual(len(eventos_hooks.ler(self.ctx)['sessoes']), 1)
+        self.crescer(mtime=100010)  # 110 s depois do evento
+        self.ctx['agora'] = 100015
+        self.assertEqual(self.estado(), 'trabalhando')
+        self.ctx['agora'] = 100200
+        self.assertEqual(self.estado(), 'ocioso')
+
+    def test_transcript_existente_com_erro_nao_e_ausente(self):
+        self.crescer()
+        with patch.object(transcripts_claude, 'linhas_finais', side_effect=PermissionError):
+            self.assertEqual(transcripts_claude.ler({'transcript_path': self.transcript}),
+                             {'erro': 'transcript sem leitura'})
+
+    def test_sem_path_nao_e_erro_de_leitura(self):
+        self.assertIsNone(transcripts_claude.ler({}))
