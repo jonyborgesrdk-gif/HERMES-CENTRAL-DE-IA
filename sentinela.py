@@ -3,7 +3,7 @@ import argparse
 from datetime import datetime
 import json
 import logging
-from logging.handlers import RotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 import os
 from pathlib import Path
 import sys
@@ -13,7 +13,24 @@ sys.dont_write_bytecode = True
 from lib import canais as modulo_canais
 from lib import regras
 from lib.comum import gravar_atomico
-from servidor import PREFIXO
+from servidor import PREFIXO, Trava
+
+INTERVALO_RESUMO = 600
+SERVICOS_OPCIONAIS = frozenset({'Ollama', 'Hindsight'})
+
+
+def _unicos(itens, padrao):
+    if not isinstance(itens, list):
+        return []
+    vistos, saida = set(), []
+    for item in itens:
+        if isinstance(item, dict):
+            nome = str(item.get('nome') or padrao)
+            if nome in vistos:
+                continue
+            vistos.add(nome)
+        saida.append(item)
+    return saida
 
 
 def carregar_estado(caminho, logger):
@@ -66,7 +83,17 @@ def construir_canais(pasta, logger, ensaio):
 
 
 def passada(dados, estado, agora, canais, logger, ensaio=False):
+    dados = dict(dados, agentes=_unicos(dados.get('agentes'), 'Agente'),
+                 servicos=_unicos(dados.get('servicos'), 'Serviço'))
     novos, fechados, estado = regras.avaliar(dados, estado, agora)
+    ok = set(n for n in estado.get('servicos_ok', []) if isinstance(n, str))
+    for s in dados['servicos']:
+        if isinstance(s, dict) and s.get('estado') != 'fora':
+            ok.add(str(s.get('nome') or 'Serviço'))
+    estado['servicos_ok'] = sorted(ok)
+    novos = [a for a in novos if not (
+        a['tipo'] == 'lembrete' and a['chave'].startswith('servico:') and
+        a['chave'][8:] in SERVICOS_OPCIONAIS and a['chave'][8:] not in ok)]
     for alerta in novos + fechados:
         nomes = ['log'] if ensaio else ['log', *alerta['canais']]
         if not ensaio and alerta['tipo'] in ('aberto', 'resolvido'):
@@ -79,10 +106,21 @@ def passada(dados, estado, agora, canais, logger, ensaio=False):
                 canal.enviar(alerta)
             except Exception:
                 logger.warning('canal %s falhou', nome)
-    for chave, item in sorted(estado['chaves'].items()):
-        if item['condicao']:
-            logger.info('%s contagem %s=%d aberto=%s', 'ENSAIO' if ensaio else 'avaliacao',
-                        modulo_canais.mascarar(chave), item['contagem'], item['aberto'])
+    ultimo = estado.get('resumo_log')
+    if not isinstance(ultimo, (int, float)) or isinstance(ultimo, bool) or ultimo > agora:
+        estado['resumo_log'] = agora
+        # Instantâneo único na primeira avaliação (sem estado de resumo); depois só resumo periódico.
+        for chave, item in sorted(estado['chaves'].items())[:20]:
+            if item['condicao']:
+                logger.info('%s contagem %s=%d aberto=%s', 'ENSAIO' if ensaio else 'avaliacao',
+                            modulo_canais.mascarar(chave), item['contagem'], item['aberto'])
+    elif agora - ultimo >= INTERVALO_RESUMO:
+        ativas = sorted((c, i) for c, i in estado['chaves'].items() if i['condicao'])
+        abertas = sum(1 for _, i in ativas if i['aberto'])
+        lista = ', '.join('%s=%d' % (modulo_canais.mascarar(c), i['contagem']) for c, i in ativas[:20])
+        logger.info('%s resumo periódico: %d condições ativas, %d abertas [%s]',
+                    'ENSAIO' if ensaio else 'avaliacao', len(ativas), abertas, lista)
+        estado['resumo_log'] = agora
     diario, enviar = resumo_diario(dados, novos, estado, agora)
     if enviar:
         alerta = {'chave': 'resumo-diario:' + diario['data'], 'tipo': 'resumo_diario',
@@ -115,13 +153,18 @@ def main(argv=None, canais=None, agora=None, dormir=None):
     logger = logging.getLogger('painel.sentinela')
     logger.setLevel(logging.INFO)
     logger.propagate = False
-    handler = None
+    handler = trava = None
     try:
         pasta.mkdir(parents=True, exist_ok=True)
-        handler = RotatingFileHandler(pasta / 'sentinela.log', maxBytes=1024 * 1024,
-                                      backupCount=3, encoding='utf-8')
+        handler = TimedRotatingFileHandler(pasta / 'sentinela.log', when='midnight',
+                                           backupCount=7, encoding='utf-8')
         handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
         logger.addHandler(handler)
+        try:
+            trava = Trava(pasta / 'sentinela.trava')
+        except RuntimeError:
+            logger.warning('outra sentinela já está em execução; saindo')
+            return 0
         estado_path = pasta / ('alertas-ensaio-estado.json' if args.ensaio else 'alertas-estado.json')
         estado = carregar_estado(estado_path, logger)
         canais = construir_canais(pasta, logger, args.ensaio) if canais is None else canais
@@ -150,6 +193,8 @@ def main(argv=None, canais=None, agora=None, dormir=None):
     except OSError:
         return 1
     finally:
+        if trava:
+            trava.close()
         if handler:
             logger.removeHandler(handler)
             handler.close()
