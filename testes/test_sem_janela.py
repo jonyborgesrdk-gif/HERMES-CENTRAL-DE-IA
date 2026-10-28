@@ -13,46 +13,115 @@ CRIADORES = {'run', 'Popen', 'call', 'check_output', 'check_call'}
 
 
 def chamadas_desprotegidas(texto):
-    arvore = ast.parse(texto)
-    modulos = {'subprocess'}
-    diretos = set()
-    modulos_os = {'os'}
-    proibidos = set()
-    for no in ast.walk(arvore):
-        if isinstance(no, ast.Import):
+    helpers = {'sem_janela_kwargs', '_novo_grupo_kwargs'}
+    assincronos = {'create_subprocess_exec', 'create_subprocess_shell'}
+
+    class Vigia(ast.NodeVisitor):
+        def __init__(self):
+            self.nomes = {nome: nome for nome in ('subprocess', 'asyncio', 'os')}
+            self.nomes.update({nome: 'helper' for nome in helpers})
+            self.falhas = set()
+
+        def atributo(self, modulo, nome):
+            if ((modulo == 'subprocess' and nome in CRIADORES)
+                    or (modulo == 'asyncio' and nome in assincronos)):
+                return 'criador'
+            if modulo == 'os' and nome in {'system', 'popen'}:
+                return 'proibido'
+            return None
+
+        def origem(self, no):
+            if isinstance(no, ast.Name):
+                return self.nomes.get(no.id)
+            if isinstance(no, ast.Attribute):
+                if isinstance(no.value, ast.Name) and no.value.id == 'self' and no.attr == 'popen':
+                    return 'criador'
+                return self.atributo(self.origem(no.value), no.attr)
+            if isinstance(no, ast.Call) and self.origem(no.func) == 'helper':
+                return 'kwargs'
+            return None
+
+        def visit_Import(self, no):
             for alias in no.names:
-                if alias.name == 'subprocess':
-                    modulos.add(alias.asname or alias.name)
-                elif alias.name == 'os':
-                    modulos_os.add(alias.asname or alias.name)
-        elif isinstance(no, ast.ImportFrom):
+                self.nomes[alias.asname or alias.name] = alias.name
+
+        def visit_ImportFrom(self, no):
             for alias in no.names:
-                if no.module == 'subprocess' and alias.name in CRIADORES:
-                    diretos.add(alias.asname or alias.name)
-                elif no.module == 'os' and alias.name in {'system', 'popen'}:
-                    proibidos.add(alias.asname or alias.name)
-    falhas = []
-    for no in ast.walk(arvore):
-        if not isinstance(no, ast.Call):
-            continue
-        func = no.func
-        criador = isinstance(func, ast.Name) and func.id in diretos
-        proibido = isinstance(func, ast.Name) and func.id in proibidos
-        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-            criador |= func.value.id in modulos and func.attr in CRIADORES
-            # Supervisor usa um Popen injetável; também precisa da proteção.
-            criador |= func.value.id == 'self' and func.attr == 'popen'
-            proibido |= func.value.id in modulos_os and func.attr in {'system', 'popen'}
-        if proibido or (criador and not any(kw.arg in ('creationflags', None) for kw in no.keywords)):
-            falhas.append(no.lineno)
-    return sorted(falhas)
+                self.nomes[alias.asname or alias.name] = (
+                    'helper' if alias.name in helpers else self.atributo(no.module, alias.name))
+
+        def atribuir(self, alvo, origem):
+            if isinstance(alvo, ast.Name):
+                self.nomes[alvo.id] = origem
+            elif isinstance(alvo, (ast.Tuple, ast.List)):
+                for item in alvo.elts:
+                    self.atribuir(item, None)
+            elif isinstance(alvo, ast.Subscript):
+                self.atribuir(alvo.value, None)  # dict alterado deixa de ser comprovado
+
+        def visit_Assign(self, no):
+            self.visit(no.value)
+            origem = self.origem(no.value)
+            for alvo in no.targets:
+                self.atribuir(alvo, origem)
+
+        def visit_AnnAssign(self, no):
+            if no.value is not None:
+                self.visit(no.value)
+            self.atribuir(no.target, self.origem(no.value))
+
+        def visit_FunctionDef(self, no):
+            anteriores = self.nomes.copy()
+            # Parâmetros não herdam a procedência de variáveis externas homônimas.
+            for argumento in (*no.args.posonlyargs, *no.args.args, *no.args.kwonlyargs):
+                self.nomes[argumento.arg] = None
+            for argumento in (no.args.vararg, no.args.kwarg):
+                if argumento:
+                    self.nomes[argumento.arg] = None
+            self.generic_visit(no)
+            self.nomes = anteriores
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_If(self, no):
+            self.visit(no.test)
+            antes = self.nomes.copy()
+            for item in no.body:
+                self.visit(item)
+            sim = self.nomes.copy()
+            self.nomes = antes.copy()
+            for item in no.orelse:
+                self.visit(item)
+            # Só confia em kwargs se a origem for a mesma nos dois caminhos.
+            self.nomes = {k: v if self.nomes.get(k) == v else None for k, v in sim.items()}
+
+        def visit_Call(self, no):
+            origem = self.origem(no.func)
+            protegido = any(
+                (kw.arg is None and self.origem(kw.value) == 'kwargs')
+                or (kw.arg == 'creationflags' and not (
+                    isinstance(kw.value, ast.Constant) and not kw.value.value))
+                for kw in no.keywords)
+            if origem == 'proibido' or (origem == 'criador' and not protegido):
+                self.falhas.add(no.lineno)
+            self.generic_visit(no)
+            if isinstance(no.func, ast.Attribute) and self.origem(no.func.value) == 'kwargs':
+                self.atribuir(no.func.value, None)
+
+    vigia = Vigia()
+    vigia.visit(ast.parse(texto))
+    return sorted(vigia.falhas)
 
 
 class ProtecaoEstatica(unittest.TestCase):
     def test_producao_sem_subprocessos_desprotegidos(self):
-        arquivos = {RAIZ / nome for nome in ('servidor.py', 'sentinela.py', 'coletor', 'refresh-completo')}
+        arquivos = {RAIZ / nome for nome in ('servidor.py', 'sentinela.py', 'coletor', 'refresh-completo',
+                                            'painel-missao', 'painel-pendencia')}
         for pasta in ('lib', 'cotas', 'hooks'):
             arquivos.update((RAIZ / pasta).rglob('*.py'))
+        for arquivo in (RAIZ / 'hooks').rglob('*'):
+            if arquivo.is_file() and not arquivo.suffix:
+                arquivos.add(arquivo)
         falhas = []
         for arquivo in sorted(arquivos):
             for linha in chamadas_desprotegidas(arquivo.read_text(encoding='utf-8-sig')):

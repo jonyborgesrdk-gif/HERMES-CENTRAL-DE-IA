@@ -161,7 +161,16 @@ def _encerrar(process, forcado):
     try:
         if os.name == 'nt':
             if process.poll() is None:
-                (process.kill if forcado else process.terminate)()
+                # terminate()/kill() só atingem o filho direto; taskkill /T leva os netos (node da CLI).
+                try:
+                    resultado = subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                               timeout=5, **sem_janela_kwargs())
+                    morto = resultado.returncode == 0
+                except (OSError, subprocess.SubprocessError):
+                    morto = False
+                if not morto and process.poll() is None:
+                    process.kill()
         else:
             os.killpg(process.pid, signal.SIGKILL if forcado else signal.SIGTERM)
     except ProcessLookupError:

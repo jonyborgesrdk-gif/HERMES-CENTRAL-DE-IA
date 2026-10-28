@@ -8,6 +8,7 @@ Nenhum teste usa rede: o coletor roda com --sem-gh.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -184,7 +185,10 @@ class Comandos(ComPastaTemporaria):
         self.assertEqual(self.rodar("painel-pendencia", "--listar")[1].strip(), "Nenhuma pendência para o dono do painel.")
         self.rodar("painel-pendencia", "--adicionar", "Primeira:  com   espaços\na mais")
         self.rodar("painel-pendencia", "--adicionar", "Segunda")
-        self.assertEqual(self.rodar("painel-pendencia", "--listar")[1].splitlines(),
+        # O "[na tela: N]" aparece se as duas pendências caírem em segundos diferentes (criada_em tem
+        # resolução de 1 s): não é o que este teste mede, então é tirado antes de comparar.
+        listagem = self.rodar("painel-pendencia", "--listar")[1].splitlines()
+        self.assertEqual([re.sub(r"^(\d+\. )\[na tela: \d+\] ", r"\1", linha) for linha in listagem],
                          ["1. Primeira: com espaços a mais [sem passos]", "2. Segunda [sem passos]"])
         codigo, out, _ = self.rodar("painel-pendencia", "--remover", "1")
         self.assertEqual(codigo, 0)
@@ -275,7 +279,9 @@ class Passos(ComPastaTemporaria):
         self.assertEqual((p["destrava"], p["tempo"]), ("O deploy para a homologação pela CI (build 0.4, 20/10).", "15 min"))
         self.assertEqual(len(p["fontes"]), 2)
         self.assertRegex(p["id"], r"^[0-9a-f]{8}$")
-        linhas = self.rodar("painel-pendencia", "--listar")[1].splitlines()
+        # Sem o "[na tela: N]", que depende de as adições caírem em segundos diferentes (resolução de 1 s).
+        linhas = [re.sub(r"^(\d+\. )\[na tela: \d+\] ", r"\1", linha)
+                  for linha in self.rodar("painel-pendencia", "--listar")[1].splitlines()]
         self.assertEqual(linhas[0], "1. (pergunta) Aprovar o orçamento?")
         self.assertEqual(linhas[2], "2. Criar a chave da App Store Connect [3 passos]")
         self.assertEqual(linhas[3], "3. Abrir o Docker Desktop [sem passos]")

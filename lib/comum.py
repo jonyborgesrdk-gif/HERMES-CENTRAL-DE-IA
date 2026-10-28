@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import tempfile
+import time
 import unicodedata
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -261,6 +262,16 @@ def carregar_quadro(caminho=None):
     return base
 
 
+def _travar_windows(descritor):
+    """Bloqueia até obter a trava, como o flock POSIX (LK_LOCK desiste após ~10 s)."""
+    while True:
+        try:
+            msvcrt.locking(descritor, msvcrt.LK_NBLCK, 1)
+            return
+        except OSError:
+            time.sleep(0.05)
+
+
 def editar_quadro(funcao, caminho=None):
     """Lê, aplica `funcao(quadro)` e grava de forma atômica, com trava contra edição simultânea.
 
@@ -278,7 +289,7 @@ def editar_quadro(funcao, caminho=None):
                 trava.write(b"\0")
                 trava.flush()
             trava.seek(0)
-            msvcrt.locking(trava.fileno(), msvcrt.LK_LOCK, 1)
+            _travar_windows(trava.fileno())
         try:
             try:
                 quadro = carregar_quadro(caminho)
