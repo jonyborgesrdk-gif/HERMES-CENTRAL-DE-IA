@@ -11,7 +11,7 @@ function api() {
 }
 function ambiente() {
   class Elemento {
-    constructor(tag) { this.tagName = tag; this.children = []; this._text = ''; this.id = ''; }
+    constructor(tag) { this.tagName = tag; this.children = []; this._text = ''; this.id = ''; this.style = {}; }
     set textContent(t) { this._text = String(t); this.children = []; }
     get textContent() { return this._text + this.children.map(c => c.textContent).join(' '); }
     set innerHTML(t) { throw new Error('não usar innerHTML'); }
@@ -37,8 +37,8 @@ const ponte = { estado: 'connected', gateway_state: 'running', pid_vivo: true,
 const linha = source => ({ source, input_tokens: 10, output_tokens: 5,
   cache_read_tokens: 3, cache_write_tokens: 2, cost_usd: 0.2 });
 function gastos() {
-  return { hoje: { origens: [linha('whatsapp')], total: linha('total') },
-    '7d': { origens: [linha('cli'), linha('whatsapp')], total: { ...linha('total'), cost_usd: 0.4 } } };
+  return { hoje: { origens: [linha('WhatsApp · conversa direta')], total: linha('total') },
+    '7d': { origens: [linha('Terminal'), linha('WhatsApp · conversa direta')], total: { ...linha('total'), cost_usd: 0.4 } } };
 }
 
 test('sem chaves novas, DOM idêntico; retirar opt-in remove cartões', () => {
@@ -80,21 +80,73 @@ test('mensagem livre legada nunca aparece no cartão WhatsApp', () => {
   assert.doesNotMatch(texto, /chat_id=|12345678-1234-5678-9abc-123456789abc/);
 });
 
-test('gastos: origens de ambas as janelas, entrada/saída/cache/US$, total e legenda', () => {
+test('gastos: canais de ambas as janelas, entrada/saída/cache/US$, total e legenda', () => {
   const { doc } = ambiente();
   api().desenhar({ gastos_hermes: gastos() }, 1000, doc);
   const c = doc.getElementById('gastos-cartao');
   for (const trecho of ['Gastos', 'Hoje', '7 dias', 'Entrada', 'Saída', 'Cache', 'US$',
-    'cli', 'whatsapp', 'Total', '0.2000', '0.4000',
+    'Canal', 'Terminal', 'WhatsApp · conversa direta', 'Total', '0.2000', '0.4000',
     'custo estimado pelo Hermes; não inclui Claude Code/Codex fora do Hermes']) {
     assert.ok(c.textContent.includes(trecho), trecho);
   }
   const table = c.children.find(e => e.className === 'gastos-rolagem').children[0];
   const rows = table.children.find(e => e.tagName === 'tbody').children;
   assert.equal(rows.length, 3);
-  assert.equal(rows[0].children[0].textContent, 'cli');
+  assert.equal(rows[0].children[0].textContent, 'Terminal');
   assert.equal(rows[0].children[1].textContent, '0');
   assert.equal(rows[1].children[3].textContent, '5');
+});
+
+test('gráficos por janela: custo decrescente, empates estáveis e assinatura zero no fim', () => {
+  const { doc } = ambiente();
+  const canais = [
+    { ...linha('Subagentes'), cost_usd: 0, inclui_assinatura: true },
+    { ...linha('Ferramentas'), cost_usd: 2 },
+    { ...linha('Terminal'), cost_usd: 9, inclui_assinatura: true },
+    { ...linha('WhatsApp · grupo'), cost_usd: 2 },
+    { ...linha('One-shot'), cost_usd: 0 },
+    { ...linha('App desktop'), cost_usd: 0, inclui_assinatura: true }
+  ];
+  const g = { hoje: { origens: canais, total: {} },
+    '7d': { origens: canais.map(o => ({ ...o, cost_usd: o.source === 'Ferramentas' ? 12 : o.cost_usd })), total: {} } };
+  const antes = JSON.stringify(g);
+  api().desenhar({ gastos_hermes: g }, 1000, doc);
+  for (const [janela, nomes] of [
+    ['hoje', ['Terminal', 'Ferramentas', 'WhatsApp · grupo', 'One-shot', 'Subagentes', 'App desktop']],
+    ['7d', ['Ferramentas', 'Terminal', 'WhatsApp · grupo', 'One-shot', 'Subagentes', 'App desktop']]
+  ]) {
+    const grafico = doc.getElementById('gastos-grafico-' + janela);
+    assert.ok(grafico, 'gráfico ' + janela);
+    const linhas = grafico.children.find(e => e.tagName === 'ol').children;
+    assert.deepEqual(linhas.map(e => e.children[0].textContent), nomes);
+    assert.equal(linhas[0].children[2].children[0].style.width, '100%');
+    const segunda = parseFloat(linhas[1].children[2].children[0].style.width);
+    assert.ok(Math.abs(segunda - (janela === 'hoje' ? 2 / 9 * 100 : 9 / 12 * 100)) < 0.000001);
+    for (const e of linhas) {
+      const largura = parseFloat(e.children[2].children[0].style.width);
+      assert.ok(Number.isFinite(largura) && largura >= 0 && largura <= 100);
+    }
+    for (const e of linhas.slice(-2)) {
+      assert.match(e.textContent, /US\$ 0\.0000 · assinatura · 20 tokens/);
+      assert.equal(e.children[2].children[0].style.width, '0%');
+    }
+    assert.match(linhas.find(e => e.children[0].textContent === 'Terminal').textContent, /inclui assinatura/);
+  }
+  const tabela = doc.getElementById('gastos-cartao').children.find(e => e.className === 'gastos-rolagem');
+  assert.match(tabela.textContent, /assinatura/);
+  assert.equal(JSON.stringify(g), antes, 'renderização não altera snapshot nem sua ordem');
+});
+
+test('gráficos sem custo: barras zero finitas, tokens e assinatura continuam visíveis', () => {
+  const { doc } = ambiente();
+  for (const cost_usd of [0, null, undefined, '100%; color:red', NaN, Infinity]) {
+    const janela = { origens: [{ ...linha('Subagentes'), cost_usd, inclui_assinatura: true }], total: {} };
+    api().desenhar({ gastos_hermes: { hoje: janela, '7d': janela } }, 1000, doc);
+    const grafico = doc.getElementById('gastos-grafico-hoje');
+    const item = grafico.children.find(e => e.tagName === 'ol').children[0];
+    assert.equal(item.children[2].children[0].style.width, '0%');
+    assert.match(item.textContent, /US\$ 0\.0000 · assinatura · 20 tokens/);
+  }
 });
 
 test('vazio mostra total zero; erro não inventa custo e retido é explícito', () => {

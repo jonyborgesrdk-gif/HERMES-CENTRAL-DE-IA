@@ -4,19 +4,32 @@ from datetime import datetime
 import os
 from pathlib import Path
 import sqlite3
-import re
 
 from . import agora
 
 CAMPOS = ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens',
           'reasoning_tokens', 'message_count', 'cost_usd')
+# Somente rótulos constantes saem da fonte; identificadores desconhecidos não vazam.
+CANAIS = {'local': 'Terminal', 'cli': 'Terminal', 'subagent': 'Subagentes',
+          'tool': 'Ferramentas', 'oneshot': 'One-shot', 'desktop': 'App desktop'}
 # Allowlist explícita: não usar SELECT *, títulos, identidades ou a tabela messages.
-CONSULTA = '''SELECT source,
+CONSULTA = '''SELECT source, chat_type, billing_mode,
     COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
     COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0),
     COALESCE(SUM(reasoning_tokens), 0), COALESCE(SUM(message_count), 0),
     COALESCE(SUM(COALESCE(actual_cost_usd, estimated_cost_usd, 0)), 0)
-    FROM sessions WHERE started_at >= ? AND started_at <= ? GROUP BY source ORDER BY source'''
+    FROM sessions WHERE started_at >= ? AND started_at <= ?
+    GROUP BY source, chat_type, billing_mode ORDER BY source, chat_type, billing_mode'''
+
+
+def canal(source, chat_type):
+    if source == 'whatsapp':
+        if chat_type == 'dm':
+            return 'WhatsApp · conversa direta'
+        if chat_type in ('group', 'channel', 'thread'):
+            return 'WhatsApp · grupo'
+        return 'WhatsApp'
+    return CANAIS.get(source, 'Outra')
 
 
 def ler(ctx):
@@ -32,11 +45,11 @@ def ler(ctx):
             for janela, desde in (('hoje', hoje), ('7d', hora - 7 * 86400)):
                 origens, total = {}, dict.fromkeys(CAMPOS, 0)
                 for linha in db.execute(CONSULTA, (desde, hora)):
-                    source = linha[0]
-                    if not isinstance(source, str) or not re.fullmatch(r'[a-z][a-z_-]{0,39}', source):
-                        source = 'desconhecida'
-                    origem = origens.setdefault(source, dict.fromkeys(CAMPOS, 0))
-                    for campo, valor in zip(CAMPOS, linha[1:]):
+                    source = canal(linha[0], linha[1])
+                    origem = origens.setdefault(source, dict(dict.fromkeys(CAMPOS, 0), inclui_assinatura=False))
+                    # Pode haver cobrança e assinatura no mesmo canal; não zerar o custo.
+                    origem['inclui_assinatura'] |= linha[2] == 'subscription_included'
+                    for campo, valor in zip(CAMPOS, linha[3:]):
                         origem[campo] += valor
                         total[campo] += valor
                 resultado[janela] = {'desde': desde,

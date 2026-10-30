@@ -25,7 +25,8 @@ class GastosTests(unittest.TestCase):
                 cache_read_tokens INTEGER, cache_write_tokens INTEGER, reasoning_tokens INTEGER,
                 estimated_cost_usd REAL, actual_cost_usd REAL, message_count INTEGER,
                 title TEXT, system_prompt TEXT, chat_id TEXT, user_id TEXT,
-                display_name TEXT, origin_json TEXT, cwd TEXT)''')
+                display_name TEXT, origin_json TEXT, cwd TEXT, session_key TEXT,
+                thread_id TEXT, chat_type TEXT, billing_mode TEXT)''')
             db.execute('CREATE TABLE messages (body TEXT)')
             db.commit()
 
@@ -34,14 +35,64 @@ class GastosTests(unittest.TestCase):
         return importlib.import_module('lib.fontes.gastos_hermes')
 
     def inserir(self, source, ts, entrada=10, saida=5, leitura=3, escrita=2,
-                raciocinio=1, estimado=0.5, real=None, mensagens=2):
+                raciocinio=1, estimado=0.5, real=None, mensagens=2,
+                chat_type=None, billing_mode=None):
         with closing(sqlite3.connect(self.caminho)) as db:
             db.execute('''INSERT INTO sessions (source, started_at, input_tokens,
                 output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
-                estimated_cost_usd, actual_cost_usd, message_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                (source, ts, entrada, saida, leitura, escrita, raciocinio, estimado, real, mensagens))
+                estimated_cost_usd, actual_cost_usd, message_count, chat_type, billing_mode)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (source, ts, entrada, saida, leitura, escrita, raciocinio, estimado, real,
+                 mensagens, chat_type, billing_mode))
             db.commit()
+
+    def test_whitelist_completa_de_canais_sem_texto_cru(self):
+        casos = [
+            ('local', None, 'Terminal'), ('cli', None, 'Terminal'),
+            ('whatsapp', 'dm', 'WhatsApp · conversa direta'),
+            ('whatsapp', 'group', 'WhatsApp · grupo'),
+            ('whatsapp', 'channel', 'WhatsApp · grupo'),
+            ('whatsapp', 'thread', 'WhatsApp · grupo'),
+            ('whatsapp', None, 'WhatsApp'),
+            ('whatsapp', 'cliente_confidencial', 'WhatsApp'),
+            ('subagent', None, 'Subagentes'), ('tool', None, 'Ferramentas'),
+            ('oneshot', None, 'One-shot'), ('desktop', None, 'App desktop'),
+            ('cliente_confidencial', 'dm', 'Outra'), ('WHATSAPP', 'dm', 'Outra'),
+            (None, None, 'Outra'), ('', None, 'Outra'),
+        ]
+        for source, chat_type, esperado in casos:
+            with self.subTest(source=source, chat_type=chat_type):
+                with closing(sqlite3.connect(self.caminho)) as db:
+                    db.execute('DELETE FROM sessions')
+                    db.commit()
+                self.inserir(source, self.agora, chat_type=chat_type,
+                             billing_mode='cliente_confidencial')
+                d = self.fonte().ler(self.ctx)['gastos_hermes']
+                for janela in ('hoje', '7d'):
+                    self.assertEqual([o['source'] for o in d[janela]['origens']], [esperado])
+                self.assertNotIn('cliente_confidencial', json.dumps(d))
+
+    def test_assinatura_por_canal_sem_alterar_custo_ou_tokens(self):
+        self.inserir('subagent', self.agora, real=0, estimado=99,
+                     billing_mode='subscription_included')
+        self.inserir('local', self.agora, real=0, billing_mode='subscription_included')
+        self.inserir('cli', self.agora, estimado=0.7)
+        self.inserir('tool', self.agora, real=0, billing_mode='cliente_confidencial')
+        d = self.fonte().ler(self.ctx)['gastos_hermes']
+        for janela in ('hoje', '7d'):
+            canais = {o['source']: o for o in d[janela]['origens']}
+            self.assertIs(canais['Subagentes'].get('inclui_assinatura'), True)
+            self.assertEqual(canais['Subagentes']['cost_usd'], 0)
+            self.assertEqual(canais['Subagentes']['input_tokens'], 10)
+            self.assertIs(canais['Terminal']['inclui_assinatura'], True)
+            self.assertAlmostEqual(canais['Terminal']['cost_usd'], 0.7)
+            self.assertEqual(canais['Terminal']['input_tokens'], 20)
+            self.assertIs(canais['Ferramentas']['inclui_assinatura'], False)
+            self.assertAlmostEqual(d[janela]['total']['cost_usd'], 0.7)
+            for campo in self.fonte().CAMPOS:
+                self.assertAlmostEqual(sum(o[campo] for o in canais.values()), d[janela]['total'][campo])
+        self.assertNotIn('cliente_confidencial', json.dumps(d))
+        self.assertNotIn('subscription_included', json.dumps(d))
 
     def test_agrega_hoje_7d_actual_senao_estimated(self):
         hoje = datetime.fromtimestamp(self.agora).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
@@ -56,8 +107,8 @@ class GastosTests(unittest.TestCase):
         self.assertEqual(d['custo_tipo'], 'estimado pelo Hermes')
         self.assertEqual(d['hoje']['desde'], hoje)
         self.assertEqual(d['7d']['desde'], semana)
-        self.assertEqual([o['source'] for o in d['hoje']['origens']], ['whatsapp'])
-        self.assertEqual([o['source'] for o in d['7d']['origens']], ['cli', 'local', 'whatsapp'])
+        self.assertEqual([o['source'] for o in d['hoje']['origens']], ['WhatsApp'])
+        self.assertEqual([o['source'] for o in d['7d']['origens']], ['Terminal', 'WhatsApp'])
         self.assertEqual(d['hoje']['total']['input_tokens'], 20)
         self.assertEqual(d['hoje']['total']['output_tokens'], 10)
         self.assertEqual(d['hoje']['total']['cache_read_tokens'], 6)
@@ -75,7 +126,7 @@ class GastosTests(unittest.TestCase):
         self.inserir(None, self.agora, entrada=None, saida=None, leitura=None,
                      escrita=None, raciocinio=None, estimado=None, mensagens=None)
         d = self.fonte().ler(self.ctx)['gastos_hermes']['hoje']
-        self.assertEqual(d['origens'][0]['source'], 'desconhecida')
+        self.assertEqual(d['origens'][0]['source'], 'Outra')
         self.assertEqual(set(d['total'].values()), {0})
 
     def test_banco_ausente_nao_criado(self):
@@ -101,7 +152,7 @@ class GastosTests(unittest.TestCase):
         acessos, conexoes = [], []
         permitidas = {'source', 'started_at', 'input_tokens', 'output_tokens',
                      'cache_read_tokens', 'cache_write_tokens', 'reasoning_tokens',
-                     'estimated_cost_usd', 'actual_cost_usd', 'message_count'}
+                     'estimated_cost_usd', 'actual_cost_usd', 'message_count', 'chat_type', 'billing_mode'}
 
         def autorizar(acao, tabela, coluna, *resto):
             if acao == sqlite3.SQLITE_READ:
@@ -134,7 +185,7 @@ class GastosTests(unittest.TestCase):
         self.inserir('<script>', self.agora)
         d = self.fonte().ler(self.ctx)['gastos_hermes']['hoje']
         self.assertEqual(len(d['origens']), 1)
-        self.assertEqual(d['origens'][0]['source'], 'desconhecida')
+        self.assertEqual(d['origens'][0]['source'], 'Outra')
         self.assertEqual(d['origens'][0]['input_tokens'], 30)
         self.assertNotIn('5511999998888', json.dumps(d))
         self.assertNotIn('pessoa@', json.dumps(d))

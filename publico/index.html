@@ -298,6 +298,16 @@
   .servico strong { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
   .servico p { color: var(--tinta2); margin: 6px 0; overflow-wrap: anywhere; }
   .servico small { color: var(--apagado); }
+  #gastos-cartao .gastos-graficos { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px; padding: 4px 16px 16px; }
+  #gastos-cartao .gastos-grafico { min-width: 0; }
+  #gastos-cartao .gastos-grafico h3 { font-size: 13px; margin: 0 0 10px; }
+  #gastos-cartao .gastos-grafico ol { list-style: none; margin: 0; padding: 0; }
+  #gastos-cartao .gastos-grafico li { margin-bottom: 10px; }
+  #gastos-cartao .gastos-canal, #gastos-cartao .gastos-valor { display: block; overflow-wrap: anywhere; }
+  #gastos-cartao .gastos-canal { font-weight: 600; font-size: 12px; }
+  #gastos-cartao .gastos-valor { color: var(--tinta2); font-size: 11px; margin: 3px 0; }
+  #gastos-cartao .gastos-trilho { height: 8px; background: var(--sup2); border-radius: 4px; overflow: hidden; }
+  #gastos-cartao .gastos-barra { height: 100%; background: var(--tinta2); border-radius: inherit; }
   .gastos-rolagem { overflow-x: auto; padding: 0 16px; }
   #gastos-cartao table { width: 100%; border-collapse: collapse; font-size: 12px; }
   #gastos-cartao caption { text-align: left; color: var(--apagado); padding-bottom: 8px; }
