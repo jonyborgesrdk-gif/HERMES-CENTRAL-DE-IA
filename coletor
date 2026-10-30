@@ -424,10 +424,14 @@ def passada(mapa, estado_prs, estado_cotas, fio_da_sonda, ultimas, args, contas=
 def fontes_vivas(sem_contas=False):
     from fontes import eventos_hooks, transcripts_claude, sessoes_codex, cota_claude
     from fontes import maestri_wire, processos, servicos
-    return {"eventos_hooks": eventos_hooks.ler, "transcripts_claude": transcripts_claude.ler,
-            "sessoes_codex": sessoes_codex.ler,
-            "cota_claude": cota_claude.ler if sem_contas else cota_claude.atualizar,
-            "maestri_wire": maestri_wire.ler, "processos": processos.ler, "servicos": servicos.ler}
+    fontes = {"eventos_hooks": eventos_hooks.ler, "transcripts_claude": transcripts_claude.ler,
+              "sessoes_codex": sessoes_codex.ler,
+              "cota_claude": cota_claude.ler if sem_contas else cota_claude.atualizar,
+              "maestri_wire": maestri_wire.ler, "processos": processos.ler, "servicos": servicos.ler}
+    if os.environ.get('PAINEL_GASTOS', '0') == '1':
+        from fontes import whatsapp, gastos_hermes
+        fontes.update(whatsapp=whatsapp.ler, gastos_hermes=gastos_hermes.ler)
+    return fontes
 
 
 def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overrides=None):
@@ -440,10 +444,15 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
     fontes = fontes_vivas(getattr(args, "sem_contas", False)) if fontes is None else fontes
     cache = {} if cache is None else cache
     leituras, situacao = {}, {}
-    intervalos = {"servicos": 10, "processos": 5, "cota_claude": 300}
-    for nome in ("eventos_hooks", "sessoes_codex", "maestri_wire", "cota_claude", "processos", "servicos"):
+    intervalos = {"servicos": 10, "processos": 5, "cota_claude": 300,
+                  "whatsapp": 10, "gastos_hermes": 60}
+    extras = ("whatsapp", "gastos_hermes") if os.environ.get('PAINEL_GASTOS', '0') == '1' else ()
+    for nome in ("eventos_hooks", "sessoes_codex", "maestri_wire", "cota_claude", "processos", "servicos") + extras:
         anterior = cache.get(nome)
-        if anterior and 0 <= agora - anterior["hora"] < intervalos.get(nome, 0):
+        # A cadência não pode estender a retenção das fontes opt-in além dos 300 s.
+        expirou = (nome in extras and anterior and anterior['situacao'].get('desatualizado')
+                   and agora - anterior['ultima_leitura_ok'] > 300)
+        if anterior and not expirou and 0 <= agora - anterior["hora"] < intervalos.get(nome, 0):
             leituras[nome], situacao[nome] = anterior["dados"], anterior["situacao"]
             continue
         ultima_ok = anterior.get("ultima_leitura_ok") if anterior else None
@@ -521,6 +530,8 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
     dados.update(origem="vivo", servicos=leituras["servicos"].get("servicos", []),
                  processos=leituras["processos"], fontes=situacao,
                  contas=vivo.montar_contas(leituras, agora, agentes, disponiveis=fontes, saude=situacao))
+    for nome in extras:
+        dados[nome] = leituras[nome].get(nome, {"estado": "erro"})
     gravar(dados, args.saida)
     return dados
 

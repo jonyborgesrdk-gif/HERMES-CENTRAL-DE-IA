@@ -298,6 +298,12 @@
   .servico strong { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
   .servico p { color: var(--tinta2); margin: 6px 0; overflow-wrap: anywhere; }
   .servico small { color: var(--apagado); }
+  .gastos-rolagem { overflow-x: auto; padding: 0 16px; }
+  #gastos-cartao table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #gastos-cartao caption { text-align: left; color: var(--apagado); padding-bottom: 8px; }
+  #gastos-cartao th, #gastos-cartao td { padding: 7px 9px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--fio); }
+  #gastos-cartao th:first-child { text-align: left; }
+  #gastos-cartao .gastos-total { font-weight: 600; background: var(--sup2); }
   .saude-ok { color: var(--bom-tinta); }
   .saude-fora, .saude-erro { color: var(--critico-tinta); }
   .saude-sem { color: var(--apagado); }
@@ -999,6 +1005,19 @@ function desenharInfraestrutura(agoraS) {
       esc(nome) + ": " + esc((f.ok ? "ok" : f.erro || "erro") + retido) + '</span>';
   }).join(" · ") || "sem fontes observadas");
 }
+var gastosCarregando = false;
+function desenharExtras(agoraS) {
+  if (window.__painelGastos) {
+    window.__painelGastos.desenhar(dados, agoraS);
+  } else if (!gastosCarregando && (Object.prototype.hasOwnProperty.call(dados, "whatsapp") ||
+                                 Object.prototype.hasOwnProperty.call(dados, "gastos_hermes"))) {
+    gastosCarregando = true;
+    var s = document.createElement("script"); s.src = "gastos.js?t=" + Date.now();
+    s.onload = function () { gastosCarregando = false; desenhar(); };
+    s.onerror = function () { gastosCarregando = false; s.remove(); };
+    document.head.appendChild(s);
+  }
+}
 function desenhar() {
   var agoraS = Date.now() / 1000;
   var vivo = el("vivo"), alerta = el("alerta");
@@ -1031,6 +1050,7 @@ function desenhar() {
   desenharTabela(agoraS);
   desenharResumo();
   desenharInfraestrutura(agoraS);
+  desenharExtras(agoraS);
   desenharPrs(agoraS);
   if (window.__painelContas) window.__painelContas.desenhar(dados.contas, agoraS);    /* cards de cota (cotas.js) */
   desenharPrecisa(agoraS);
