@@ -298,11 +298,15 @@
   .servico strong { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
   .servico p { color: var(--tinta2); margin: 6px 0; overflow-wrap: anywhere; }
   .servico small { color: var(--apagado); }
-  #gastos-cartao .gastos-graficos { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px; padding: 4px 16px 16px; }
+  #gastos-cartao .gastos-controles, #gastos-cartao .gastos-serie { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; padding: 4px 16px 12px; }
+  #gastos-cartao .gastos-serie { display: block; }
+  #gastos-cartao .gastos-serie ol { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(28px, 1fr); gap: 4px; list-style: none; margin: 8px 0 0; padding: 0; align-items: end; }
+  #gastos-cartao .gastos-coluna { min-width: 0; font-size: 10px; }
+  #gastos-cartao .gastos-item, #gastos-cartao .gastos-limpar { width: 100%; text-align: left; background: transparent; border: 0; color: inherit; font: inherit; padding: 0; cursor: pointer; }
+  #gastos-cartao .gastos-item.ativo { outline: 2px solid var(--tinta2); }
+  #gastos-cartao .gastos-grupos { padding: 0 16px 12px; }
+  #gastos-cartao .gastos-grupos ol { list-style: none; margin: 0; padding: 0; }
   #gastos-cartao .gastos-grafico { min-width: 0; }
-  #gastos-cartao .gastos-grafico h3 { font-size: 13px; margin: 0 0 10px; }
-  #gastos-cartao .gastos-grafico ol { list-style: none; margin: 0; padding: 0; }
-  #gastos-cartao .gastos-grafico li { margin-bottom: 10px; }
   #gastos-cartao .gastos-canal, #gastos-cartao .gastos-valor { display: block; overflow-wrap: anywhere; }
   #gastos-cartao .gastos-canal { font-weight: 600; font-size: 12px; }
   #gastos-cartao .gastos-valor { color: var(--tinta2); font-size: 11px; margin: 3px 0; }
@@ -1018,7 +1022,7 @@ function desenharInfraestrutura(agoraS) {
 var gastosCarregando = false;
 function desenharExtras(agoraS) {
   if (window.__painelGastos) {
-    window.__painelGastos.desenhar(dados, agoraS);
+    try { window.__painelGastos.desenhar(dados, agoraS); } catch (e) { console.error(e); }
   } else if (!gastosCarregando && (Object.prototype.hasOwnProperty.call(dados, "whatsapp") ||
                                  Object.prototype.hasOwnProperty.call(dados, "gastos_hermes"))) {
     gastosCarregando = true;
