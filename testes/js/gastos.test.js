@@ -363,3 +363,58 @@ test('página só carrega módulo novo quando uma chave opt-in chega', () => {
   a.window.__painelGastos = { desenhar: () => chamadas++ };
   a.desenharExtras(1002); assert.equal(chamadas, 1);
 });
+
+// E11: cotação em R$
+const semEspaco = t => t.replace(/[\s  ]+/g, ' ');
+const reais = v => semEspaco(v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
+const cotacaoOk = { usd_brl: 5, fonte: 'awesomeapi', data_epoch: 1761825600, desatualizada: false };
+
+test('E11 com cotação mostra R$ principal e US$ entre parênteses/ao lado', () => {
+  const { doc } = ambiente();
+  api().desenhar({ gastos_hermes: { ...gastos(), cotacao: cotacaoOk } }, 1000, doc);
+  const barra = barras(doc)[0];
+  assert.equal(semEspaco(barra.title), reais(1) + ' (US$ 0.2000) · 20 tokens');
+  const texto = semEspaco(doc.getElementById('gastos-cartao').textContent);
+  assert.ok(texto.includes('Tokens e R$ —'));
+  assert.ok(texto.includes('R$ por '));
+  assert.ok(!texto.includes('US$ por '));
+  const celula = linhasTabela(doc)[0].children.at(-1);
+  assert.ok(semEspaco(celula.textContent).includes(reais(1)));
+  assert.equal(celula.children[0].className, 'gastos-usd');
+  assert.equal(celula.children[0].textContent, 'US$ 0.2000');
+  const cabeca = doc.getElementById('gastos-tabela').children.find(e => e.tagName === 'thead');
+  assert.equal(cabeca.children[0].children.at(-1).textContent, 'R$');
+});
+
+test('E11 linha de cotação, com e sem desatualizada', () => {
+  const { doc } = ambiente();
+  api().desenhar({ gastos_hermes: { ...gastos(), cotacao: cotacaoOk } }, 1000, doc);
+  const l = semEspaco(doc.getElementById('gastos-cotacao').textContent);
+  assert.ok(l.startsWith('Cotação US$ 1 = ' + reais(5) + ' (awesomeapi, '));
+  assert.ok(!l.includes('desatualizada'));
+  api().desenhar({ gastos_hermes: { ...gastos(), cotacao: { ...cotacaoOk, desatualizada: true } } }, 1000, doc);
+  assert.ok(doc.getElementById('gastos-cotacao').textContent.endsWith(' · desatualizada'));
+});
+
+test('E11 sem cotação ou cotação inválida cai em US$ sem linha de cotação', () => {
+  for (const cotacao of [undefined, null, { usd_brl: 0 }, { usd_brl: NaN }, { usd_brl: '5' }, { usd_brl: -1 }, 'x']) {
+    const { doc } = ambiente();
+    api().desenhar({ gastos_hermes: { ...gastos(), cotacao } }, 1000, doc);
+    assert.equal(doc.getElementById('gastos-cotacao'), null);
+    assert.equal(barras(doc)[0].title, 'US$ 0.2000 · 20 tokens');
+    assert.ok(doc.getElementById('gastos-cartao').textContent.includes('Tokens e US$ —'));
+  }
+});
+
+test('E11 tokens sem casas decimais', () => {
+  const { doc } = ambiente();
+  const g = gastos();
+  const um = t => ({ ...linha('Terminal'), input_tokens: t, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 });
+  g['7d'].origens = [um(10.7)]; g['7d'].total = um(10.7);
+  api().desenhar({ gastos_hermes: g }, 1000, doc);
+  assert.match(barras(doc)[0].title, /· 11 tokens$/);
+  g['7d'].origens = [um(1234.5)]; g['7d'].total = um(1234.5);
+  api().desenhar({ gastos_hermes: g }, 1000, doc);
+  const t = barras(doc)[0].title;
+  assert.ok(t.includes('1.235') && !t.includes(','), t);
+});

@@ -37,7 +37,25 @@ function whatsapp(doc, ponte, meta, agoraS) {
     " · estado do arquivo: " + (idade === null ? "sem horário" : "há " + Math.floor(idade) + " s")));
   return c;
 }
-function contagem(v) { return (numero(v) ? v : 0).toLocaleString("pt-BR"); }
+var cot = null;
+function contagem(v) { return (numero(v) ? v : 0).toLocaleString("pt-BR", { maximumFractionDigits: 0 }); }
+function brl(usd) {
+  var r = usd * cot.usd_brl;
+  var opcoes = { style: "currency", currency: "BRL" };
+  if (r > 0 && r < 0.01) opcoes.maximumFractionDigits = 4;
+  return r.toLocaleString("pt-BR", opcoes);
+}
+// Texto de dinheiro: R$ principal (US$ entre parênteses) com cotação; senão o US$ de sempre.
+function dinheiro(usd) {
+  return cot ? brl(usd) + " (US$ " + usd.toFixed(4) + ")" : "US$ " + usd.toFixed(4);
+}
+function linhaCotacao(c) {
+  var data = numero(c.data_epoch) ? new Date(c.data_epoch * 1000) : null;
+  var quando = data && !isNaN(data.getTime()) ? data.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "sem horário";
+  return "Cotação US$ 1 = " + c.usd_brl.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) +
+    " (" + (typeof c.fonte === "string" ? c.fonte : "desconhecida") + ", " + quando + ")" +
+    (c.desatualizada === true ? " · desatualizada" : "");
+}
 function custo(dado) { return numero(dado.cost_usd) && dado.cost_usd > 0 ? dado.cost_usd : 0; }
 function assinatura(dado) {
   return dado.inclui_assinatura === true ? (custo(dado) === 0 ? " · assinatura" : " · inclui assinatura") : "";
@@ -67,7 +85,9 @@ function valores(doc, tr, dado) {
   var cache = (numero(dado.cache_read_tokens) ? dado.cache_read_tokens : 0) +
               (numero(dado.cache_write_tokens) ? dado.cache_write_tokens : 0);
   tr.appendChild(elemento(doc, "td", contagem(cache)));
-  tr.appendChild(elemento(doc, "td", custo(dado).toFixed(4) + assinatura(dado)));
+  if (!cot) { tr.appendChild(elemento(doc, "td", custo(dado).toFixed(4) + assinatura(dado))); return; }
+  var td = tr.appendChild(elemento(doc, "td", brl(custo(dado)) + assinatura(dado)));
+  td.appendChild(elemento(doc, "span", "US$ " + custo(dado).toFixed(4), "gastos-usd"));
 }
 function estadoDe(doc) {
   var dono = doc.defaultView || doc;
@@ -94,7 +114,7 @@ function barra(doc, dado, maior, ativo, aoClicar) {
   var botao = elemento(doc, "button", null, "gastos-item" + (ativo ? " ativo" : ""));
   botao.id = "gastos-grupo-" + encodeURIComponent(dado.rotulo);
   botao.type = "button"; botao.ariaPressed = ativo ? "true" : "false";
-  botao.title = "US$ " + custo(dado).toFixed(4) + assinatura(dado) + " · " + contagem(tokens(dado)) + " tokens";
+  botao.title = dinheiro(custo(dado)) + assinatura(dado) + " · " + contagem(tokens(dado)) + " tokens";
   botao.addEventListener("click", aoClicar);
   botao.appendChild(elemento(doc, "span", dado.rotulo, "gastos-canal"));
   botao.appendChild(elemento(doc, "span", botao.title, "gastos-valor"));
@@ -105,7 +125,7 @@ function barra(doc, dado, maior, ativo, aoClicar) {
 }
 function colunas(doc, janela, agrupamento, filtro) {
   var bloco = elemento(doc, "section", null, "gastos-serie"); bloco.id = "gastos-colunas";
-  bloco.appendChild(elemento(doc, "h3", "US$ por " + janela.granularidade));
+  bloco.appendChild(elemento(doc, "h3", (cot ? "R$" : "US$") + " por " + janela.granularidade));
   var serie = janela.serie || [];
   var maior = serie.reduce(function (m, b) {
     var par = filtro ? serieGrupo(b, agrupamento)[filtro] : b.total;
@@ -116,7 +136,7 @@ function colunas(doc, janela, agrupamento, filtro) {
     var valores = filtro ? serieGrupo(b, agrupamento)[filtro] || [0, 0] : b.total || [0, 0];
     var item = lista.appendChild(elemento(doc, "li"));
     var botao = item.appendChild(elemento(doc, "button", b.rotulo, "gastos-coluna")); botao.type = "button";
-    botao.title = "US$ " + (numero(valores[0]) && valores[0] > 0 ? valores[0] : 0).toFixed(4) + " · " + contagem(valores[1]) + " tokens";
+    botao.title = dinheiro(numero(valores[0]) && valores[0] > 0 ? valores[0] : 0) + " · " + contagem(valores[1]) + " tokens";
     var trilho = item.appendChild(elemento(doc, "div", null, "gastos-trilho")); trilho.ariaHidden = "true";
     trilho.appendChild(elemento(doc, "div", null, "gastos-barra")).style.width =
       (maior > 0 ? Math.max(0, Math.min(100, valores[0] / maior * 100)) : 0) + "%";
@@ -125,9 +145,9 @@ function colunas(doc, janela, agrupamento, filtro) {
 }
 function tabela(doc, janela, agrupamento, filtro) {
   var tabela = elemento(doc, "table"); tabela.id = "gastos-tabela";
-  tabela.appendChild(elemento(doc, "caption", "Tokens e US$ — " + (agrupamento === "modelo" ? "modelo" : "canal")));
+  tabela.appendChild(elemento(doc, "caption", "Tokens e " + (cot ? "R$" : "US$") + " — " + (agrupamento === "modelo" ? "modelo" : "canal")));
   var cabeca = tabela.appendChild(elemento(doc, "thead")).appendChild(elemento(doc, "tr"));
-  ["", "Entrada", "Saída", "Cache", "US$"].forEach(function (nome) { cabeca.appendChild(elemento(doc, "th", nome)).scope = "col"; });
+  ["", "Entrada", "Saída", "Cache", cot ? "R$" : "US$"].forEach(function (nome) { cabeca.appendChild(elemento(doc, "th", nome)).scope = "col"; });
   var linhas = grupo(janela, agrupamento).filter(function (d) { return !filtro || nomeGrupo(d, agrupamento) === filtro; });
   var corpo = tabela.appendChild(elemento(doc, "tbody"));
   linhas.forEach(function (d) {
@@ -141,6 +161,8 @@ function tabela(doc, janela, agrupamento, filtro) {
   return tabela;
 }
 function gastos(doc, dado, meta, agoraS) {
+  var bruta = dado.cotacao;
+  cot = bruta && typeof bruta === "object" && numero(bruta.usd_brl) && bruta.usd_brl > 0 ? bruta : null;
   var c = elemento(doc, "section", null, "cartao"); c.id = "gastos-cartao";
   c.appendChild(elemento(doc, "div", null, "cabeca")).appendChild(elemento(doc, "h2", "Gastos"));
   var aviso = saude(meta, agoraS);
@@ -177,6 +199,7 @@ function gastos(doc, dado, meta, agoraS) {
     c.appendChild(elemento(doc, "div", null, "gastos-rolagem")).appendChild(tabela(doc, janela, estado.agrupamento, estado.filtro));
     if (estado.filtro) c.appendChild(elemento(doc, "p", "filtro: " + estado.filtro, "infra-linha")).id = "gastos-filtro";
   }
+  if (cot) c.appendChild(elemento(doc, "p", linhaCotacao(cot), "infra-linha")).id = "gastos-cotacao";
   c.appendChild(elemento(doc, "p", "custo estimado pelo Hermes; não inclui Claude Code/Codex fora do Hermes", "infra-linha"));
   if (dado.custo_modelo_rateado) c.appendChild(elemento(doc, "p", "custo por modelo é rateio aproximado", "infra-linha"));
   if (dado.distribuicao_aproximada) c.appendChild(elemento(doc, "p", "distribuição aproximada pelas mensagens", "infra-linha"));

@@ -18,7 +18,15 @@ class GastosTests(unittest.TestCase):
         self.addCleanup(pasta.cleanup)
         self.caminho = Path(pasta.name) / 'state # teste.db'
         self.agora = datetime(2026, 10, 30, 12).timestamp()
-        self.ctx = {'gastos_path': self.caminho, 'agora': self.agora}
+        self.ctx = {'gastos_path': self.caminho, 'agora': self.agora, 'dir': pasta.name}
+        # Testes antigos não tocam rede nem AppData: cotação falha e nada é gravado fora do tmp.
+        ambiente = patch.dict(os.environ)
+        ambiente.start()
+        self.addCleanup(ambiente.stop)
+        os.environ.pop('PAINEL_USD_BRL', None)
+        rede = patch('lib.fontes.gastos_hermes.urlopen', side_effect=OSError('sem rede'))
+        rede.start()
+        self.addCleanup(rede.stop)
         with closing(sqlite3.connect(self.caminho)) as db:
             db.execute('''CREATE TABLE sessions (
                 source TEXT, started_at REAL, input_tokens INTEGER, output_tokens INTEGER,
@@ -339,6 +347,152 @@ class GastosTests(unittest.TestCase):
         self.assertEqual(d['origens'][0]['input_tokens'], 30)
         self.assertNotIn('5511999998888', json.dumps(d))
         self.assertNotIn('pessoa@', json.dumps(d))
+
+
+def resposta(corpo, url='https://economia.awesomeapi.com.br/json/last/USD-BRL'):
+    r = Mock()
+    r.__enter__ = Mock(return_value=r)
+    r.__exit__ = Mock(return_value=False)
+    r.geturl.return_value = url
+    r.read.return_value = corpo if isinstance(corpo, bytes) else json.dumps(corpo).encode()
+    return r
+
+
+def cotacao_json(bid='5.43', timestamp='1761825600'):
+    return {'USDBRL': {'bid': bid, 'timestamp': timestamp}}
+
+
+class CotacaoTests(unittest.TestCase):
+    """Reaproveita o banco sintético de GastosTests (sem herdar seus testes)."""
+    preparar, fonte = GastosTests.setUp, GastosTests.fonte
+
+    def setUp(self):
+        self.preparar()
+        self.pasta = Path(self.ctx['dir'])
+        self.cache = self.pasta / 'cotacao-usd-brl.json'
+        self.mod = self.fonte()
+        self.rede = self.mod.urlopen
+        self.rede.side_effect = None
+        self.rede.return_value = resposta(cotacao_json())
+
+    def cot(self, ctx=None):
+        return self.fonte().ler(ctx or self.ctx)['gastos_hermes']['cotacao']
+
+    def test_valida_da_rede_grava_cache(self):
+        c = self.cot()
+        self.assertEqual(c, {'usd_brl': 5.43, 'fonte': 'awesomeapi',
+                             'data_epoch': 1761825600.0, 'desatualizada': False})
+        grav = json.loads(self.cache.read_text(encoding='utf-8'))
+        self.assertEqual(grav['usd_brl'], 5.43)
+        self.assertIs(grav['tentativa_ok'], True)
+        pedido = self.rede.call_args[0][0]
+        self.assertTrue(pedido.full_url.startswith('https://'))
+        self.assertEqual(self.rede.call_args[1]['timeout'], 3)
+
+    def test_respostas_invalidas_descartadas(self):
+        casos = [cotacao_json('-5'), cotacao_json('NaN'), cotacao_json('0'), cotacao_json('21'),
+                 cotacao_json(True), {'outro': {}}, b'{ruim', b'[]']
+        for caso in casos:
+            with self.subTest(caso=caso):
+                self.rede.return_value = resposta(caso)
+                self.assertIsNone(self.cot())
+                self.assertNotIn('usd_brl', json.loads(self.cache.read_text(encoding='utf-8')))
+                self.cache.unlink()
+
+    def test_redirecionamento_fora_de_https_descartado(self):
+        self.rede.return_value = resposta(cotacao_json(), url='http://exemplo.test/')
+        self.assertIsNone(self.cot())
+
+    def test_timestamp_invalido_usa_hora(self):
+        self.rede.return_value = resposta(cotacao_json(timestamp='9999999999'))
+        self.assertEqual(self.cot()['data_epoch'], self.agora)
+
+    def test_timeout_usa_cache_velho(self):
+        self.cot()
+        self.rede.side_effect = TimeoutError()
+        ctx = dict(self.ctx, agora=self.agora + 7 * 3600)
+        c = self.cot(ctx)
+        self.assertEqual(c['fonte'], 'cache')
+        self.assertEqual(c['usd_brl'], 5.43)
+        self.assertIs(c['desatualizada'], False)
+
+    def test_cache_mais_de_48h_desatualizado(self):
+        self.cot()
+        self.rede.side_effect = TimeoutError()
+        c = self.cot(dict(self.ctx, agora=self.agora + 49 * 3600))
+        self.assertIs(c['desatualizada'], True)
+        self.assertEqual(c['fonte'], 'cache')
+
+    def test_manual_prioritaria_sem_rede_nem_disco(self):
+        os.environ['PAINEL_USD_BRL'] = '5,5'
+        c = self.cot()
+        self.assertEqual(c, {'usd_brl': 5.5, 'fonte': 'manual',
+                             'data_epoch': self.agora, 'desatualizada': False})
+        self.rede.assert_not_called()
+        self.assertFalse(self.cache.exists())
+
+    def test_manual_invalida_ignorada(self):
+        for valor in ('0', '99', 'abc', 'nan', ''):
+            with self.subTest(valor=valor):
+                os.environ['PAINEL_USD_BRL'] = valor
+                self.rede.reset_mock()
+                self.assertEqual(self.cot()['fonte'], 'awesomeapi')
+                self.rede.assert_called_once()
+                if self.cache.exists():
+                    self.cache.unlink()
+
+    def test_sem_nada_cotacao_none_e_resto_intacto(self):
+        self.rede.side_effect = OSError()
+        d = self.fonte().ler(self.ctx)['gastos_hermes']
+        self.assertIsNone(d['cotacao'])
+        self.assertIn('7d', d)
+        self.assertIn('hoje', d)
+        self.assertNotIn('erro', d)
+
+    def test_intervalo_de_6h(self):
+        self.cot()
+        self.cot(dict(self.ctx, agora=self.agora + 3600))
+        self.assertEqual(self.rede.call_count, 1)
+        self.cot(dict(self.ctx, agora=self.agora + 6 * 3600 + 1))
+        self.assertEqual(self.rede.call_count, 2)
+
+    def test_apos_falha_repete_so_apos_15min(self):
+        self.rede.side_effect = OSError()
+        self.cot()
+        self.cot(dict(self.ctx, agora=self.agora + 600))
+        self.assertEqual(self.rede.call_count, 1)
+        self.cot(dict(self.ctx, agora=self.agora + 901))
+        self.assertEqual(self.rede.call_count, 2)
+
+    def test_escrita_atomica_falha_preserva_cache(self):
+        self.cot()
+        antes = self.cache.read_bytes()
+        ctx = dict(self.ctx, agora=self.agora + 7 * 3600)
+        self.rede.return_value = resposta(cotacao_json('6.00'))
+        with patch('lib.fontes.gastos_hermes.os.replace', side_effect=OSError('x')):
+            d = self.fonte().ler(ctx)['gastos_hermes']
+        self.assertEqual(self.cache.read_bytes(), antes)
+        self.assertEqual(list(self.pasta.glob('*.tmp')), [])
+        self.assertIn('7d', d)
+
+    def test_falha_inesperada_na_cotacao_nao_derruba_ler(self):
+        with patch('lib.fontes.gastos_hermes.cotacao', side_effect=RuntimeError('x')):
+            d = self.fonte().ler(self.ctx)
+        self.assertIsNone(d['gastos_hermes']['cotacao'])
+        self.assertIn('7d', d['gastos_hermes'])
+
+    def test_cache_corrompido_ou_fora_da_faixa_ignorado(self):
+        for conteudo in ('{ruim', '[]', json.dumps({'usd_brl': 999, 'data_epoch': 1, 'buscado_em': 1,
+                                                   'tentativa_em': 1, 'tentativa_ok': True})):
+            with self.subTest(conteudo=conteudo):
+                self.cache.write_text(conteudo, encoding='utf-8')
+                cache = self.mod.ler_cache_cotacao(self.cache)
+                self.assertNotIn('usd_brl', cache)
+                self.assertIsInstance(cache['tentativa_ok'], bool)
+
+    def test_json_menor_que_64kb(self):
+        saida = self.fonte().ler(self.ctx)
+        self.assertLess(len(json.dumps(saida).encode()), 64 * 1024)
 
 
 class IntegracaoGastosTests(unittest.TestCase):

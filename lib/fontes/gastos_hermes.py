@@ -1,4 +1,9 @@
-"""Contadores das sessões Hermes; leitura SQLite sem conteúdo das conversas."""
+"""Contadores das sessões Hermes; leitura SQLite sem conteúdo das conversas.
+
+Cotação US$->R$: a fonte publica só `usd_brl`; a conversão para R$ é do painel.
+A rede é consultada no máximo a cada 6 h após sucesso e a cada 15 min após falha
+(timeout de 3 s), para que uma API fora do ar não bloqueie cada passada de 60 s.
+"""
 from contextlib import closing
 from datetime import datetime, timedelta
 import json
@@ -7,8 +12,15 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+from urllib.request import Request, urlopen
 
-from . import agora
+from . import agora, diretorio
+
+COTACAO_URL = 'https://economia.awesomeapi.com.br/json/last/USD-BRL'
+COTACAO_ARQUIVO = 'cotacao-usd-brl.json'
+COTACAO_INTERVALO = 6 * 3600
+COTACAO_REPETICAO = 15 * 60
+COTACAO_VELHA = 48 * 3600
 
 CAMPOS = ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens',
           'reasoning_tokens', 'message_count', 'cost_usd')
@@ -34,6 +46,103 @@ MENSAGENS = '''SELECT session_id,
     FROM messages WHERE role = 'assistant' AND timestamp <= :agora
     GROUP BY session_id, dia, hora, recente'''
 
+
+
+def faixa(valor):
+    """Taxa USD/BRL plausível (float finito entre 1 e 20) ou None."""
+    if isinstance(valor, bool):
+        return None
+    if isinstance(valor, str):
+        valor = valor.strip().replace(',', '.')
+    try:
+        taxa = float(valor)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return taxa if math.isfinite(taxa) and 1 <= taxa <= 20 else None
+
+
+def buscar_cotacao(hora):
+    if not COTACAO_URL.startswith('https://'):
+        raise ValueError('cotação exige https')
+    pedido = Request(COTACAO_URL, headers={'Accept': 'application/json'})
+    with urlopen(pedido, timeout=3) as r:
+        final = r.geturl()
+        if isinstance(final, str) and not final.startswith('https://'):
+            raise ValueError('redirecionamento fora de https')
+        item = json.loads(r.read(65536))['USDBRL']
+    taxa = faixa(item['bid'])
+    if taxa is None:
+        raise ValueError('cotação fora da faixa')
+    try:
+        data = float(item.get('timestamp'))
+    except (TypeError, ValueError, OverflowError):
+        data = 0
+    if not math.isfinite(data) or data <= 0 or data > hora + 86400:
+        data = hora
+    return taxa, data
+
+
+def epoch_valido(valor):
+    if isinstance(valor, bool) or not isinstance(valor, (int, float)):
+        return None
+    return float(valor) if math.isfinite(valor) and valor > 0 else None
+
+
+def ler_cache_cotacao(caminho):
+    """Sempre devolve dict com 'tentativa_ok' bool; valores inválidos são ignorados."""
+    try:
+        bruto = json.loads(Path(caminho).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        bruto = None
+    if not isinstance(bruto, dict):
+        bruto = {}
+    cache = {}
+    taxa = faixa(bruto.get('usd_brl'))
+    data, buscado = epoch_valido(bruto.get('data_epoch')), epoch_valido(bruto.get('buscado_em'))
+    if taxa is not None and data is not None and buscado is not None:
+        cache.update(usd_brl=taxa, data_epoch=data, buscado_em=buscado)
+    tentativa = epoch_valido(bruto.get('tentativa_em'))
+    if tentativa is not None:
+        cache['tentativa_em'] = tentativa
+    cache['tentativa_ok'] = bruto.get('tentativa_ok') is True
+    return cache
+
+
+def gravar_cache_cotacao(caminho, cache):
+    caminho = Path(caminho)
+    tmp = caminho.with_name('%s.%d.tmp' % (caminho.name, os.getpid()))
+    try:
+        caminho.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(cache, allow_nan=False), encoding='utf-8')
+        os.replace(tmp, caminho)
+    except (OSError, ValueError):
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
+def cotacao(ctx, hora):
+    manual = faixa(os.environ.get('PAINEL_USD_BRL'))
+    if manual is not None:
+        return {'usd_brl': manual, 'fonte': 'manual', 'data_epoch': hora, 'desatualizada': False}
+    caminho = diretorio(ctx) / COTACAO_ARQUIVO
+    cache = ler_cache_cotacao(caminho)
+    tentativa = cache.get('tentativa_em')
+    espera = COTACAO_INTERVALO if cache['tentativa_ok'] else COTACAO_REPETICAO
+    if tentativa is None or not 0 <= hora - tentativa < espera:
+        try:
+            taxa, data = buscar_cotacao(hora)
+            cache = {'usd_brl': taxa, 'data_epoch': data, 'buscado_em': hora,
+                     'tentativa_em': hora, 'tentativa_ok': True}
+        except Exception:
+            cache = dict(cache, tentativa_em=hora, tentativa_ok=False)
+        gravar_cache_cotacao(caminho, cache)
+    if 'usd_brl' not in cache:
+        return None
+    return {'usd_brl': cache['usd_brl'], 'fonte': 'awesomeapi' if cache['tentativa_ok'] else 'cache',
+            'data_epoch': cache['data_epoch'],
+            'desatualizada': hora - cache['buscado_em'] > COTACAO_VELHA}
 
 
 def canal(source, chat_type):
@@ -220,6 +329,10 @@ def ler(ctx):
     except (sqlite3.Error, OSError, ValueError, OverflowError):
         # Não publicar caminho, SQL, conteúdo nem erro cru do banco.
         return {'erro': 'banco Hermes indisponível, travado ou incompatível'}
+    try:
+        resultado['cotacao'] = cotacao(ctx, hora)
+    except Exception:
+        resultado['cotacao'] = None
     saida = {'gastos_hermes': resultado}
     # Limite conservador também para serializadores com ensure_ascii=True.
     # Não truncar modelos nem publicar totais parciais: retenção é do coletor.
