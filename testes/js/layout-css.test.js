@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const cotas = fs.readFileSync(path.join(__dirname, '../../publico/cotas.js'), 'utf8');
-const index = fs.readFileSync(path.join(__dirname, '../../publico/index.html'), 'utf8');
+const index = fs.readFileSync(path.join(__dirname, '../../publico/classico.html'), 'utf8');
 function regra(fonte, seletor) {
   const i = fonte.indexOf(seletor + ' {');
   assert.ok(i >= 0, 'regra ausente: ' + seletor);

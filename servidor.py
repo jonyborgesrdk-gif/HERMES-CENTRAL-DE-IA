@@ -153,6 +153,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(403)
             return
         caminho = '/' + '/'.join(p for p in caminho.split('/') if p not in ('', '.'))
+        if caminho == '/classico':
+            caminho = '/classico.html'   # painel anterior; a página principal (/) é o index.html
         if caminho.casefold() in ('/dados.js', '/dados.json', '/eventos') and not self.permitido_dados():
             return
         if caminho == '/favicon.ico' and not (self.server.publico / 'favicon.ico').is_file():

@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const html = fs.readFileSync(path.join(__dirname, '../../publico/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '../../publico/classico.html'), 'utf8');
 const corpo = 'function iniciarTransporte(' + html.split('function iniciarTransporte(')[1]
   .split('/* ---------- botão de refresh completo ---------- */')[0];
 const iniciar = vm.runInNewContext(corpo + '; iniciarTransporte;');

@@ -4,8 +4,9 @@
 # O coletor lê as telas a cada 20 segundos e os PRs a cada 3 minutos, e grava publico/dados.json
 # e publico/dados.js. Se ele cair, este script sobe de novo. Nenhuma IA participa.
 #
-# Não há servidor: a página abre por file:// e lê o
-# dados.js que fica ao lado dela. Nada escuta em porta nenhuma.
+# Este script só mantém o coletor. A página principal (publico/index.html) precisa do servidor do painel e
+# abre em http://127.0.0.1:7421/ (servidor.py --com-coletor). Para abrir como arquivo (file://), use
+# publico/classico.html, que lê o dados.js ao lado dela.
 #
 # Uso:
 #   painel.sh                 sobe o coletor e fica no ar (Ctrl-C para parar)
@@ -46,7 +47,7 @@ trap encerrar INT TERM HUP
 command -v tmux >/dev/null 2>&1 || echo "painel.sh: aviso: o tmux não está no PATH; todos vão aparecer como \"sem leitura\". Para só ver a demonstração: ./coletor --telas telas-de-exemplo --uma-vez" >&2
 
 echo "Overview-Painel no ar."
-echo "  página:  file://$DIR/publico/index.html"
+echo "  página:  http://127.0.0.1:7421/  (servidor.py; como arquivo: file://$DIR/publico/classico.html)"
 echo "  quadro:  $DIR/painel-missao e $DIR/painel-pendencia"
 echo
 

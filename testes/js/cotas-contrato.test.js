@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const ler = (nome) => fs.readFileSync(path.join(__dirname, '..', '..', 'publico', nome), 'utf8');
 const cotas = ler('cotas.js');
-const html = ler('index.html');
+const html = ler('classico.html');
 
 test('o card só desenha com o apoio carregado, e a página carrega o apoio antes do cotas.js', () => {
   assert.match(cotas, /!window\.CartaoApoio\) return;/);

@@ -154,7 +154,7 @@ class TestColetorVivoRefresh(unittest.TestCase):
         self.assertLess(time.monotonic() - inicio, 5, "o laço esperou o intervalo inteiro em vez de acordar")
 
     def test_pagina_chama_refresh_na_mesma_origem(self):
-        html = (comum.RAIZ / "publico" / "index.html").read_text(encoding="utf-8")
+        html = (comum.RAIZ / "publico" / "classico.html").read_text(encoding="utf-8")
         self.assertNotIn("7420", html)
         self.assertIn('fetch("/refresh", { method: "POST"', html)
         self.assertIn("atualização falhou", html)

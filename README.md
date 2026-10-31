@@ -12,7 +12,7 @@ página estática mostra. Nada escuta em porta pública e nada sai da sua máqui
 | --- | --- | --- |
 | **Python 3.9 ou mais novo** | roda o coletor (só biblioteca padrão; nada de `pip install`) | sim |
 | **tmux** | é por onde o painel lê os terminais dos agentes | sim, para uso real |
-| Um navegador | abre a página `publico/index.html` | sim |
+| Um navegador | abre http://127.0.0.1:7421/ (ou `publico/classico.html` como arquivo) | sim |
 | `gh` (GitHub CLI) já logado | lista PRs abertos e o estado da CI | não (use `--sem-gh`) |
 | `claude`, `codex`, `agy` | cotas lidas direto da CLI de cada ferramenta | não |
 | Node.js | só para rodar os testes do navegador | não (o painel **não** usa Node) |
@@ -26,7 +26,7 @@ cd Overview-Painel
 
 # 2. veja funcionando com telas de exemplo (não precisa de tmux nem de agente nenhum)
 ./coletor --telas telas-de-exemplo --uma-vez --sem-gh
-open publico/index.html            # no Linux: xdg-open publico/index.html
+open publico/classico.html          # no Linux: xdg-open publico/classico.html (a página nova precisa do servidor, veja abaixo)
 
 # 3. descreva o seu time
 cp agentes.exemplo.json agentes.json
@@ -36,7 +36,7 @@ cp agentes.exemplo.json agentes.json
 ./painel.sh                        # ou ./painel.sh --sem-gh para não consultar o GitHub
 ```
 
-Deixe o `./painel.sh` rodando e abra `publico/index.html` no navegador. A página atualiza sozinha. `Ctrl-C` para parar.
+Deixe o `./painel.sh` rodando e abra `publico/classico.html` no navegador (modo `file://`). A página principal nova usa `fetch` e `EventSource` e só funciona por http: suba `servidor.py --com-coletor` e abra **http://127.0.0.1:7421/**. Aberta por `file://`, ela avisa isso na tela. A página atualiza sozinha. `Ctrl-C` para parar.
 
 ## Windows
 
@@ -58,7 +58,7 @@ O servidor impede duas instâncias por trava de arquivo, reinicia o coletor apó
 3 s se ele cair e encerra o filho ao sair. Python 3.15 não é alvo desta etapa.
 "Ao vivo" indica uma conexão SSE recebendo atualizações sem recarregar a página.
 Se a conexão cair, aparece "desconectado" e a leitura periódica assume até reconectar.
-Em `file://` ou sem EventSource, o painel continua lendo `dados.js` a cada 5 s.
+Em `file://` ou sem EventSource, a página clássica (`publico/classico.html`) continua lendo `dados.js` a cada 5 s.
 O modo vivo também mostra Serviços, Processos e Fontes, com tema claro/escuro.
 Use `py -3.14 servidor.py --com-coletor --sem-gh` para iniciar diretamente;
 `--porta` ou `PAINEL_PORTA` muda a porta (padrão 7421). O refresh legado fica na 7420.

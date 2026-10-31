@@ -1,0 +1,635 @@
+{
+ "versao": 1,
+ "gerado_em": "2026-10-31T05:01:52-03:00",
+ "gerado_em_epoch": 1793433712.0,
+ "intervalo_s": 2,
+ "origem": "vivo",
+ "agentes": [
+  {
+   "nome": "Claude · projeto-alfa",
+   "ferramenta": "claude",
+   "ferramenta_nome": "Claude Code",
+   "modelo": "Opus 5.5 (1M context)",
+   "esforco": "high",
+   "conta": "Claude Pro",
+   "estado": "trabalhando",
+   "trabalhando_ha": "3m 26s",
+   "leitura": "ok",
+   "contexto_pct": 58,
+   "atividade": "Bash(pytest -q)…",
+   "ultima_fala": "Rodando os testes.",
+   "session_id": "sess-1",
+   "missao": {
+    "texto": "Migrar o módulo de contas",
+    "situacao": "em andamento",
+    "esperando": null,
+    "previsao": "hoje 18h"
+   },
+   "prs": [
+    {
+     "repo": "meu-app",
+     "numero": 42,
+     "titulo": "Migra contas",
+     "rascunho": false,
+     "url": "x",
+     "ci": {
+      "estado": "passou"
+     }
+    }
+   ]
+  },
+  {
+   "nome": "Codex · revisao",
+   "ferramenta": "codex",
+   "ferramenta_nome": "Codex",
+   "modelo": "gpt-6-astra",
+   "esforco": "high",
+   "estado": "ocioso",
+   "ultima_resposta_as": "20h03",
+   "leitura": "ok",
+   "contexto_pct": null,
+   "session_id": "sess-2",
+   "missao": null,
+   "prs": []
+  },
+  {
+   "nome": "<img src=x onerror=alert(1)>",
+   "ferramenta": "claude",
+   "ferramenta_nome": "Claude Code",
+   "modelo": "Sonnet 5.5",
+   "estado": "esperando",
+   "leitura": "ok",
+   "contexto_pct": 12,
+   "session_id": "sess-3",
+   "missao": {
+    "texto": "<b>negrito</b> segredo.usuario@example.com",
+    "situacao": "esperando",
+    "esperando": "você"
+   },
+   "prs": []
+  }
+ ],
+ "cotas": {},
+ "contas": {
+  "consultadas": true,
+  "erro": null,
+  "intervalos_s": {
+   "claude": 300,
+   "codex": 300
+  },
+  "lista": [
+   {
+    "id": "claude:abc",
+    "ferramenta": "claude",
+    "ferramenta_nome": "Claude Code",
+    "titulo": "Claude · pro",
+    "email": "segredo.usuario@example.com",
+    "plano": "pro",
+    "agentes": [],
+    "terminais": [],
+    "erro": false,
+    "erro_detalhe": null,
+    "situacao": "ok",
+    "lido_em_epoch": 1793433592.0,
+    "barras": [
+     {
+      "grupo": "claude",
+      "tipo": "5h",
+      "rotulo": "5h",
+      "usado_pct": 40,
+      "renova_epoch": 1793445112.0,
+      "renova_texto": null
+     },
+     {
+      "grupo": "claude",
+      "tipo": "semana",
+      "rotulo": "Semana",
+      "usado_pct": 70,
+      "renova_epoch": null,
+      "renova_texto": "Oct 31, 8pm (America/Sao_Paulo)"
+     }
+    ]
+   },
+   {
+    "id": "codex:def",
+    "ferramenta": "codex",
+    "ferramenta_nome": "Codex",
+    "titulo": "Codex",
+    "email": null,
+    "plano": null,
+    "agentes": [],
+    "terminais": [],
+    "erro": false,
+    "erro_detalhe": null,
+    "situacao": "sem dado",
+    "lido_em_epoch": null,
+    "barras": [
+     {
+      "grupo": "codex:d",
+      "tipo": "5h",
+      "rotulo": "5h",
+      "usado_pct": null,
+      "renova_epoch": null,
+      "renova_texto": null
+     },
+     {
+      "grupo": "codex:d",
+      "tipo": "semana",
+      "rotulo": "Semana",
+      "usado_pct": null,
+      "renova_epoch": null,
+      "renova_texto": null
+     }
+    ]
+   }
+  ]
+ },
+ "sonda": {
+  "ligada": false,
+  "intervalo_s": 300,
+  "contas": [],
+  "bloqueados": []
+ },
+ "prs": {
+  "consultado": true,
+  "lido_em_epoch": 1793433712.0,
+  "erro": null,
+  "intervalo_s": 180,
+  "total": 1,
+  "sem_dono": []
+ },
+ "quadro": {
+  "editado_em": "2026-10-31T04:00:00-03:00",
+  "erro": null,
+  "pendencias": [
+   {
+    "id": "p1",
+    "tipo": "pergunta",
+    "texto": "Aprovar a migração? <img src=x onerror=alert(2)>",
+    "recomendacao": "Sim",
+    "criada_em": "2026-10-31T04:30:00-03:00"
+   },
+   {
+    "id": "p2",
+    "tipo": "acao",
+    "texto": "Renovar o token",
+    "criada_em": "2026-10-31T04:00:00-03:00",
+    "destrava": "o deploy",
+    "tempo": "5 min",
+    "passos": [
+     "Abra `gh auth login`",
+     "Cole o código de segredo.usuario@example.com"
+    ],
+    "fontes": [
+     "README.md"
+    ]
+   }
+  ]
+ },
+ "frentes": [],
+ "servicos": [
+  {
+   "nome": "Hindsight",
+   "estado": "ok",
+   "detalhe": "resposta válida",
+   "hora": 1793433707.0
+  },
+  {
+   "nome": "Ollama",
+   "estado": "fora",
+   "detalhe": "sem resposta",
+   "hora": 1793433707.0
+  },
+  {
+   "nome": "Vigia",
+   "estado": "fora",
+   "detalhe": "pid 1823",
+   "hora": 1793433707.0
+  },
+  {
+   "nome": "Hermes",
+   "estado": "ok",
+   "detalhe": "batimento por mtime",
+   "hora": 1793433707.0
+  }
+ ],
+ "processos": {
+  "node.exe": 1,
+  "hermes.exe": 2
+ },
+ "fontes": {
+  "whatsapp": {
+   "ok": true,
+   "erro": null,
+   "hora": 1793433709.0,
+   "ultima_leitura_ok": 1793433709.0,
+   "desatualizado": false
+  },
+  "maestri_wire": {
+   "ok": false,
+   "erro": "Wire indisponível",
+   "hora": 1793433712.0,
+   "ultima_leitura_ok": null,
+   "desatualizado": false
+  },
+  "gastos_hermes": {
+   "ok": true,
+   "erro": null,
+   "hora": 1793433672.0,
+   "ultima_leitura_ok": 1793433672.0,
+   "desatualizado": false
+  }
+ },
+ "whatsapp": {
+  "estado": "connected",
+  "needs_attention": false,
+  "error_code": null,
+  "tem_mensagem_erro": false,
+  "updated_at": "2026-10-30T16:49:25+00:00",
+  "gateway_state": "running",
+  "pid_vivo": true,
+  "idade_s": 4.0
+ },
+ "gastos_hermes": {
+  "custo_tipo": "estimado pelo Hermes",
+  "custo_modelo_rateado": true,
+  "distribuicao_aproximada": true,
+  "serie_campos": [
+   "cost_usd",
+   "tokens"
+  ],
+  "cotacao": {
+   "usd_brl": 5.5,
+   "fonte": "awesomeapi",
+   "data_epoch": 1793433112.0,
+   "desatualizada": false
+  },
+  "24h": {
+   "desde": 1793347312.0,
+   "origens": [
+    {
+     "input_tokens": 1,
+     "output_tokens": 1,
+     "cache_read_tokens": 1,
+     "cache_write_tokens": 1,
+     "reasoning_tokens": 0,
+     "message_count": 3,
+     "cost_usd": 3.5,
+     "inclui_assinatura": false,
+     "source": "Terminal"
+    }
+   ],
+   "modelos": [
+    {
+     "input_tokens": 1,
+     "output_tokens": 1,
+     "cache_read_tokens": 1,
+     "cache_write_tokens": 1,
+     "reasoning_tokens": 0,
+     "message_count": 3,
+     "cost_usd": 3.5,
+     "inclui_assinatura": false,
+     "model": "modelo-alfa"
+    }
+   ],
+   "total": {
+    "input_tokens": 1,
+    "output_tokens": 1,
+    "cache_read_tokens": 1,
+    "cache_write_tokens": 1,
+    "reasoning_tokens": 0,
+    "message_count": 0,
+    "cost_usd": 3.5
+   },
+   "ate": 1793433712.0,
+   "granularidade": "hora",
+   "serie": [
+    {
+     "inicio": 1793419312.0,
+     "fim": 1793422912.0,
+     "rotulo": "31/10 00:00",
+     "total": [
+      0,
+      0
+     ],
+     "por_canal": {},
+     "por_modelo": {}
+    },
+    {
+     "inicio": 1793422912.0,
+     "fim": 1793426512.0,
+     "rotulo": "31/10 01:00",
+     "total": [
+      1.0,
+      1000.0
+     ],
+     "por_canal": {},
+     "por_modelo": {}
+    },
+    {
+     "inicio": 1793426512.0,
+     "fim": 1793430112.0,
+     "rotulo": "31/10 02:00",
+     "total": [
+      2.0,
+      2000.0
+     ],
+     "por_canal": {},
+     "por_modelo": {}
+    },
+    {
+     "inicio": 1793430112.0,
+     "fim": 1793433712.0,
+     "rotulo": "31/10 03:00",
+     "total": [
+      0.5,
+      500.0
+     ],
+     "por_canal": {},
+     "por_modelo": {}
+    }
+   ]
+  },
+  "hoje": {
+   "desde": 1793415712.0,
+   "origens": [
+    {
+     "input_tokens": 1,
+     "output_tokens": 1,
+     "cache_read_tokens": 1,
+     "cache_write_tokens": 1,
+     "reasoning_tokens": 0,
+     "message_count": 3,
+     "cost_usd": 0.25,
+     "inclui_assinatura": false,
+     "source": "Terminal"
+    }
+   ],
+   "modelos": [
+    {
+     "input_tokens": 1,
+     "output_tokens": 1,
+     "cache_read_tokens": 1,
+     "cache_write_tokens": 1,
+     "reasoning_tokens": 0,
+     "message_count": 3,
+     "cost_usd": 0.25,
+     "inclui_assinatura": false,
+     "model": "modelo-alfa"
+    }
+   ],
+   "total": {
+    "input_tokens": 1,
+    "output_tokens": 1,
+    "cache_read_tokens": 1,
+    "cache_write_tokens": 1,
+    "reasoning_tokens": 0,
+    "message_count": 0,
+    "cost_usd": 0.25
+   },
+   "ate": 1793433712.0,
+   "granularidade": "hora",
+   "serie": [
+    {
+     "inicio": 1793430112.0,
+     "fim": 1793433712.0,
+     "rotulo": "31/10 00:00",
+     "total": [
+      0.25,
+      250.0
+     ],
+     "por_canal": {},
+     "por_modelo": {}
+    }
+   ]
+  },
+  "7d": {
+   "desde": 1792828912.0,
+   "origens": [
+    {
+     "input_tokens": 100,
+     "output_tokens": 2000,
+     "cache_read_tokens": 50000,
+     "cache_write_tokens": 3000,
+     "reasoning_tokens": 0,
+     "message_count": 3,
+     "cost_usd": 16.0,
+     "inclui_assinatura": false,
+     "source": "Terminal"
+    },
+    {
+     "input_tokens": 10,
+     "output_tokens": 200,
+     "cache_read_tokens": 500,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "message_count": 3,
+     "cost_usd": 2.5,
+     "inclui_assinatura": false,
+     "source": "WhatsApp"
+    },
+    {
+     "input_tokens": 5,
+     "output_tokens": 5,
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "message_count": 3,
+     "cost_usd": 0,
+     "inclui_assinatura": true,
+     "source": "Ferramentas"
+    },
+    {
+     "input_tokens": 0,
+     "output_tokens": 0,
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "message_count": 3,
+     "cost_usd": 0,
+     "inclui_assinatura": false,
+     "source": "Vazio"
+    }
+   ],
+   "modelos": [
+    {
+     "input_tokens": 100,
+     "output_tokens": 2000,
+     "cache_read_tokens": 50000,
+     "cache_write_tokens": 3000,
+     "reasoning_tokens": 0,
+     "message_count": 3,
+     "cost_usd": 14.5,
+     "inclui_assinatura": false,
+     "model": "modelo-alfa"
+    },
+    {
+     "input_tokens": 10,
+     "output_tokens": 200,
+     "cache_read_tokens": 500,
+     "cache_write_tokens": 0,
+     "reasoning_tokens": 0,
+     "message_count": 3,
+     "cost_usd": 4.0,
+     "inclui_assinatura": false,
+     "model": "modelo-beta",
+     "sub_rotulo": "em segundo plano"
+    }
+   ],
+   "total": {
+    "input_tokens": 115,
+    "output_tokens": 2205,
+    "cache_read_tokens": 50500,
+    "cache_write_tokens": 3000,
+    "reasoning_tokens": 0,
+    "message_count": 0,
+    "cost_usd": 18.5
+   },
+   "ate": 1793433712.0,
+   "granularidade": "dia",
+   "serie": [
+    {
+     "inicio": 1792828912.0,
+     "fim": 1792915312.0,
+     "rotulo": "2026-10-24",
+     "total": [
+      1,
+      1000
+     ],
+     "por_canal": {},
+     "por_modelo": {}
+    },
+    {
+     "inicio": 1792915312.0,
+     "fim": 1793001712.0,
+     "rotulo": "2026-10-25",
+     "total": [
+      2,
+      2000
+     ],
+     "por_canal": {},
+     "por_modelo": {}
+    },
+    {
+     "inicio": 1793001712.0,
+     "fim": 1793088112.0,
+     "rotulo": "2026-10-26",
+     "total": [
+      3,
+      3000
+     ],
+     "por_canal": {},
+     "por_modelo": {}
+    },
+    {
+     "inicio": 1793088112.0,
+     "fim": 1793174512.0,
+     "rotulo": "2026-10-27",
+     "total": [
+      4,
+      4000
+     ],
+     "por_canal": {},
+     "por_modelo": {}
+    },
+    {
+     "inicio": 1793174512.0,
+     "fim": 1793260912.0,
+     "rotulo": "2026-10-28",
+     "total": [
+      2.5,
+      2500.0
+     ],
+     "por_canal": {},
+     "por_modelo": {}
+    },
+    {
+     "inicio": 1793260912.0,
+     "fim": 1793347312.0,
+     "rotulo": "2026-10-29",
+     "total": [
+      3,
+      3000
+     ],
+     "por_canal": {},
+     "por_modelo": {}
+    },
+    {
+     "inicio": 1793347312.0,
+     "fim": 1793433712.0,
+     "rotulo": "2026-10-30",
+     "total": [
+      3,
+      3000
+     ],
+     "por_canal": {},
+     "por_modelo": {}
+    }
+   ]
+  },
+  "30d": {
+   "desde": 1790841712.0,
+   "origens": [
+    {
+     "input_tokens": 1,
+     "output_tokens": 1,
+     "cache_read_tokens": 1,
+     "cache_write_tokens": 1,
+     "reasoning_tokens": 0,
+     "message_count": 3,
+     "cost_usd": 30.0,
+     "inclui_assinatura": false,
+     "source": "Terminal"
+    }
+   ],
+   "modelos": [
+    {
+     "input_tokens": 1,
+     "output_tokens": 1,
+     "cache_read_tokens": 1,
+     "cache_write_tokens": 1,
+     "reasoning_tokens": 0,
+     "message_count": 3,
+     "cost_usd": 30.0,
+     "inclui_assinatura": false,
+     "model": "modelo-alfa"
+    }
+   ],
+   "total": {
+    "input_tokens": 1,
+    "output_tokens": 1,
+    "cache_read_tokens": 1,
+    "cache_write_tokens": 1,
+    "reasoning_tokens": 0,
+    "message_count": 0,
+    "cost_usd": 30.0
+   },
+   "ate": 1793433712.0,
+   "granularidade": "dia",
+   "serie": [
+    {
+     "inicio": 1793260912.0,
+     "fim": 1793347312.0,
+     "rotulo": "2026-10-24",
+     "total": [
+      10,
+      10000
+     ],
+     "por_canal": {},
+     "por_modelo": {}
+    },
+    {
+     "inicio": 1793347312.0,
+     "fim": 1793433712.0,
+     "rotulo": "2026-10-25",
+     "total": [
+      20,
+      20000
+     ],
+     "por_canal": {},
+     "por_modelo": {}
+    }
+   ]
+  }
+ }
+}

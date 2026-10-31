@@ -350,7 +350,7 @@ test('E10 negativos/NaN/Infinity são zero na ordem, assinatura zero sempre no f
 });
 
 test('página só carrega módulo novo quando uma chave opt-in chega', () => {
-  const html = fs.readFileSync(path.join(__dirname, '../../publico/index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '../../publico/classico.html'), 'utf8');
   assert.ok(html.includes('function desenharExtras('));
   const codigo = 'function desenharExtras(' + html.split('function desenharExtras(')[1].split('function desenhar()')[0];
   const scripts = [], a = { dados: {}, window: {}, gastosCarregando: false,

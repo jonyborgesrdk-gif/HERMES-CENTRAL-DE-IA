@@ -233,7 +233,7 @@ class PassadaTests(unittest.TestCase):
 
     def test_html_chaves_em_escopos_reais(self):
         dados = self.passada()
-        html = (RAIZ / 'publico' / 'index.html').read_text(encoding='utf-8')
+        html = (RAIZ / 'publico' / 'classico.html').read_text(encoding='utf-8')
         # v é agente nestas funções, mas também é virador em outros escopos.
         for nome in ('celAgente', 'celEstado', 'celAgora', 'celMissao', 'celPrs'):
             m = re.search(r'function ' + nome + r'\(v\)\s*\{(.*?)(?=\nfunction |\nvar )', html, re.S)
