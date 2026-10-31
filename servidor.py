@@ -4,6 +4,7 @@ import ctypes
 from ctypes import wintypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hashlib
+import http.client
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -21,6 +22,7 @@ from lib.semjanela import sem_janela_kwargs
 
 sys.dont_write_bytecode = True
 RAIZ = Path(__file__).resolve().parent
+PORTA_COLETOR = 7420
 PREFIXO = 'window.__painelDados && window.__painelDados('
 
 
@@ -38,8 +40,9 @@ class PainelHTTP(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
 
-    def __init__(self, publico, porta=7421):
+    def __init__(self, publico, porta=7421, porta_coletor=PORTA_COLETOR):
         self.publico = Path(publico).resolve()
+        self.porta_coletor = porta_coletor
         self.parar = threading.Event()
         super().__init__(('127.0.0.1', porta), Handler)
 
@@ -92,6 +95,50 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def do_POST(self):
+        """Único POST aceito: /refresh, repassado ao coletor em 127.0.0.1 (mesma origem, sem CORS)."""
+        caminho = unquote(urlsplit(self.path).path)
+        if not self.permitido():
+            return
+        if caminho != '/refresh':
+            self.send_error(404)
+            return
+        # Navegador sempre manda Sec-Fetch-Site em fetch; fora de same-origin (ou sem o cabeçalho e
+        # sem Referer/Origin estranho) é cross-site: recusa como o GET dos dados.
+        site = self.headers.get('Sec-Fetch-Site')
+        if site not in (None, 'same-origin') or not self.permitido_dados():
+            self.negar()
+            return
+        try:
+            tamanho = int(self.headers.get('Content-Length') or 0)
+        except ValueError:
+            tamanho = -1
+        if not 0 <= tamanho <= 1024:
+            self.close_connection = True
+            self.send_response(413)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
+        if tamanho:
+            self.rfile.read(tamanho)   # corpo ignorado, mas consumido para manter a conexão limpa
+        try:
+            conn = http.client.HTTPConnection('127.0.0.1', self.server.porta_coletor, timeout=2)
+            try:
+                conn.request('POST', '/refresh', body=b'', headers={'Content-Length': '0'})
+                status = conn.getresponse().status
+            finally:
+                conn.close()
+        except (OSError, http.client.HTTPException):
+            status = None   # coletor fora do ar (conexão recusada, timeout, resposta inválida)
+        if status is not None and 200 <= status < 300:
+            self.send_response(204)
+            self.end_headers()
+            return
+        codigo = 503 if status is None else 502
+        self.send_response(codigo)
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
     def do_HEAD(self):
         self.atender(cabeca=True)
 
@@ -107,6 +154,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         caminho = '/' + '/'.join(p for p in caminho.split('/') if p not in ('', '.'))
         if caminho.casefold() in ('/dados.js', '/dados.json', '/eventos') and not self.permitido_dados():
+            return
+        if caminho == '/favicon.ico' and not (self.server.publico / 'favicon.ico').is_file():
+            self.send_response(204)   # sem ícone: resposta vazia em vez de 404 no console
+            self.end_headers()
             return
         if caminho == '/eventos':
             if cabeca:

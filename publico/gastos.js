@@ -33,7 +33,8 @@ function whatsapp(doc, ponte, meta, agoraS) {
   titulo.appendChild(elemento(doc, "span", estado, "saude-" + (estado === "conectado" ? "ok" : "erro")));
   var detalhe = [ponte.error_code, saude(meta, agoraS)].filter(function (v) { return v != null && v !== ""; });
   c.appendChild(elemento(doc, "p", detalhe.join(" · ") || "Ponte do gateway Hermes"));
-  c.appendChild(elemento(doc, "small", "Última atualização: " + hora(ponte.updated_at) +
+  // updated_at é a hora em que a ponte gravou seu estado no gateway, não a da leitura do arquivo (essa é idade_s).
+  c.appendChild(elemento(doc, "small", "Estado da ponte registrado em: " + hora(ponte.updated_at) +
     " · estado do arquivo: " + (idade === null ? "sem horário" : "há " + Math.floor(idade) + " s")));
   return c;
 }
@@ -78,6 +79,22 @@ function ordenarCanais(origens) {
     return a.indice - b.indice;
   }).map(function (item) { return item.dado; });
 }
+// Canal/modelo sem nenhum token e sem custo não informa nada: fica fora da lista e da tabela.
+function visivel(dado) { return tokens(dado) > 0 || custo(dado) > 0; }
+// Rótulo de data padronizado em pt-BR: dd/mm (dia) e dd/mm hh:00 (hora), venha como ISO ou já em dd/mm hh:mm.
+function dataPadrao(rotulo) {
+  var r = String(rotulo), m;
+  if ((m = /^\d{4}-(\d{2})-(\d{2})$/.exec(r))) return m[2] + "/" + m[1];
+  if ((m = /^(\d{2}\/\d{2}) (\d{2}):\d{2}$/.exec(r))) return m[1] + " " + m[2] + ":00";
+  return r;
+}
+// Rótulo curto sob a coluna: só a hora (24h/hoje) ou o dia; em 30 dias, só o número do dia, sem quebra.
+function rotuloCurto(rotulo, granularidade, quantidade) {
+  var completo = dataPadrao(rotulo), m;
+  if (granularidade === "hora" && (m = /^\d{2}\/\d{2} (\d{2}):00$/.exec(completo))) return m[1] + "h";
+  if (granularidade === "dia" && quantidade > 10 && (m = /^(\d{2})\/\d{2}$/.exec(completo))) return m[1];
+  return completo;
+}
 function valores(doc, tr, dado) {
   dado = dado || {};
   tr.appendChild(elemento(doc, "td", contagem(dado.input_tokens)));
@@ -100,8 +117,9 @@ function serieGrupo(b, agrupamento) { return (agrupamento === "modelo" ? b.por_m
 function controle(doc, tag, id, classe) {
   var e = elemento(doc, tag, null, classe); e.id = id; if (tag === "button") e.type = "button"; return e;
 }
-function seletor(doc, id, opcoes, valor, aoMudar) {
+function seletor(doc, id, opcoes, valor, aoMudar, rotulo) {
   var e = controle(doc, "select", id, "gastos-seletor");
+  e.ariaLabel = rotulo; e.title = rotulo;
   opcoes.forEach(function (opcao) {
     var o = e.appendChild(elemento(doc, "option", opcao[1])); o.value = opcao[0];
     if (opcao[0] === valor) o.selected = true;
@@ -135,10 +153,14 @@ function colunas(doc, janela, agrupamento, filtro) {
   serie.forEach(function (b) {
     var valores = filtro ? serieGrupo(b, agrupamento)[filtro] || [0, 0] : b.total || [0, 0];
     var item = lista.appendChild(elemento(doc, "li"));
-    var botao = item.appendChild(elemento(doc, "button", b.rotulo, "gastos-coluna")); botao.type = "button";
-    botao.title = dinheiro(numero(valores[0]) && valores[0] > 0 ? valores[0] : 0) + " · " + contagem(valores[1]) + " tokens";
+    // Coluna é só leitura: elemento não interativo (sem tab stop), valor em title/aria-label.
+    var rotulo = elemento(doc, "span", rotuloCurto(b.rotulo, janela.granularidade, serie.length), "gastos-coluna");
+    item.appendChild(rotulo);
+    rotulo.title = dataPadrao(b.rotulo) + ": " + dinheiro(numero(valores[0]) && valores[0] > 0 ? valores[0] : 0) + " · " + contagem(valores[1]) + " tokens";
+    rotulo.role = "img"; rotulo.ariaLabel = rotulo.title;
     var trilho = item.appendChild(elemento(doc, "div", null, "gastos-trilho")); trilho.ariaHidden = "true";
-    trilho.appendChild(elemento(doc, "div", null, "gastos-barra")).style.width =
+    var preenchida = trilho.appendChild(elemento(doc, "div", null, "gastos-barra"));
+    preenchida.style.height =    // coluna na vertical: a altura vale o custo; a largura vem do CSS (100% do trilho)
       (maior > 0 ? Math.max(0, Math.min(100, valores[0] / maior * 100)) : 0) + "%";
   });
   return bloco;
@@ -148,7 +170,9 @@ function tabela(doc, janela, agrupamento, filtro) {
   tabela.appendChild(elemento(doc, "caption", "Tokens e " + (cot ? "R$" : "US$") + " — " + (agrupamento === "modelo" ? "modelo" : "canal")));
   var cabeca = tabela.appendChild(elemento(doc, "thead")).appendChild(elemento(doc, "tr"));
   ["", "Entrada", "Saída", "Cache", cot ? "R$" : "US$"].forEach(function (nome) { cabeca.appendChild(elemento(doc, "th", nome)).scope = "col"; });
-  var linhas = grupo(janela, agrupamento).filter(function (d) { return !filtro || nomeGrupo(d, agrupamento) === filtro; });
+  var linhas = ordenarCanais(grupo(janela, agrupamento)).filter(function (d) {
+    return visivel(d) && (!filtro || nomeGrupo(d, agrupamento) === filtro);
+  });
   var corpo = tabela.appendChild(elemento(doc, "tbody"));
   linhas.forEach(function (d) {
     var tr = corpo.appendChild(elemento(doc, "tr"));
@@ -175,13 +199,13 @@ function gastos(doc, dado, meta, agoraS) {
     var controles = c.appendChild(elemento(doc, "div", null, "gastos-controles"));
     controles.appendChild(seletor(doc, "gastos-janela", [["24h", "24 h"], ["hoje", "Hoje"], ["7d", "7 dias"], ["30d", "30 dias"]], estado.janela, function (valor) {
       estado.janela = valor; redesenhar();
-    }));
+    }, "Período"));
     controles.appendChild(seletor(doc, "gastos-agrupamento", [["canal", "Canal"], ["modelo", "Modelo"]], estado.agrupamento, function (valor) {
       estado.agrupamento = valor; estado.filtro = ""; redesenhar();
-    }));
+    }, "Agrupar por"));
     var limpar = controles.appendChild(controle(doc, "button", "gastos-limpar", "gastos-limpar"));
     limpar.textContent = "limpar"; limpar.addEventListener("click", function () { estado.filtro = ""; redesenhar(); });
-    var grupos = ordenarCanais(grupo(janela, estado.agrupamento)).map(function (d) {
+    var grupos = ordenarCanais(grupo(janela, estado.agrupamento)).filter(visivel).map(function (d) {
       return Object.assign({}, d, { rotulo: nomeGrupo(d, estado.agrupamento) });
     });
     if (estado.filtro && !grupos.some(function (d) { return d.rotulo === estado.filtro; })) {

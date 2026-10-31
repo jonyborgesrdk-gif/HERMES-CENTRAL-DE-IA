@@ -63,9 +63,11 @@ html[data-layout="minimo"] #contas { display: none; }
 .card { --radius: 20px; --padding: 18px; --accent: #6d7782; position: relative; isolation: isolate; border-radius: var(--radius);
   padding: var(--padding); min-width: 0; color: var(--c-tinta);
   box-shadow: 0px 2px 3px -1px rgba(0,0,0,0.1), 0px 1px 0px 0px rgba(25,28,33,0.02), 0px 0px 0px 1px var(--c-fio); }
-.card-verso { --radius: 20px; --padding: 18px; --accent: #6d7782; position: absolute; inset: 0; z-index: 1; padding: var(--padding); min-width: 0;
+/* Frente e verso dividem a mesma célula da grade: o card cresce até caber o maior dos dois, então o verso nunca rola. */
+.card-pilha > .card, .card-pilha > .card-verso { grid-area: 1 / 1; }
+.card-verso { --radius: 20px; --padding: 18px; --accent: #6d7782; position: relative; z-index: 1; padding: var(--padding); min-width: 0;
   color: var(--c-tinta); cursor: pointer; display: flex; flex-direction: column; visibility: hidden; }
-.verso-corpo { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; display: flex; flex-direction: column; margin: 0 calc(-1 * var(--padding)); padding: 0 var(--padding); }
+.verso-corpo { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; margin: 0 calc(-1 * var(--padding)); padding: 0 var(--padding); }
 .card-cena.virado .card { pointer-events: none; }
 .card-cena:not(.virado) .card-verso { pointer-events: none; }
 .card-cena.mostra-verso .card-verso { visibility: visible; }
@@ -293,7 +295,7 @@ html[data-tema="escuro"] .card[data-ferramenta="agy"], html[data-tema="escuro"] 
 @keyframes consultando { 0%, 100% { opacity: .18; } 50% { opacity: .55; } }
 
 .verso-cabeca { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex: none; }
-.verso-cabeca .card-eyebrow { margin: 0 0 2px; }
+.verso-cabeca .card-eyebrow { margin: 0 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .verso-cabeca .identity { flex: 1; min-width: 0; }
 .verso-titulo { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -.2px; line-height: 1.25; display: flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .verso-titulo::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); flex: none; }

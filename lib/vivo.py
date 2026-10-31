@@ -2,7 +2,13 @@
 import ntpath
 import hashlib
 import math
-from datetime import datetime
+import re
+import time
+from datetime import datetime, timedelta, timezone
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:     # Python sem zoneinfo
+    ZoneInfo = None
 try:
     from . import leitor
 except ImportError:
@@ -101,14 +107,89 @@ def _numero(valor):
     return isinstance(valor, (int, float)) and not isinstance(valor, bool) and math.isfinite(valor)
 
 
-def _epoch(valor):
+# Fusos conhecidos sem depender da base IANA (no Windows o zoneinfo pode vir sem tzdata).
+# O Brasil não tem horário de verão desde 2019, então o deslocamento fixo é exato daí em diante.
+_FUSOS_FIXOS = {'America/Sao_Paulo': timezone(timedelta(hours=-3), 'America/Sao_Paulo'),
+                'UTC': timezone.utc}
+_MESES = {m: i for i, m in enumerate(
+    ('jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'), 1)}
+_RESET = re.compile(
+    r'^\s*(?:(?P<mes>[A-Za-z]{3,9})\.?\s+(?P<dia>\d{1,2})(?:\s*,|\s+at)?\s+)?'
+    r'(?P<hora>\d{1,2})(?::(?P<min>\d{2}))?\s*(?P<ampm>[ap]m)'
+    r'(?:\s*\((?P<fuso>[A-Za-z0-9_+\-]+(?:/[A-Za-z0-9_+\-]+){0,2})\))?\s*$', re.I)
+
+
+_MARGEM_RESET_S = 3600      # tolerância sobre a janela da cota ao validar o reset lido
+
+
+def _fuso(nome):
+    if ZoneInfo is not None:
+        try:
+            return ZoneInfo(nome)
+        except Exception:       # fuso desconhecido ou base IANA ausente: tenta a tabela fixa
+            pass
+    return _FUSOS_FIXOS.get(nome)
+
+
+def epoch_do_reset(texto, agora=None, lido=None, janela_min=None):
+    """'Oct 31, 2:10am (America/Sao_Paulo)' -> epoch; None se o texto ou o fuso não forem confiáveis.
+
+    Aceita com/sem minutos, am/pm e, sem data, a próxima ocorrência da hora. O ano é inferido a partir da
+    hora da LEITURA (`lido`; sem ela, `agora`): primeira ocorrência >= leitura - 1 dia. Com `janela_min`, um
+    reset além de leitura + janela (+ margem) é incoerente (ex.: leitura velha de 'Oct 27' lida meses depois)
+    e devolve None em vez de inventar. Reset já passado em relação a `agora` é mantido (a página trata 'vencida').
+    Sem fuso no texto ou com fuso desconhecido não se chuta: None.
+    """
+    m = _RESET.match(texto) if isinstance(texto, str) else None
+    if not m or not m['fuso']:
+        return None
+    fuso = _fuso(m['fuso'])
+    hora, minuto = int(m['hora']), int(m['min'] or 0)
+    if fuso is None or not 1 <= hora <= 12 or minuto > 59:
+        return None
+    hora = hora % 12 + (12 if m['ampm'].lower() == 'pm' else 0)
+    agora = time.time() if not _numero(agora) else agora
+    ref = lido if _numero(lido) else agora
+    try:
+        base = datetime.fromtimestamp(ref - 86400, fuso)
+        if m['mes']:
+            mes = _MESES.get(m['mes'][:3].lower())
+            if mes is None:
+                return None
+            dia, candidatos = int(m['dia']), []
+            for ano in (base.year, base.year + 1):
+                try:
+                    candidatos.append(datetime(ano, mes, dia, hora, minuto, tzinfo=fuso))
+                except ValueError:      # 29/02 em ano comum
+                    pass
+            alvo = next((c for c in candidatos if c.timestamp() >= ref - 86400), None)
+        else:
+            alvo = datetime(base.year, base.month, base.day, hora, minuto, tzinfo=fuso) + timedelta(days=1)
+            while alvo.timestamp() < ref:
+                alvo += timedelta(days=1)
+        if alvo is None:
+            return None
+        epoch = alvo.timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
+    # Normalização do truncamento de segundos observado no texto da CLI: 02:09:59 aparece como '2:09am' e
+    # logo depois como '2:10am' (19:59:59 -> '7:59pm'/'8pm'). Só os minutos 09 e 59 sobem um minuto, para o
+    # epoch não oscilar; 19, 29, 39 e 49 não têm esse comportamento e ficam como lidos.
+    if minuto in (9, 59):
+        epoch += 60
+    if _numero(janela_min) and epoch > ref + janela_min * 60 + _MARGEM_RESET_S:
+        return None
+    return epoch
+
+
+def _epoch(valor, agora=None, lido=None, janela_min=None):
     if _numero(valor):
         return valor
     if isinstance(valor, str):
         try:
             return datetime.fromisoformat(valor.replace('Z', '+00:00')).timestamp()
         except (ValueError, OSError):
-            pass
+            return epoch_do_reset(valor, agora, lido, janela_min)
     return None
 
 
@@ -130,7 +211,7 @@ def montar_contas(leituras, agora, agentes=(), disponiveis=None, saude=None):
             pct = pct if _numero(pct) and 0 <= pct <= 100 else None
             r = cota.get(reset)
             barras.append({'grupo': chave, 'tipo': tipo, 'rotulo': rotulo, 'usado_pct': pct,
-                'renova_epoch': _epoch(r), 'renova_texto': leitor.mascarar(r) if isinstance(r, str) else None,
+                'renova_epoch': _epoch(r, agora, lido, minutos), 'renova_texto': leitor.mascarar(r) if isinstance(r, str) else None,
                 'janela_min': minutos, 'origem': origem if pct is not None else None,
                 'evidencia': origem if pct is not None else None,
                 'lido_em_epoch': lido, 'fonte': 'Claude Code' if ferramenta == 'claude' else 'Codex',

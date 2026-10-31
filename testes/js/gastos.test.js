@@ -70,7 +70,9 @@ test('ponte conectado, caído, atenção, ausente e erro sem HTML', () => {
     api().desenhar({ whatsapp: { ...ponte, ...alteracao, error_message: '<img src=x onerror=alert(1)>' } }, 1000, doc);
     const c = doc.getElementById('whatsapp-cartao');
     assert.match(c.textContent, new RegExp(esperado));
-    assert.match(c.textContent, /Última atualização/);
+    assert.match(c.textContent, /Estado da ponte registrado em: /);
+    assert.doesNotMatch(c.textContent, /Última atualização/);
+    assert.match(c.textContent, /estado do arquivo: há \d+ s/);
     assert.doesNotMatch(c.textContent, /<img src=x onerror=alert\(1\)>/);
     assert.equal(c.parentNode.id, 'servicos-grade');
     assert.equal(doc.getElementById('servicos-grade').children.length, 1);
@@ -302,7 +304,7 @@ test('E10 escala das colunas com filtro usa o maior valor do grupo', () => {
   api().desenhar({ gastos_hermes: g }, 1000, doc);
   barras(doc).find(e => e.children[0].textContent === 'Subagentes').click();
   const itens = doc.getElementById('gastos-colunas').children.find(e => e.tagName === 'ol').children;
-  assert.deepEqual(itens.map(i => i.children[1].children[0].style.width), ['0%', '50%', '100%']);
+  assert.deepEqual(itens.map(i => i.children[1].children[0].style.height), ['0%', '50%', '100%']);
 });
 
 test('E10 foco volta à mesma barra após refresh', () => {
@@ -417,4 +419,102 @@ test('E11 tokens sem casas decimais', () => {
   api().desenhar({ gastos_hermes: g }, 1000, doc);
   const t = barras(doc)[0].title;
   assert.ok(t.includes('1.235') && !t.includes(','), t);
+});
+
+// ---- Correções B3–B8 (painel IAs) ----
+function janelaB(granularidade, rotulos, extra) {
+  return { origens: [], modelos: [], total: {}, granularidade, serie: rotulos.map(r => ({ rotulo: r,
+    total: [1, 10], por_canal: {}, por_modelo: {} })), ...extra };
+}
+function colunasDe(doc) {
+  return doc.getElementById('gastos-colunas').children.find(e => e.tagName === 'ol').children;
+}
+
+test('B3 cartão WhatsApp rotula a hora da ponte e mantém a idade do arquivo', () => {
+  const { doc } = ambiente();
+  api().desenhar({ whatsapp: { ...ponte, updated_at: '2026-10-30T16:49:25+00:00', idade_s: 37 } }, 1000, doc);
+  const texto = doc.getElementById('whatsapp-cartao').textContent;
+  // A página mostra a hora no fuso da máquina: o esperado usa o mesmo formatador, para valer em qualquer TZ.
+  const horaLocal = new Date('2026-10-30T16:49:25+00:00').toLocaleString('pt-BR');
+  assert.match(horaLocal, /^\d{2}\/\d{2}\/\d{4},? \d{2}:\d{2}:\d{2}$/);
+  assert.ok(texto.includes('Estado da ponte registrado em: ' + horaLocal + ' · '), texto);
+  assert.match(texto, /estado do arquivo: há 37 s/);
+  assert.doesNotMatch(texto, /Última atualização/);
+});
+
+test('B4 colunas do gráfico não são botões nem têm tab stop; valor em aria-label e title', () => {
+  const { doc } = ambiente();
+  api().desenhar({ gastos_hermes: gastosE10() }, 1000, doc);
+  const colunas = doc.getElementById('gastos-colunas');
+  const achar = (e, fn, acc = []) => { if (fn(e)) acc.push(e); e.children.forEach(c => achar(c, fn, acc)); return acc; };
+  assert.equal(achar(colunas, e => e.tagName === 'button').length, 0);
+  const rotulo = colunasDe(doc)[0].children[0];
+  assert.notEqual(rotulo.tagName, 'button');
+  assert.equal(rotulo.onclick, undefined);
+  assert.equal(rotulo.tabIndex, undefined);
+  assert.match(rotulo.ariaLabel, /US\$ 4\.0000 · 40 tokens/);
+  assert.equal(rotulo.ariaLabel, rotulo.title);
+  assert.equal(rotulo.role, 'img');
+});
+
+test('B5 rótulos de coluna curtos: só o dia em 30d, hora nas séries horárias, seletores com nome', () => {
+  const { doc } = ambiente();
+  const dias = Array.from({ length: 30 }, (_, i) => '2026-10-' + String(i + 1).padStart(2, '0'));
+  const g = { '30d': janelaB('dia', dias), '7d': janelaB('dia', dias.slice(0, 7)),
+    '24h': janelaB('hora', ['29/10 22:34', '29/10 23:00']) };
+  api().desenhar({ gastos_hermes: g }, 1000, doc);
+  escolher(doc, 'gastos-janela', '30d');
+  assert.deepEqual(colunasDe(doc).slice(0, 3).map(i => i.children[0].textContent), ['01', '02', '03']);
+  assert.ok(colunasDe(doc).every(i => i.children[0].textContent.length <= 2));
+  assert.match(colunasDe(doc)[23].children[0].title, /^24\/10: /);
+  escolher(doc, 'gastos-janela', '7d');
+  assert.equal(colunasDe(doc)[0].children[0].textContent, '01/10');
+  escolher(doc, 'gastos-janela', '24h');
+  assert.deepEqual(colunasDe(doc).map(i => i.children[0].textContent), ['22h', '23h']);
+  assert.ok(doc.getElementById('gastos-janela').ariaLabel);
+  assert.ok(doc.getElementById('gastos-agrupamento').ariaLabel);
+});
+
+test('B6 tabela usa a mesma ordem da lista (custo desc, Total por último)', () => {
+  const { doc } = ambiente();
+  const canais = [{ ...linha('Alfa'), cost_usd: 1 }, { ...linha('Beta'), cost_usd: 9 }, { ...linha('Gama'), cost_usd: 4 }];
+  api().desenhar({ gastos_hermes: { '7d': { origens: canais, modelos: [], total: { ...linha('t'), cost_usd: 14 } } } }, 1000, doc);
+  const nomes = barras(doc).map(e => e.children[0].textContent);
+  assert.deepEqual(nomes, ['Beta', 'Gama', 'Alfa']);
+  const tabela = linhasTabela(doc).map(tr => tr.children[0].textContent);
+  assert.deepEqual(tabela, ['Beta', 'Gama', 'Alfa', 'Total']);
+});
+
+test('B7 canal e modelo com 0 tokens e custo 0 somem da lista e da tabela', () => {
+  const { doc } = ambiente();
+  const zero = { source: 'App desktop', model: 'm-zero', input_tokens: 0, output_tokens: 0, cache_read_tokens: 0,
+    cache_write_tokens: 0, cost_usd: 0 };
+  const sub = { ...linha('Subagentes'), cost_usd: 0, inclui_assinatura: true };   // tem tokens: continua
+  const j = { origens: [zero, sub, { ...linha('Terminal'), cost_usd: 2 }], modelos: [zero, { ...linha('x'), model: 'm-ok' }],
+    total: { ...linha('t'), cost_usd: 2 } };
+  api().desenhar({ gastos_hermes: { '7d': j } }, 1000, doc);
+  assert.deepEqual(barras(doc).map(e => e.children[0].textContent), ['Terminal', 'Subagentes']);
+  assert.deepEqual(linhasTabela(doc).map(tr => tr.children[0].textContent), ['Terminal', 'Subagentes', 'Total']);
+  escolher(doc, 'gastos-agrupamento', 'modelo');
+  assert.deepEqual(barras(doc).map(e => e.children[0].textContent), ['m-ok']);
+  assert.deepEqual(linhasTabela(doc).map(tr => tr.children[0].textContent), ['m-ok', 'Total']);
+});
+
+test('B8 datas das séries em pt-BR dd/mm (hora como hh:00), igual em todas as janelas', () => {
+  const { doc } = ambiente();
+  const g = { '24h': janelaB('hora', ['29/10 22:27', '29/10 23:00']), hoje: janelaB('hora', ['30/10 00:00']),
+    '7d': janelaB('dia', ['2026-10-24']), '30d': janelaB('dia', ['2026-10-01']) };
+  api().desenhar({ gastos_hermes: g }, 1000, doc);
+  escolher(doc, 'gastos-janela', '24h');
+  assert.deepEqual(colunasDe(doc).map(i => i.children[0].title.slice(0, 11)), ['29/10 22:00', '29/10 23:00']);
+  escolher(doc, 'gastos-janela', 'hoje');
+  assert.match(colunasDe(doc)[0].children[0].title, /^30\/10 00:00: /);
+  escolher(doc, 'gastos-janela', '7d');
+  assert.match(colunasDe(doc)[0].children[0].title, /^24\/10: /);
+  escolher(doc, 'gastos-janela', '30d');
+  assert.match(colunasDe(doc)[0].children[0].title, /^01\/10: /);
+  for (const janela of ['24h', 'hoje', '7d', '30d']) {
+    escolher(doc, 'gastos-janela', janela);
+    for (const i of colunasDe(doc)) assert.doesNotMatch(i.children[0].title, /\d{4}-\d{2}-\d{2}|:[1-9]\d: /);
+  }
 });

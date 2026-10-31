@@ -547,10 +547,21 @@ class HandlerRefresh(http.server.BaseHTTPRequestHandler):
     O handler acorda a passada (threading.Event) e roda o refresh-completo.
     """
 
+    # O listener é single-thread: sem timeout, uma conexão pendurada trava o /refresh para todos.
+    timeout = 5
+
     def log_message(self, format, *args):
         pass
 
     def do_POST(self):
+        # Só o proxy do servidor.py chama este listener, e ele não envia Origin nem Sec-Fetch-Site.
+        # Esses cabeçalhos presentes indicam um navegador falando direto (CSRF/DNS rebinding): 403.
+        if self.headers.get("Origin") is not None or self.headers.get("Sec-Fetch-Site") is not None:
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
         if self.path != "/refresh":
             self.send_response(404)
             self.end_headers()
@@ -564,15 +575,17 @@ class HandlerRefresh(http.server.BaseHTTPRequestHandler):
                 deve_executar = True
 
         if deve_executar:
-            try:
-                subprocess.run(
-                    [sys.executable, "-I", str(comum.RAIZ / "refresh-completo")],
-                    capture_output=True,
-                    timeout=30,
-                    **sem_janela_kwargs()
-                )
-            except Exception as erro:
-                print("coletor: erro ao executar refresh-completo: %s" % erro, file=sys.stderr, flush=True)
+            # No modo --vivo o refresh-completo (quadro.json/tmux) é legado: só acorda o laço.
+            if not getattr(self.server, "modo_vivo", False):
+                try:
+                    subprocess.run(
+                        [sys.executable, "-I", str(comum.RAIZ / "refresh-completo")],
+                        capture_output=True,
+                        timeout=30,
+                        **sem_janela_kwargs()
+                    )
+                except Exception as erro:
+                    print("coletor: erro ao executar refresh-completo: %s" % erro, file=sys.stderr, flush=True)
 
             if hasattr(self.server, "estado_prs") and self.server.estado_prs:
                 self.server.estado_prs.tentado_em = 0.0
@@ -617,6 +630,23 @@ class ServidorRefresh(http.server.HTTPServer):
     allow_reuse_address = True
 
 
+def subir_servidor_refresh(porta, evento_passada, estado_prs, modo_vivo=False):
+    """Sobe o listener de POST /refresh em 127.0.0.1 e devolve o servidor (ou None se a porta falhar)."""
+    try:
+        servidor_http = ServidorRefresh(("127.0.0.1", porta), HandlerRefresh)
+        servidor_http.evento_passada = evento_passada
+        servidor_http.estado_prs = estado_prs
+        servidor_http.ultimo_refresh = 0.0
+        servidor_http.trava_trigger = threading.Lock()
+        servidor_http.modo_vivo = modo_vivo
+        threading.Thread(target=servidor_http.serve_forever, daemon=True).start()
+        return servidor_http
+    except Exception as erro:
+        print("coletor: aviso: servidor HTTP em 127.0.0.1:%d falhou (%s); gatilho /refresh desativado." % (
+            porta, erro), file=sys.stderr, flush=True)
+        return None
+
+
 def main():
     analisador = argparse.ArgumentParser(description="Coletor do Overview-Painel.", add_help=False)
     analisador.add_argument("-h", "--help", "--ajuda", action="store_true")
@@ -651,6 +681,9 @@ def main():
         mapa.setdefault("repos", [])
         estado_prs = EstadoDosPrs(mapa, consultar=not args.sem_gh)
         cache = {}
+        evento_passada = threading.Event()
+        if not args.uma_vez:
+            subir_servidor_refresh(args.porta, evento_passada, estado_prs, modo_vivo=True)
         while True:
             inicio = time.time()
             try:
@@ -661,7 +694,8 @@ def main():
                     return 1
             if args.uma_vez:
                 return 0
-            time.sleep(max(0.1, args.intervalo - (time.time() - inicio)))
+            evento_passada.wait(timeout=max(0.1, args.intervalo - (time.time() - inicio)))
+            evento_passada.clear()
 
     if not args.estado and not args.telas:      # telas de arquivo são teste: não mexem na memória real
         args.estado = str(comum.RAIZ / "estado.json")
@@ -684,19 +718,8 @@ def main():
                 type(erro).__name__, erro), file=sys.stderr, flush=True)
 
     evento_passada = threading.Event()
-    servidor_http = None
     if not args.uma_vez:
-        try:
-            servidor_http = ServidorRefresh(("127.0.0.1", args.porta), HandlerRefresh)
-            servidor_http.evento_passada = evento_passada
-            servidor_http.estado_prs = estado_prs
-            servidor_http.ultimo_refresh = 0.0
-            servidor_http.trava_trigger = threading.Lock()
-            fio_http = threading.Thread(target=servidor_http.serve_forever, daemon=True)
-            fio_http.start()
-        except Exception as erro:
-            print("coletor: aviso: servidor HTTP em 127.0.0.1:%d falhou (%s); gatilho /refresh desativado." % (
-                args.porta, erro), file=sys.stderr, flush=True)
+        subir_servidor_refresh(args.porta, evento_passada, estado_prs)
 
     ultimas = {}
     while True:

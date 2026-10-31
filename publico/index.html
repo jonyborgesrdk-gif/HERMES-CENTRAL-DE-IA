@@ -300,9 +300,24 @@
   .servico small { color: var(--apagado); }
   #gastos-cartao .gastos-controles, #gastos-cartao .gastos-serie { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; padding: 4px 16px 12px; }
   #gastos-cartao .gastos-serie { display: block; }
-  #gastos-cartao .gastos-serie ol { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(28px, 1fr); gap: 4px; list-style: none; margin: 8px 0 0; padding: 0; align-items: end; }
-  #gastos-cartao .gastos-coluna { min-width: 0; font-size: 10px; }
-  #gastos-cartao .gastos-item, #gastos-cartao .gastos-limpar { width: 100%; text-align: left; background: transparent; border: 0; color: inherit; font: inherit; padding: 0; cursor: pointer; }
+  /* Título do gráfico menor que o h2 do cartão, no tom dos demais rótulos. */
+  #gastos-cartao h3 { margin: 0; font-size: 11px; font-weight: 500; color: var(--apagado); }
+  /* Colunas na vertical: a altura da barra vale o custo; o rótulo curto fica embaixo, sem quebrar. */
+  #gastos-cartao .gastos-serie ol { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 3px; list-style: none; margin: 8px 0 0; padding: 0; align-items: end; }
+  #gastos-cartao .gastos-serie li { display: flex; flex-direction: column-reverse; min-width: 0; gap: 3px; }
+  #gastos-cartao .gastos-coluna { display: block; min-width: 0; font-size: 10px; line-height: 1.2; color: var(--apagado); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: clip; font-variant-numeric: tabular-nums; }
+  #gastos-cartao .gastos-serie .gastos-trilho { height: 72px; display: flex; align-items: flex-end; border-radius: 3px; }
+  #gastos-cartao .gastos-serie .gastos-barra { width: 100%; min-height: 0; border-radius: 3px 3px 0 0; }
+  #gastos-cartao .gastos-item { width: 100%; text-align: left; background: transparent; border: 0; color: inherit; font: inherit; padding: 0; cursor: pointer; }
+  /* Controles no tema: seletores e "limpar" com as cores da página (claro e escuro), não o estilo nativo. */
+  #gastos-cartao .gastos-seletor, #gastos-cartao .gastos-limpar {
+    font: inherit; font-size: 12px; color: var(--tinta); background: var(--sup2); color-scheme: inherit;
+    border: 1px solid var(--fio-forte); border-radius: 999px; padding: 4px 12px; cursor: pointer; line-height: 1.3;
+  }
+  #gastos-cartao .gastos-seletor { border-radius: 8px; padding: 4px 8px; }
+  #gastos-cartao .gastos-seletor:hover, #gastos-cartao .gastos-limpar:hover { border-color: var(--tinta2); }
+  #gastos-cartao .gastos-seletor:focus-visible, #gastos-cartao .gastos-limpar:focus-visible, #gastos-cartao .gastos-item:focus-visible { outline: 2px solid var(--foco); outline-offset: 2px; }
+  #gastos-cartao .gastos-limpar { color: var(--tinta2); }
   #gastos-cartao .gastos-item.ativo { outline: 2px solid var(--tinta2); }
   #gastos-cartao .gastos-grupos { padding: 0 16px 12px; }
   #gastos-cartao .gastos-grupos ol { list-style: none; margin: 0; padding: 0; }
@@ -395,6 +410,8 @@ var JANELA_DO_GRUPO_MS = 30 * 60 * 1000;   /* pedidos com até 30 min entre si f
 var VELHO_DEPOIS_DE_S = 60;      // coletor parado há mais de 1 minuto: aviso com destaque
 var dados = null;
 var estadoTransporte = "Conectando…";
+var falhaRefreshAte = 0;       /* até quando o indicador do topo mostra "atualização falhou" (ms) */
+function textoDoVivo() { return Date.now() < falhaRefreshAte ? "atualização falhou" : estadoTransporte; }
 var abertoEm = Date.now();
 /* Os cards de cota ficam em cotas.js (ao lado), que usa o cartao-apoio.js (a aritmética da cápsula e as regras de privacidade).
    Os dois são carregados com a hora na URL para o portal não reaproveitar uma versão antiga. Se um arquivo faltar, a página
@@ -1040,7 +1057,7 @@ function desenhar() {
     var esperando = (Date.now() - abertoEm) / 1000;
     if (esperando > 8) {
       classe(vivo, "sem", true);
-      por(el("vivo-texto"), esc(estadoTransporte));
+      por(el("vivo-texto"), esc(textoDoVivo()));
       por(el("alerta-titulo"), "O painel ainda não recebeu dados");
       por(el("alerta-texto"), "O arquivo dados.js não está ao lado desta página. Suba o coletor com painel.sh no terminal “Painel”.");
       alerta.hidden = false;
@@ -1051,7 +1068,7 @@ function desenhar() {
   var velho = idade > VELHO_DEPOIS_DE_S;
   classe(vivo, "sem", false);
   classe(vivo, "velho", velho);
-  por(el("vivo-texto"), esc(estadoTransporte));
+  por(el("vivo-texto"), esc(textoDoVivo()));
   vivo.title = (velho ? "Parado há " : "Atualizado há ") + ha(idade);
   classe(document.body, "velho-dado", velho);
   if (velho) {
@@ -1147,14 +1164,19 @@ function dispararRefresh() {
     pararGiro();
   }, 15000);
 
-  fetch("http://127.0.0.1:7420/refresh", { method: "POST", mode: "no-cors" })
-    .then(function () {
+  /* Mesma origem: o servidor do painel repassa ao coletor (204 = aceito; 502/503 = coletor não respondeu). */
+  fetch("/refresh", { method: "POST", cache: "no-store" })
+    .then(function (r) {
+      if (!r.ok) throw new Error("refresh " + r.status);
       setTimeout(carregar, 400);
     })
     .catch(function () {
-      btnRefresh.title = "Coletor fora do ar";
+      falhaRefreshAte = Date.now() + 6000;
+      btnRefresh.title = "Atualização falhou: coletor fora do ar";
+      por(el("vivo-texto"), esc(textoDoVivo()));
       carregar();
       setTimeout(pararGiro, 1200);
+      setTimeout(function () { if (!refreshEmAndamento) btnRefresh.title = "Atualizar tudo"; }, 6000);
     });
 }
 if (btnRefresh) btnRefresh.addEventListener("click", dispararRefresh);
@@ -1187,7 +1209,7 @@ el("tema").addEventListener("click", function () {
 
 var fecharTransporte = iniciarTransporte(window, window.__painelDados, function (estado) {
   estadoTransporte = estado;
-  por(el("vivo-texto"), esc(estado));
+  por(el("vivo-texto"), esc(textoDoVivo()));
 }, carregar, LER_A_CADA_MS);
 window.addEventListener("beforeunload", fecharTransporte);
 setInterval(desenhar, 1000);     /* relógios: "atualizado há", "faltam", aviso de dados velhos */
