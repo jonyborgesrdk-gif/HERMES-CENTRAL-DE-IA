@@ -11,6 +11,7 @@ from logging.handlers import RotatingFileHandler
 import mimetypes
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -24,6 +25,14 @@ sys.dont_write_bytecode = True
 RAIZ = Path(__file__).resolve().parent
 PORTA_COLETOR = 7420
 PREFIXO = 'window.__painelDados && window.__painelDados('
+# Exposição opcional via `tailscale serve`; o socket continua preso a 127.0.0.1.
+_HOST_DNS = re.compile(r'(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?')
+
+
+def ler_hosts_extra(valor=None):
+    bruto = os.environ.get('PAINEL_HOSTS', '') if valor is None else valor
+    return frozenset(item for item in (parte.strip().rstrip('.').casefold() for parte in bruto.split(','))
+                     if _HOST_DNS.fullmatch(item) and not item.rsplit('.', 1)[-1].isdigit())
 
 
 def ler_dados(publico):
@@ -40,10 +49,11 @@ class PainelHTTP(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
 
-    def __init__(self, publico, porta=7421, porta_coletor=PORTA_COLETOR):
+    def __init__(self, publico, porta=7421, porta_coletor=PORTA_COLETOR, hosts_extra=None):
         self.publico = Path(publico).resolve()
         self.porta_coletor = porta_coletor
         self.parar = threading.Event()
+        self.hosts_extra = hosts_extra if hosts_extra is not None else ler_hosts_extra()
         super().__init__(('127.0.0.1', porta), Handler)
 
 
@@ -75,9 +85,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def permitido(self):
         host = self.headers.get('Host')
-        hosts = {'127.0.0.1:%d' % self.server.server_port, 'localhost:%d' % self.server.server_port}
+        porta = self.server.server_port
+        hosts = {'127.0.0.1:%d' % porta, 'localhost:%d' % porta}
         origin = self.headers.get('Origin')
-        if host not in hosts or (origin is not None and origin != 'http://' + host):
+        extra = self.server.hosts_extra
+        if host in hosts:
+            valido = origin is None or origin == 'http://' + host
+        else:
+            nome, _, sufixo = (host or '').rpartition(':')
+            nome = nome.casefold() if sufixo == '443' else (host or '').casefold()
+            valido = nome in extra and (origin is None or origin.casefold() == 'https://' + nome)
+        if not valido:
             self.negar()
             return False
         return True
@@ -391,6 +409,9 @@ def main(argv=None):
                 sentinela.fio.start()
         logger.info('subida porta=%d com_coletor=%s sem_gh=%s sem_contas=%s',
                     servidor.server_port, args.com_coletor, args.sem_gh, args.sem_contas)
+        if servidor.hosts_extra:
+            logger.info('hosts extras liberados: %d (%s)', len(servidor.hosts_extra),
+                        ', '.join(sorted(servidor.hosts_extra)))
         print('Overview-Painel: http://127.0.0.1:%d/' % servidor.server_port, flush=True)
         servidor.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:
