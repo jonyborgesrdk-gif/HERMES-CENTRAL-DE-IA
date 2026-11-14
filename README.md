@@ -120,6 +120,7 @@ inventa número.
 | --- | --- |
 | `PAINEL_GH_ORG` | Organização do GitHub usada para repositórios listados sem `dono/` no `agentes.json`. |
 | `PAINEL_QUADRO` | Caminho do `quadro.json` (missão, situação, previsão e pendências). |
+| `PAINEL_PRESENCA` | `1` liga a presença por processo (opt-in, desligada por padrão): produtos de IA com processo principal vivo aparecem como "online" na seção Agentes. Qualquer outro valor mantém a saída antiga. |
 
 O GitHub é consultado pelo `gh` já logado na sua máquina; o painel não guarda token nenhum.
 

@@ -38,7 +38,7 @@
     <div class="file-warning" id="file-warning" role="alert" hidden></div>
 
     <section class="stats" id="stats" aria-label="Resumo do ambiente">
-      <article class="stat"><div class="stat-title">Agentes trabalhando<span data-icon="agents"></span></div><div class="stat-value mono"><span id="k-trab">—</span><small id="k-total">/ —</small></div><div class="stat-foot" id="k-agentes-foot"><span class="dot"></span><span id="k-agentes-texto">sem dados</span></div></article>
+      <article class="stat"><div class="stat-title">Agentes trabalhando<span data-icon="agents"></span></div><div class="stat-value mono"><span id="k-trab">—</span><small id="k-total">/ —</small></div><div class="stat-foot" id="k-agentes-foot"><span class="dot"></span><span id="k-agentes-texto">sem dados</span></div><div class="stat-foot" id="k-online-foot" hidden><span class="dot"></span><span id="k-online-texto"></span></div></article>
       <article class="stat"><div class="stat-title">Consumo da sessão<span data-icon="chart"></span></div><div class="stat-value mono"><span id="k-sessao">—</span><small id="k-sessao-un"></small></div><div class="stat-foot" id="k-sessao-foot"><span id="k-sessao-texto">sem dados de cota do Claude</span></div></article>
       <article class="stat"><div class="stat-title">Gasto no período<span data-icon="wallet"></span></div><div class="stat-value mono sensitive"><span class="currency" id="k-moeda"></span><span id="k-gasto">—</span></div><div class="stat-foot"><span><span class="sensitive" id="k-gasto-usd"></span><span id="k-gasto-texto">sem dados</span></span></div></article>
       <article class="stat"><div class="stat-title">Serviços disponíveis<span data-icon="layers"></span></div><div class="stat-value mono"><span id="k-serv">—</span><small id="k-serv-total">/ —</small></div><div class="stat-foot" id="k-serv-foot"><span class="dot"></span><span id="k-serv-texto">sem dados</span></div></article>
@@ -56,6 +56,7 @@
           <label class="search"><span data-icon="search"></span><input type="search" id="agent-search" placeholder="Buscar agente" aria-label="Buscar agente" autocomplete="off"></label>
         </div>
         <div class="table-scroll"><table><thead><tr><th>AGENTE</th><th>ESTADO</th><th>CONTEXTO</th><th class="mission-col">MISSÃO ATUAL</th><th aria-label="Detalhes"></th></tr></thead><tbody id="agent-rows"></tbody></table><div class="empty-table" id="agent-empty" hidden></div></div>
+        <div class="presence" id="presence" role="group" aria-label="Processos de IA online" hidden><div class="presence-head"><span>Online agora · por processo</span><span class="badge" id="presence-badge"></span></div><div class="table-scroll"><table><tbody id="presence-rows"></tbody></table></div></div>
         <div class="panel-footer"><span data-icon="info"></span>Selecione um agente para ver contexto, missão e PR/CI.</div>
       </section>
 

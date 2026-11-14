@@ -421,6 +421,16 @@ def passada(mapa, estado_prs, estado_cotas, fio_da_sonda, ultimas, args, contas=
     return dados
 
 
+def extras_ativos():
+    """Fontes opt-in ligadas agora; cada variável liga só com o valor exato '1'."""
+    extras = ()
+    if os.environ.get('PAINEL_GASTOS', '0') == '1':
+        extras += ("whatsapp", "gastos_hermes")
+    if os.environ.get('PAINEL_PRESENCA', '0') == '1':
+        extras += ("presenca_processos",)
+    return extras
+
+
 def fontes_vivas(sem_contas=False):
     from fontes import eventos_hooks, transcripts_claude, sessoes_codex, cota_claude
     from fontes import maestri_wire, processos, servicos
@@ -431,6 +441,9 @@ def fontes_vivas(sem_contas=False):
     if os.environ.get('PAINEL_GASTOS', '0') == '1':
         from fontes import whatsapp, gastos_hermes
         fontes.update(whatsapp=whatsapp.ler, gastos_hermes=gastos_hermes.ler)
+    if os.environ.get('PAINEL_PRESENCA', '0') == '1':
+        from fontes import presenca_processos
+        fontes["presenca_processos"] = presenca_processos.ler
     return fontes
 
 
@@ -445,8 +458,8 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
     cache = {} if cache is None else cache
     leituras, situacao = {}, {}
     intervalos = {"servicos": 10, "processos": 5, "cota_claude": 300,
-                  "whatsapp": 10, "gastos_hermes": 60}
-    extras = ("whatsapp", "gastos_hermes") if os.environ.get('PAINEL_GASTOS', '0') == '1' else ()
+                  "whatsapp": 10, "gastos_hermes": 60, "presenca_processos": 5}
+    extras = extras_ativos()
     for nome in ("eventos_hooks", "sessoes_codex", "maestri_wire", "cota_claude", "processos", "servicos") + extras:
         anterior = cache.get(nome)
         # A cadência não pode estender a retenção das fontes opt-in além dos 300 s.

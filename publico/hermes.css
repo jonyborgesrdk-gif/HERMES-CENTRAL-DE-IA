@@ -108,6 +108,9 @@ tbody tr:last-child td{border-bottom:0}
 .status.idle{border:1px solid var(--line);border-radius:5px;padding:2px 6px}
 .status.good{color:var(--green)}
 .status.bad{color:var(--red)}
+.stat-foot[hidden],.presence[hidden]{display:none}
+.presence{border-top:1px solid var(--line)}
+.presence-head{display:flex;align-items:center;gap:8px;padding:10px 20px;font-size:9px;color:var(--faint)}
 .context-cell{min-width:90px;display:flex;align-items:center;gap:7px;color:var(--muted)}
 .track{height:4px;background:#353530;border-radius:10px;overflow:hidden;width:100%}
 .track>span{display:block;background:var(--accent);height:100%;border-radius:10px}

@@ -319,6 +319,24 @@ function fontesComProblema(dados) {
     return n + " (" + (f.desatualizado === true ? "dado retido" : texto(f.erro) || "sem leitura") + ")";
   });
 }
+/* Presença por processo: produtos de IA com processo vivo; atividade desconhecida. O rótulo vem do dado (só validado aqui). */
+function presencaDe(dados) {
+  var p = dados && dados.presenca_processos;
+  if (!p || typeof p !== "object" || p.estado !== "ok") return { ativa: false, itens: [], total: 0 };
+  var familias = ["claude", "codex", "grok", "hermes", "cursor", "copilot", "maestri"], vistos = Object.create(null), itens = [], total = 0;
+  lista(p.itens).forEach(function (it) {
+    if (!it || typeof it !== "object") return;
+    var produto = it.produto, rotulo = it.rotulo, n = it.instancias;
+    if (typeof produto !== "string" || !produto || produto.length > 40) return;
+    if (typeof rotulo !== "string" || !rotulo || rotulo.length > 60) return;
+    if (!Number.isInteger(n) || n < 1 || vistos[produto]) return;
+    vistos[produto] = true;
+    itens.push({ produto: produto, rotulo: rotulo, familia: familias.indexOf(it.familia) >= 0 ? it.familia : "outra",
+                 tipo: it.tipo === "cli" || it.tipo === "app" ? it.tipo : "outra", instancias: n });
+    total += n;
+  });
+  return { ativa: true, itens: itens, total: total };
+}
 function processosDe(dados) {
   var p = objeto(dados && dados.processos);
   return Object.keys(p).sort().map(function (n) { return n + " × " + texto(p[n]); });
@@ -571,6 +589,36 @@ function criarApp(doc, win, opcoes) {
         : !agentes.length ? "Nenhum agente na leitura do coletor."
         : estado.filtroAgente === "ativos" && !estado.busca ? "Nenhum agente em atividade agora." : "Nenhum agente encontrado.");
     }
+  }
+
+  /* ---- presença por processo (aditiva: não entra na lista de sessões nem nos números de agentes; não depende de abas nem da busca) ---- */
+  function criarLinhaPresenca(chave) {
+    var tr = el(doc, "tr", "presence-row"), r = tr._r = {};
+    var td1 = el(doc, "td"), nome = el(doc, "span", "agent-name");
+    r.logo = el(doc, "span", "agent-logo");
+    var quem = el(doc, "span");
+    r.rotulo = el(doc, "strong"); r.detalhe = el(doc, "small");
+    quem.appendChild(r.rotulo); quem.appendChild(r.detalhe);
+    nome.appendChild(r.logo); nome.appendChild(quem); td1.appendChild(nome);
+    var td2 = el(doc, "td"), status = el(doc, "span", "status good");
+    status.appendChild(el(doc, "span", "dot")); status.appendChild(el(doc, "span", null, "online"));
+    td2.appendChild(status); td2.appendChild(el(doc, "small", "status-sub", "atividade desconhecida"));
+    tr.appendChild(td1); tr.appendChild(td2);
+    return tr;
+  }
+  function atualizarLinhaPresenca(tr, item) {
+    var r = tr._r;
+    if (r.familia !== item.familia) { r.familia = item.familia; r.logo.replaceChildren(icone(doc, iconeDoAgente(item.familia))); }
+    setTxt(r.rotulo, m(item.rotulo));
+    var tipo = item.tipo === "cli" ? "CLI" : item.tipo === "app" ? "aplicativo" : "";
+    setTxt(r.detalhe, [tipo, item.instancias > 1 ? item.instancias + " instâncias" : ""].filter(Boolean).join(" · "));
+  }
+  function desenharPresenca(p) {
+    $("presence").hidden = !(p.ativa && p.itens.length > 0);
+    sincronizar($("presence-rows"), p.itens, function (item) { return item.produto; }, criarLinhaPresenca, atualizarLinhaPresenca);
+    setTxt($("presence-badge"), plural(p.total, "processo", "processos"));
+    $("k-online-foot").hidden = !p.ativa;
+    setTxt($("k-online-texto"), p.total > 0 ? plural(p.total, "processo de IA online", "processos de IA online") : "nenhum processo de IA online");
   }
 
   /* ---- limites de uso ---- */
@@ -891,6 +939,7 @@ function criarApp(doc, win, opcoes) {
     try { desenharChip(); } catch (e) { registrarErro("o indicador do topo", e); }
     secao("stats", "de resumo", function () { desenharKpis(agentes(), contas(), servicos(), gastos()); });
     secao("agents", "de agentes", function () { desenharAgentes(agentes()); });
+    secao("presence", "de presença por processo", function () { desenharPresenca(presencaDe(d)); });
     secao("limits", "de limites de uso", function () { desenharLimites(contas()); });
     secao("usage", "de gastos", function () { desenharGastos(gastos()); });
     secao("attention", "Precisa de você", function () { desenharPendencias(pendenciasDe(d)); });
@@ -1072,7 +1121,7 @@ var api = {
   numero: numero, mascararEmails: mascararEmails, snapshotParaExportar: snapshotParaExportar, haSegundos: haSegundos, duracao: duracao, quando: quando,
   resetEmPtBr: resetEmPtBr, textoReset: textoReset, dinheiro: dinheiro, fmtUsd: fmtUsd, fmtBrl: fmtBrl, fmtTokens: fmtTokens, maxBonito: maxBonito,
   agentesDe: agentesDe, contasDe: contasDe, consumoClaude5h: consumoClaude5h, gastosDe: gastosDe, servicosDe: servicosDe, pendenciasDe: pendenciasDe,
-  fontesComProblema: fontesComProblema, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
+  fontesComProblema: fontesComProblema, presencaDe: presencaDe, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 else {

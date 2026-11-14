@@ -285,7 +285,7 @@ test('contrato: a página só lê, na raiz do dados.json, campos que o coletor p
   a.abrirModal({ tipo: 'agente', chave: 'sess-1' }); a.abrirModal({ tipo: 'agente', chave: 'sess-2' }); a.abrirModal({ tipo: 'servico', chave: 'whatsapp' }); a.abrirModal({ tipo: 'conta', chave: 'claude:abc' });
   const fora = [...lidos].filter((k) => !(k in fixture) && k !== 'toJSON');
   assert.deepEqual(fora, []);
-  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
+  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
 });
 
 /* ---------- segurança e privacidade ---------- */
@@ -621,4 +621,160 @@ test('privacidade ligada: nenhum title/aria-label leva valor monetário ou e-mai
   assert.ok(doc.getElementById('breakdown').descendentes().some((e) => /US\$ \d/.test(e.getAttribute('title') || '')));
   a.alternarPrivacidade();
   assert.ok(!doc.getElementById('breakdown').descendentes().some((e) => e.getAttribute('title') !== null));
+});
+
+/* ---------- E16: presença por processo (aditiva; não muda os elementos que já existem) ---------- */
+const linhasPresenca = (doc) => doc.getElementById('presence-rows').children;
+const detalhePresenca = (tr) => nb(tr.descendentes().find((e) => e.tag === 'small').textContent);
+test('presencaDe: ausente/erro = inativa; válida soma instâncias; inválidos descartados; repetido fica o primeiro; família e tipo desconhecidos viram "outra"', () => {
+  const inativa = { ativa: false, itens: [], total: 0 };
+  [undefined, null, {}, { presenca_processos: null }, { presenca_processos: 'ok' }, { presenca_processos: [] }, { presenca_processos: { estado: 'erro' } },
+   { presenca_processos: { itens: clone(fixture.presenca_processos.itens) } }].forEach((d) => assert.deepEqual(Hermes.presencaDe(d), inativa));
+  const p = Hermes.presencaDe(fixture);
+  assert.equal(p.ativa, true); assert.equal(p.total, 3);
+  assert.deepEqual(p.itens.map((i) => [i.produto, i.rotulo, i.familia, i.tipo, i.instancias]), [['claude_cli', 'Claude Code CLI', 'claude', 'cli', 2], ['grok_bot', 'Grok Bot', 'grok', 'app', 1]]);
+  assert.deepEqual(Hermes.presencaDe({ presenca_processos: { estado: 'ok' } }), { ativa: true, itens: [], total: 0 });
+  const sujo = Hermes.presencaDe({ presenca_processos: { estado: 'ok', itens: [
+    { produto: 'sem_rotulo', familia: 'claude', tipo: 'cli', instancias: 1 },
+    { produto: 'rotulo_vazio', rotulo: '', familia: 'claude', tipo: 'cli', instancias: 1 },
+    { produto: 'rotulo_numero', rotulo: 7, familia: 'claude', tipo: 'cli', instancias: 1 },
+    { produto: 'zero', rotulo: 'Zero', familia: 'claude', tipo: 'cli', instancias: 0 },
+    { produto: 'negativo', rotulo: 'Negativo', familia: 'claude', tipo: 'cli', instancias: -1 },
+    { produto: 'texto', rotulo: 'Texto', familia: 'claude', tipo: 'cli', instancias: '2' },
+    { produto: 'fracao', rotulo: 'Fração', familia: 'claude', tipo: 'cli', instancias: 1.5 },
+    { produto: 'nan', rotulo: 'NaN', familia: 'claude', tipo: 'cli', instancias: NaN },
+    'lixo', null, 7, ['x'],
+    { produto: '', rotulo: 'Produto vazio', instancias: 1 },
+    { produto: 12, rotulo: 'Produto número', instancias: 1 },
+    { produto: 'p'.repeat(41), rotulo: 'Produto longo', instancias: 1 },
+    { produto: 'rotulo_longo', rotulo: 'r'.repeat(61), instancias: 1 },
+    { produto: 'p'.repeat(40), rotulo: 'r'.repeat(60), familia: 'cursor', tipo: 'app', instancias: 1 },
+    { produto: 'dup', rotulo: 'Primeiro', familia: 'codex', tipo: 'app', instancias: 2 },
+    { produto: 'dup', rotulo: 'Segundo', familia: 'claude', tipo: 'cli', instancias: 9 },
+    { produto: 'estranho', rotulo: 'Estranho', familia: 'gemini', tipo: 'daemon', instancias: 1 },
+    { produto: 'sem_familia', rotulo: 'Sem família', instancias: 3 },
+    { produto: '__proto__', rotulo: 'Proto', familia: 'constructor', tipo: 'toString', instancias: 1 }
+  ] } });
+  assert.equal(sujo.ativa, true);
+  assert.deepEqual(sujo.itens.map((i) => [i.produto, i.rotulo, i.familia, i.tipo, i.instancias]), [
+    ['p'.repeat(40), 'r'.repeat(60), 'cursor', 'app', 1], ['dup', 'Primeiro', 'codex', 'app', 2], ['estranho', 'Estranho', 'outra', 'outra', 1],
+    ['sem_familia', 'Sem família', 'outra', 'outra', 3], ['__proto__', 'Proto', 'outra', 'outra', 1]]);
+  assert.equal(sujo.total, 8);
+  sujo.itens.forEach((i) => assert.deepEqual(Object.keys(i).sort(), ['familia', 'instancias', 'produto', 'rotulo', 'tipo']));
+});
+test('presença: render com a fixture mostra bloco e linha do cartão; k-trab, k-total, nav-agentes, abas e agent-rows iguais a sem a chave', () => {
+  const semChave = clone(fixture); delete semChave.presenca_processos; delete semChave.fontes.presenca_processos;
+  const antes = app(); antes.a.receber(semChave);
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  assert.equal(doc.getElementById('presence').hidden, false);
+  const linhas = linhasPresenca(doc);
+  assert.equal(linhas.length, 2);
+  assert.equal(txt('presence-badge'), '3 processos');
+  assert.equal(doc.getElementById('k-online-foot').hidden, false);
+  assert.equal(txt('k-online-texto'), '3 processos de IA online');
+  assert.equal(nb(linhas[0].textContent), 'Claude Code CLICLI · 2 instânciasonlineatividade desconhecida');
+  assert.equal(nb(linhas[1].textContent), 'Grok Botaplicativoonlineatividade desconhecida');
+  assert.equal(linhas[0].className, 'presence-row');
+  assert.ok(linhas[0].descendentes().some((e) => e.className === 'status good'));
+  assert.ok(!linhas[0].descendentes().some((e) => e.tag === 'button' || 'aria-haspopup' in e.attrs), 'linha de presença não é botão');
+  linhas[0].click(); assert.equal(a.estado.modal, null);
+  assert.equal(txt('k-trab'), '1'); assert.equal(txt('k-total'), '/ 3'); assert.equal(txt('nav-agentes'), '3');
+  assert.equal(doc.getElementById('agent-rows').children.length, 3);
+  assert.equal(doc.getElementById('agent-rows').children.length, antes.doc.getElementById('agent-rows').children.length);
+  ['k-trab', 'k-total', 'k-agentes-texto', 'nav-agentes', 'agents-badge', 'tab-todos', 'tab-ativos', 'tab-ociosos', 'agent-rows', 'agent-empty']
+    .forEach((id) => {
+      assert.equal(txt(id), antes.txt(id), 'mudou ' + id);
+      assert.equal(doc.getElementById(id).hidden, antes.doc.getElementById(id).hidden, 'mudou a visibilidade de ' + id);
+    });
+  assert.equal(antes.doc.getElementById('presence').hidden, true); assert.equal(antes.doc.getElementById('k-online-foot').hidden, true);
+  // o bloco não depende das abas nem da busca
+  doc.querySelectorAll('[data-agent-filter]').find((b) => b.attrs['data-agent-filter'] === 'ociosos').click();
+  const busca = doc.getElementById('agent-search'); busca.emit('input', { target: Object.assign(busca, { value: 'zzz' }) });
+  assert.equal(doc.getElementById('agent-rows').children.length, 0);
+  assert.equal(linhasPresenca(doc).length, 2); assert.equal(doc.getElementById('presence').hidden, false);
+});
+test('presença: sem a chave, com estado erro ou antes da primeira leitura, bloco e linha do cartão ocultos e tabela vazia', () => {
+  assert.match(html, /<div class="stat-foot" id="k-online-foot" hidden>/);
+  assert.match(html, /<div class="presence" id="presence" role="group" aria-label="Processos de IA online" hidden>/);
+  const { a, doc } = app();
+  const oculto = (quando) => {
+    assert.equal(doc.getElementById('presence').hidden, true, 'bloco visível ' + quando);
+    assert.equal(doc.getElementById('k-online-foot').hidden, true, 'linha do cartão visível ' + quando);
+    assert.equal(linhasPresenca(doc).length, 0, 'linhas de presença ' + quando);
+  };
+  oculto('antes da primeira leitura');
+  const sem = clone(fixture); delete sem.presenca_processos;
+  a.receber(sem); oculto('sem a chave');
+  a.receber(clone(fixture)); assert.equal(linhasPresenca(doc).length, 2);
+  a.receber(clone(sem)); oculto('quando a chave some');
+  a.receber(clone(fixture));
+  a.receber(Object.assign(clone(fixture), { presenca_processos: { estado: 'erro' } })); oculto('com estado erro');
+});
+test('presença: estado ok sem itens esconde o bloco e mostra "nenhum processo de IA online" no cartão', () => {
+  const { a, doc, txt } = app();
+  a.receber(Object.assign(clone(fixture), { presenca_processos: { estado: 'ok', itens: [], ilegiveis: 2 } }));
+  assert.equal(doc.getElementById('presence').hidden, true);
+  assert.equal(doc.getElementById('k-online-foot').hidden, false);
+  assert.equal(txt('k-online-texto'), 'nenhum processo de IA online');
+  assert.equal(linhasPresenca(doc).length, 0);
+  a.receber(Object.assign(clone(fixture), { presenca_processos: { estado: 'ok', itens: [{ produto: 'x', instancias: 1 }] } }));   // só item inválido
+  assert.equal(doc.getElementById('presence').hidden, true); assert.equal(txt('k-online-texto'), 'nenhum processo de IA online');
+});
+test('presença: rótulo hostil aparece como texto literal e nenhum elemento é criado a partir dele', () => {
+  const { a, doc, txt } = app();
+  const d = clone(fixture);
+  d.presenca_processos.itens = [{ produto: 'hostil', rotulo: '<img src=x onerror=alert(1)>', familia: '<script>', tipo: '<b>', instancias: 2 }];
+  d.agentes = [];                                                   // só o rótulo da presença traz HTML nesta leitura
+  a.receber(d);
+  const rows = doc.getElementById('presence-rows');
+  assert.equal(linhasPresenca(doc).length, 1);
+  assert.equal(nb(rows.textContent), '<img src=x onerror=alert(1)>2 instânciasonlineatividade desconhecida');
+  assert.match(txt('presence'), /<img src=x onerror=alert\(1\)>/);
+  ['img', 'script', 'b'].forEach((t) => assert.ok(!rows.descendentes().some((e) => e.tag === t), 'elemento <' + t + '> criado a partir do rótulo'));
+  assert.equal(doc.documentElement.descendentes().filter((e) => e.tag === 'img').length, 0);
+  assert.ok(!rows.descendentes().some((e) => Object.keys(e.attrs).some((k) => /^on/.test(k))));
+});
+test('presença: atualização ao vivo remove o produto que saiu, atualiza instâncias, troca o ícone e reaproveita a linha', () => {
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  const primeira = linhasPresenca(doc)[0];
+  const icone = (tr) => tr.descendentes().find((e) => e.tag === 'path').attrs.d;
+  assert.equal(detalhePresenca(linhasPresenca(doc)[0]), 'CLI · 2 instâncias'); assert.equal(detalhePresenca(linhasPresenca(doc)[1]), 'aplicativo');
+  assert.equal(icone(primeira), Hermes.ICONES.claude[0][1].d);
+  const d1 = clone(fixture);
+  d1.presenca_processos.itens = d1.presenca_processos.itens.filter((i) => i.produto !== 'grok_bot'); d1.presenca_processos.itens[0].instancias = 5;
+  a.receber(d1);
+  assert.equal(linhasPresenca(doc).length, 1); assert.ok(linhasPresenca(doc)[0] === primeira, 'a linha foi recriada');
+  assert.doesNotMatch(txt('presence-rows'), /Grok Bot/);
+  assert.equal(detalhePresenca(primeira), 'CLI · 5 instâncias');
+  assert.equal(txt('presence-badge'), '5 processos'); assert.equal(txt('k-online-texto'), '5 processos de IA online');
+  const d2 = clone(fixture); d2.presenca_processos.itens.forEach((i) => { i.instancias = 1; });
+  a.receber(d2);
+  assert.equal(linhasPresenca(doc).length, 2); assert.ok(linhasPresenca(doc)[0] === primeira);
+  assert.equal(detalhePresenca(linhasPresenca(doc)[0]), 'CLI'); assert.equal(detalhePresenca(linhasPresenca(doc)[1]), 'aplicativo');
+  assert.equal(txt('presence-badge'), '2 processos');
+  const d3 = clone(fixture); d3.presenca_processos.itens = [Object.assign(d3.presenca_processos.itens[0], { familia: 'codex', instancias: 1 })];
+  a.receber(d3);
+  assert.equal(icone(linhasPresenca(doc)[0]), Hermes.ICONES.code[0][1].d);
+  assert.equal(txt('presence-badge'), '1 processo'); assert.equal(txt('k-online-texto'), '1 processo de IA online');
+  const d4 = clone(fixture);
+  d4.presenca_processos.itens = [{ produto: 'novo', rotulo: 'Novo', familia: 'nova', tipo: 'servico', instancias: 4 }, { produto: 'unico', rotulo: 'Único', instancias: 1 }];
+  a.receber(d4);
+  assert.equal(detalhePresenca(linhasPresenca(doc)[0]), '4 instâncias'); assert.equal(detalhePresenca(linhasPresenca(doc)[1]), '');
+});
+test('presença que lança não impede KPIs nem a lista de sessões; o aviso fica só no bloco de presença', () => {
+  const d = clone(fixture);
+  Object.defineProperty(d.presenca_processos, 'itens', { enumerable: true, get() { throw new Error('boom presença'); } });
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => {
+    assert.doesNotThrow(() => a.receber(d));
+    assert.equal(erros.length, 1); assert.match(String(erros[0][0]), /presença por processo/); assert.match(String(erros[0][1]), /boom presença/);
+  });
+  assert.equal(txt('k-trab'), '1'); assert.equal(txt('k-total'), '/ 3'); assert.equal(txt('nav-agentes'), '3');
+  assert.equal(doc.getElementById('agent-rows').children.length, d.agentes.length);
+  assert.equal(doc.getElementById('agents')._avisoSecao, undefined); assert.equal(doc.getElementById('stats')._avisoSecao, undefined);
+  assert.match(txt('services-grid'), /Hindsight/); assert.match(txt('providers'), /\S/); assert.match(txt('cost-total'), /\d/);
+  assert.match(txt('presence'), /não foi possível desenhar esta seção/);
+  silenciarErros(() => a.receber(clone(fixture)));                       // na próxima leitura boa o aviso some
+  assert.doesNotMatch(txt('presence'), /não foi possível desenhar/);
+  assert.equal(doc.getElementById('presence').hidden, false); assert.equal(linhasPresenca(doc).length, 2);
 });

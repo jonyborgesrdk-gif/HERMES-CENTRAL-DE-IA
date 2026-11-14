@@ -238,6 +238,13 @@
    "hora": 1793433672.0,
    "ultima_leitura_ok": 1793433672.0,
    "desatualizado": false
+  },
+  "presenca_processos": {
+   "ok": true,
+   "erro": null,
+   "hora": 1793433709.0,
+   "ultima_leitura_ok": 1793433709.0,
+   "desatualizado": false
   }
  },
  "whatsapp": {
@@ -631,5 +638,25 @@
     }
    ]
   }
+ },
+ "presenca_processos": {
+  "estado": "ok",
+  "itens": [
+   {
+    "produto": "claude_cli",
+    "rotulo": "Claude Code CLI",
+    "familia": "claude",
+    "tipo": "cli",
+    "instancias": 2
+   },
+   {
+    "produto": "grok_bot",
+    "rotulo": "Grok Bot",
+    "familia": "grok",
+    "tipo": "app",
+    "instancias": 1
+   }
+  ],
+  "ilegiveis": 0
  }
 }
