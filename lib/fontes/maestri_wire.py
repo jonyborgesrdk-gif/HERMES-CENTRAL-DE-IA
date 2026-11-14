@@ -61,7 +61,10 @@ def ler(ctx):
             feed = http_get(ctx, base + '/' + quote(str(w['id']), safe='') + '/feed', 3, headers)
             itens = feed.get('items', []) if isinstance(feed, dict) else feed
             for item in itens:
-                if item.get('type') != 'terminal' and 'agentType' not in item:
+                # Formato novo do feed: kind == 'terminal', campos em item['terminal'];
+                # os antigos (type == 'terminal' ou agentType no item) seguem aceitos.
+                if (item.get('kind') != 'terminal' and item.get('type') != 'terminal'
+                        and 'agentType' not in item):
                     continue
                 terminal = interpretar(item, w.get('name', w['id']))
                 terminal['pasta'], erro = _pasta(ctx, terminal['id'], headers)

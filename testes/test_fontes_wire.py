@@ -95,3 +95,72 @@ class WireTests(unittest.TestCase):
         self.assertIn('erro', r)
         maestri_wire.ler(self.ctx)
         self.assertEqual(sum(url.endswith('/settings') for url, _, _ in self.calls), 1)
+
+    def _feed(self, itens):
+        def http(url, **kw):
+            self.calls.append((url, kw.get('timeout'), kw.get('headers')))
+            if url.endswith('workspaces'):
+                return {'workspaces': [{'id': 'abc', 'name': 'Exemplo'}]}
+            if url.endswith('/settings'):
+                return {'workingDirectory': 'C:/exemplo'}
+            return {'items': itens}
+        self.ctx['http_get'] = http
+
+    def test_feed_formato_novo_kind_terminal(self):
+        self.ativar()
+        self._feed([{'kind': 'terminal', 'terminal': {
+            'id': 't-novo', 'name': 'Agente', 'agentType': 'claude_code', 'status': 'idle',
+            'isRunning': True, 'needsAttention': True, 'preview': ['linha 1', 'linha 2']}},
+            {'kind': 'note', 'note': {'id': 'n1'}}])
+        r = maestri_wire.ler(self.ctx)
+        self.assertTrue(r['ligado'])
+        self.assertNotIn('erro', r)
+        self.assertEqual(len(r['terminais']), 1)
+        t = r['terminais'][0]
+        self.assertEqual(t['id'], 't-novo')
+        self.assertEqual(t['nome'], 'Agente')
+        self.assertEqual(t['tipo'], 'claude_code')
+        self.assertEqual(t['status'], 'idle')
+        self.assertIs(t['rodando'], True)
+        self.assertIs(t['atencao'], True)
+        self.assertIs(t['descarregado'], False)
+        self.assertEqual(t['preview'], ['linha 1', 'linha 2'])
+        self.assertEqual(t['tela'], 'ok')
+        self.assertEqual(t['workspace'], 'Exemplo')
+        self.assertEqual(t['pasta'], 'C:/exemplo')
+
+    def test_feed_formatos_antigos_continuam_aceitos(self):
+        self.ativar()
+        self._feed([
+            {'type': 'terminal', 'terminal': {'id': 'a', 'agentType': 'codex', 'name': 'Aninhado'}},
+            {'type': 'terminal', 'id': 'b', 'agentType': 'custom', 'name': 'Plano'},
+            {'id': 'c', 'agentType': 'codex', 'name': 'SemType'}])
+        r = maestri_wire.ler(self.ctx)
+        self.assertEqual([t['id'] for t in r['terminais']], ['a', 'b', 'c'])
+        self.assertEqual([t['tipo'] for t in r['terminais']], ['codex', 'custom', 'codex'])
+
+    def test_feed_misto_novo_e_antigo(self):
+        self.ativar()
+        self._feed([
+            {'kind': 'terminal', 'terminal': {'id': 'n', 'agentType': 'codex', 'name': 'Novo'}},
+            {'type': 'terminal', 'terminal': {'id': 'v', 'agentType': 'codex', 'name': 'Velho'}}])
+        r = maestri_wire.ler(self.ctx)
+        self.assertEqual([t['id'] for t in r['terminais']], ['n', 'v'])
+
+    def test_itens_que_nao_sao_terminal_sao_ignorados(self):
+        self.ativar()
+        self._feed([{'kind': 'note', 'note': {'id': 'n1'}},
+                    {'kind': 'portal', 'portal': {'id': 'p1'}}, {'outro': 1}])
+        r = maestri_wire.ler(self.ctx)
+        self.assertEqual(r['terminais'], [])
+        self.assertTrue(r['ligado'])
+        self.assertNotIn('erro', r)
+        self.assertFalse(any(url.endswith('/settings') for url, _, _ in self.calls))
+
+    def test_formato_novo_mascara_segredo_da_tela(self):
+        self.ativar()
+        self._feed([{'kind': 'terminal', 'terminal': {
+            'id': 't', 'agentType': 'codex', 'name': 'Agente', 'preview': ['sk-' + 'a' * 40]}}])
+        r = maestri_wire.ler(self.ctx)
+        self.assertEqual(len(r['terminais']), 1)
+        self.assertNotIn('sk-' + 'a' * 40, str(r))
