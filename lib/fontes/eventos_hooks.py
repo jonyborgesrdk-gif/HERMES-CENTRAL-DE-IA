@@ -19,6 +19,8 @@ def ler(ctx):
                     continue
                 if not isinstance(evento, dict) or not evento.get('session_id'):
                     continue
+                if evento.get('ferramenta', 'claude') != 'claude':
+                    continue    # evento de outro emissor não cria, não sobrescreve nem encerra sessão do Claude
                 chave = evento['session_id']
                 if evento.get('evento') == 'SessionEnd':
                     sessoes.pop(chave, None)

@@ -13,6 +13,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'lib'))
 from leitor import mascarar
 
 
+_CHAVES_GROK = ('hookEventName', 'sessionId', 'workspaceRoot')
+
+
+def emissor(entrada, ambiente):
+    """Quem disparou o hook: 'grok', 'claude' ou 'desconhecida'. Só olha chaves e uma variável; nada é gravado daqui."""
+    if not isinstance(entrada, dict):
+        return 'desconhecida'
+    if ambiente.get('GROK_HOOK_EVENT') or any(chave in entrada for chave in _CHAVES_GROK):
+        return 'grok'
+    caminho = entrada.get('transcript_path')
+    if isinstance(caminho, str) and caminho.strip():
+        return 'claude'
+    return 'desconhecida'
+
+
 def _gravar(argv, stdin, deadline):
     try:
         args = sys.argv[1:] if argv is None else argv
@@ -20,7 +35,7 @@ def _gravar(argv, stdin, deadline):
         pasta = Path(os.environ.get('PAINEL_IAS_DIR') or
                      Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'painel-ias')
         evento = {'hora': datetime.now().astimezone().isoformat(),
-                  'ferramenta': 'claude', 'evento': args[0] if args else entrada['hook_event_name']}
+                  'ferramenta': emissor(entrada, os.environ), 'evento': args[0] if args else entrada['hook_event_name']}
         for chave in ('session_id', 'cwd', 'transcript_path', 'tool_name', 'message'):
             if chave in entrada:
                 evento[chave] = entrada[chave]

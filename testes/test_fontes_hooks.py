@@ -157,3 +157,43 @@ class HooksTests(unittest.TestCase):
 
     def test_sem_path_nao_e_erro_de_leitura(self):
         self.assertIsNone(transcripts_claude.ler({}))
+
+    def linhas(self, *itens):
+        (self.pasta / 'eventos.jsonl').write_text(
+            '\n'.join(json.dumps(dict({'session_id': 'abc'}, **i)) for i in itens), encoding='utf-8')
+
+    def test_ferramenta_grok_ignorada(self):
+        self.linhas({'evento': 'SessionStart', 'ferramenta': 'grok', 'hora': 100000})
+        self.assertEqual(eventos_hooks.ler(self.ctx)['sessoes'], [])
+
+    def test_ferramenta_invalida_ignorada(self):
+        for valor in ('desconhecida', None, 123):
+            with self.subTest(valor=valor):
+                self.linhas({'evento': 'SessionStart', 'ferramenta': valor, 'hora': 100000})
+                self.assertEqual(eventos_hooks.ler(self.ctx)['sessoes'], [])
+
+    def test_ferramenta_grok_com_transcript_recente_ignorada(self):
+        self.crescer()
+        self.linhas({'evento': 'SessionStart', 'ferramenta': 'grok', 'hora': 99999,
+                     'transcript_path': str(self.transcript)})
+        self.assertEqual(eventos_hooks.ler(self.ctx)['sessoes'], [])
+
+    def test_legado_sem_ferramenta_vale_claude(self):
+        self.linhas({'evento': 'SessionStart', 'hora': 99940})
+        self.assertEqual(len(eventos_hooks.ler(self.ctx)['sessoes']), 1)
+
+    def test_session_end_do_grok_nao_encerra_sessao_do_claude(self):
+        self.linhas({'evento': 'SessionStart', 'ferramenta': 'claude', 'hora': 99990},
+                    {'evento': 'SessionEnd', 'ferramenta': 'grok', 'hora': 99995})
+        self.assertEqual(len(eventos_hooks.ler(self.ctx)['sessoes']), 1)
+
+    def test_stop_do_grok_nao_sobrescreve_permissao_do_claude(self):
+        self.linhas({'evento': 'PermissionRequest', 'ferramenta': 'claude', 'hora': 99990},
+                    {'evento': 'Stop', 'ferramenta': 'grok', 'hora': 99995})
+        self.assertEqual(self.estado(), 'esperando permissão')
+
+    def test_ttl_intacto_com_ferramenta_claude(self):
+        self.linhas({'evento': 'SessionStart', 'ferramenta': 'claude', 'hora': 100000 - 119})
+        self.assertEqual(len(eventos_hooks.ler(self.ctx)['sessoes']), 1)
+        self.linhas({'evento': 'SessionStart', 'ferramenta': 'claude', 'hora': 100000 - 121})
+        self.assertEqual(eventos_hooks.ler(self.ctx)['sessoes'], [])
