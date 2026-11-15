@@ -132,6 +132,7 @@ inventa número.
 | `PAINEL_COTA_CODEX_LOCAL` | `1` liga a leitura local da cota do Codex (opt-in, desligada por padrão): o último uso observado nos arquivos de sessão de `~/.codex/sessions` aparece no bloco "Observado em arquivos locais" da seção Limites de uso, com o horário da observação. Sem rede. Qualquer outro valor mantém a saída antiga. |
 | `PAINEL_COTA_GROK_BOT` | `1` liga a leitura local do uso do Grok Bot (opt-in, desligada por padrão): percentual e próximo reset do último registro local do aplicativo, com o horário da leitura. Sem rede. Qualquer outro valor mantém a saída antiga. |
 | `PAINEL_COTA_CURSOR` | `1` liga a leitura local do plano do Cursor (opt-in, desligada por padrão): mostra o plano e a situação da assinatura guardados em cache pelo aplicativo e avisa que não há dados de cota. Sem rede. Qualquer outro valor mantém a saída antiga. O banco do Cursor é lido sem trava e sem gravar nada, com o aplicativo aberto ou fechado; com ele aberto, uma mudança de plano pode demorar a aparecer. |
+| `PAINEL_VIGILANTE` | `1` liga o bloco do Vigilante 2 (opt-in, desligado por padrão): o painel lê só `%LOCALAPPDATA%\vigilante2\ultimo.json` e mostra, na seção Saúde dos serviços, contagens, alertas ativos por tipo e se o Vigilante 2 está parado (sem atualização há mais de 3 min). Qualquer outro valor mantém a saída antiga. |
 
 O GitHub é consultado pelo `gh` já logado na sua máquina; o painel não guarda token nenhum.
 

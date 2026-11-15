@@ -260,6 +260,13 @@
    "ultima_leitura_ok": 1793433709.0,
    "desatualizado": false
   },
+  "vigilante2": {
+   "ok": true,
+   "erro": null,
+   "hora": 1793433709.0,
+   "ultima_leitura_ok": 1793433709.0,
+   "desatualizado": false
+  },
   "presenca_linux": {
    "ok": true,
    "erro": null,
@@ -701,6 +708,20 @@
   "estado": "ok",
   "plano": "pro_plus",
   "assinatura": "active"
+ },
+ "vigilante2": {
+  "estado": "ok",
+  "gerado_em_epoch": 1793433672.0,
+  "wire_ok": true,
+  "painel_ok": true,
+  "online": 8,
+  "trabalhando": 2,
+  "atencao": 1,
+  "workspaces": 5,
+  "terminais": 21,
+  "falhas_seguidas": 0,
+  "por_tipo": {"claude_code": 9, "codex": 4, "custom": 5, "generic_shell": 3, "outra": 0},
+  "alertas": [{"tipo": "login", "desde_epoch": 1793433112.0}, {"tipo": "cota_baixa", "desde_epoch": 1793426512.0}]
  },
  "presenca_linux": {
   "estado": "parada",

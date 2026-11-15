@@ -285,7 +285,7 @@ test('contrato: a página só lê, na raiz do dados.json, campos que o coletor p
   a.abrirModal({ tipo: 'agente', chave: 'sess-1' }); a.abrirModal({ tipo: 'agente', chave: 'sess-2' }); a.abrirModal({ tipo: 'servico', chave: 'whatsapp' }); a.abrirModal({ tipo: 'conta', chave: 'claude:abc' });
   const fora = [...lidos].filter((k) => !(k in fixture) && k !== 'toJSON');
   assert.deepEqual(fora, []);
-  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'presenca_linux', 'cota_codex_local', 'cota_grok_bot', 'cota_cursor', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
+  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'presenca_linux', 'vigilante2', 'cota_codex_local', 'cota_grok_bot', 'cota_cursor', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
 });
 
 /* ---------- segurança e privacidade ---------- */
@@ -1116,4 +1116,91 @@ test('limites locais que lançam não impedem #providers, os KPIs nem a lista de
   silenciarErros(() => a.receber(clone(fixture)));                       // na próxima leitura boa o aviso some
   assert.doesNotMatch(txt('limits-local'), /não foi possível desenhar/);
   assert.equal(doc.getElementById('limits-local').hidden, false); assert.equal(cartoesLocais(doc).length, 3);
+});
+
+/* ---------- E23: bloco "Vigilante 2" na seção Saúde dos serviços ---------- */
+const semVig = () => { const d = clone(fixture); delete d.vigilante2; return d; };
+const comVig = (extra) => { const d = clone(fixture); Object.assign(d.vigilante2, extra); return d; };
+const cartoesVig = (doc) => doc.getElementById('vigilante-grid').children;
+test('vigilanteDe: sem a chave, "erro" e "desligado" ficam inativos; "ok" normaliza campos, tipos, contagens e limite de alertas', () => {
+  [undefined, { estado: 'erro' }, { estado: 'desligado' }, null, 'x', []].forEach((v) => {
+    const d = semVig(); if (v !== undefined) d.vigilante2 = v;
+    const r = Hermes.vigilanteDe(d); assert.equal(r.ativo, false); assert.deepEqual(r.alertas, []);
+  });
+  assert.equal(Hermes.vigilanteDe(null).ativo, false);
+  const r = Hermes.vigilanteDe(fixture);
+  assert.equal(r.ativo, true); assert.equal(r.estado, 'ok'); assert.equal(r.geradoEm, T0 - 40); assert.equal(r.wireOk, true); assert.equal(r.painelOk, true);
+  assert.equal(r.online, 8); assert.equal(r.terminais, 21); assert.equal(r.falhas, 0);
+  assert.deepEqual(r.porTipo, { claude_code: 9, codex: 4, custom: 5, generic_shell: 3, outra: 0 });
+  assert.deepEqual(r.alertas, [{ tipo: 'login', desde: T0 - 600 }, { tipo: 'cota_baixa', desde: T0 - 7200 }]);
+  const x = Hermes.vigilanteDe(comVig({ alertas: [{ tipo: 'inventado', desde_epoch: 'x' }], online: -3, trabalhando: 'dois', atencao: NaN, workspaces: 2.7, wire_ok: 1 }));
+  assert.deepEqual(x.alertas, [{ tipo: 'outro', desde: null }]);
+  assert.equal(x.online, 0); assert.equal(x.trabalhando, 0); assert.equal(x.atencao, 0); assert.equal(x.workspaces, 2); assert.equal(x.wireOk, false);
+  const muitos = Array.from({ length: 20 }, () => ({ tipo: 'login', desde_epoch: T0 }));
+  assert.equal(Hermes.vigilanteDe(comVig({ alertas: muitos })).alertas.length, 11);
+});
+test('vigilante: render da fixture mostra o bloco ATIVO com quatro cartões sem botão e não mexe na grade de serviços nem nos KPIs', () => {
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  const base = app(); base.a.receber(semVig());
+  assert.equal(doc.getElementById('vigilante').hidden, false);
+  assert.equal(txt('vigilante-badge'), 'ATIVO'); assert.equal(doc.getElementById('vigilante-badge').classList.contains('bad'), false);
+  const cs = cartoesVig(doc); assert.equal(cs.length, 4);
+  cs.forEach((c) => { assert.notEqual(c.tag, 'button'); assert.equal(c.getAttribute('data-service'), null); });
+  const t = (c) => nb(c.textContent);
+  assert.match(t(cs[0]), /Ativo/); assert.match(t(cs[0]), /8 online · 2 trabalhando · 1 em atenção/); assert.match(t(cs[0]), /atualizado há menos de 1 min/);
+  assert.match(t(cs[1]), /2 alertas/); assert.match(t(cs[1]), /login · cota baixa/); assert.match(t(cs[1]), /o mais antigo há 2 h/);
+  assert.match(t(cs[2]), /Em ordem/); assert.match(t(cs[2]), /Wire ok · Painel ok/); assert.match(t(cs[2]), /sem falhas seguidas/);
+  assert.match(t(cs[3]), /21 terminais/); assert.match(t(cs[3]), /Claude Code 9 · Codex 4 · Personalizado 5 · Shell 3 · Outros 0/); assert.match(t(cs[3]), /5 workspaces/);
+  assert.equal(doc.getElementById('services-grid').children.length, 5);
+  ['k-serv', 'k-serv-total', 'nav-servicos'].forEach((id) => assert.equal(txt(id), base.txt(id), 'mudou ' + id));
+  assert.equal(base.doc.getElementById('vigilante').hidden, true);
+});
+test('vigilante: estado "parado" mostra um cartão e nenhum número do retrato velho', () => {
+  const { a, doc, txt } = app(); a.receber(comVig({ estado: 'parado' }));
+  assert.equal(doc.getElementById('vigilante').hidden, false);
+  assert.equal(txt('vigilante-badge'), 'PARADO'); assert.equal(doc.getElementById('vigilante-badge').classList.contains('bad'), true);
+  const cs = cartoesVig(doc); assert.equal(cs.length, 1);
+  const t = nb(cs[0].textContent);
+  assert.match(t, /Parado/); assert.match(t, /Vigilante 2 parado/); assert.match(t, /último sinal há \S+/);
+  ['online', 'trabalhando', 'em atenção', 'terminais', 'workspaces', 'Claude Code', 'alerta', 'Wire'].forEach((x) => assert.ok(!t.includes(x), 'apareceu ' + x));
+});
+test('vigilante: sem a chave, "erro" e "desligado" deixam o bloco oculto e sem cartões', () => {
+  [undefined, { estado: 'erro' }, { estado: 'desligado' }].forEach((v) => {
+    const d = semVig(); if (v !== undefined) d.vigilante2 = v;
+    const { a, doc } = app(); a.receber(d);
+    assert.equal(doc.getElementById('vigilante').hidden, true); assert.equal(cartoesVig(doc).length, 0);
+  });
+});
+test('vigilante: variações do estado ok (sem alertas, Wire fora, falhas seguidas, alerta sem horário)', () => {
+  const ver = (extra) => { const { a, doc } = app(); a.receber(comVig(extra)); return Array.from(cartoesVig(doc)).map((c) => nb(c.textContent)); };
+  let cs = ver({ alertas: [] });
+  assert.match(cs[1], /Nenhum alerta/); assert.match(cs[1], /Nada pendente/); assert.match(cs[1], /sem alertas/);
+  cs = ver({ wire_ok: false });
+  assert.match(cs[2], /Com falha/); assert.match(cs[2], /Wire fora · Painel ok/);
+  cs = ver({ falhas_seguidas: 3 });
+  assert.match(cs[2], /Com falha/); assert.match(cs[2], /3 falhas seguidas/);
+  cs = ver({ alertas: [{ tipo: 'login', desde_epoch: null }] });
+  assert.match(cs[1], /1 alerta/); assert.match(cs[1], /início não informado/);
+});
+test('vigilante: tipo de alerta hostil vira "outro" e não cria elemento', () => {
+  const { a, doc } = app(); a.receber(comVig({ alertas: [{ tipo: '<img src=x onerror=alert(1)>', desde_epoch: T0 - 60 }] }));
+  const bloco = doc.getElementById('vigilante');
+  assert.match(nb(cartoesVig(doc)[1].textContent), /outro/);
+  assert.equal(bloco.descendentes().filter((e) => e.tag === 'img').length, 0);
+  assert.ok(!nb(bloco.textContent).includes('onerror'));
+  bloco.descendentes().forEach((e) => Object.values(e.attrs).forEach((v) => assert.ok(!v.includes('onerror'), 'texto hostil em atributo')));
+});
+test('vigilante que lança não impede a grade de serviços, os KPIs nem a lista de sessões; o aviso fica só no bloco', () => {
+  const base = app(); silenciarErros(() => base.a.receber(clone(fixture)));
+  const d = clone(fixture);
+  Object.defineProperty(d.vigilante2, 'alertas', { enumerable: true, get() { throw new Error('boom vigilante'); } });
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => {
+    assert.doesNotThrow(() => a.receber(d));
+    assert.equal(erros.length, 1); assert.match(String(erros[0][0]), /Vigilante 2/); assert.match(String(erros[0][1]), /boom vigilante/);
+  });
+  ['k-serv', 'k-serv-total', 'nav-servicos', 'services-grid', 'k-trab', 'nav-agentes'].forEach((id) => assert.equal(txt(id), base.txt(id), 'mudou ' + id));
+  assert.equal(doc.getElementById('agent-rows').children.length, d.agentes.length);
+  assert.equal(doc.getElementById('services')._avisoSecao, undefined);
+  assert.match(txt('vigilante'), /não foi possível desenhar esta seção/);
 });
