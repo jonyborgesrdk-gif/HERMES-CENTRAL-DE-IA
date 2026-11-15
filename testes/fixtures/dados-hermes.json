@@ -239,6 +239,27 @@
    "ultima_leitura_ok": 1793433672.0,
    "desatualizado": false
   },
+  "cota_codex_local": {
+   "ok": true,
+   "erro": null,
+   "hora": 1793433709.0,
+   "ultima_leitura_ok": 1793433709.0,
+   "desatualizado": false
+  },
+  "cota_grok_bot": {
+   "ok": true,
+   "erro": null,
+   "hora": 1793433709.0,
+   "ultima_leitura_ok": 1793433709.0,
+   "desatualizado": false
+  },
+  "cota_cursor": {
+   "ok": true,
+   "erro": null,
+   "hora": 1793433709.0,
+   "ultima_leitura_ok": 1793433709.0,
+   "desatualizado": false
+  },
   "presenca_linux": {
    "ok": true,
    "erro": null,
@@ -645,6 +666,41 @@
     }
    ]
   }
+ },
+ "cota_codex_local": {
+  "estado": "ok",
+  "observado_epoch": 1793426512.0,
+  "barras": [
+   {
+    "tipo": "5h",
+    "usado_pct": 23.0,
+    "renova_epoch": 1793437312.0,
+    "janela_min": 300
+   },
+   {
+    "tipo": "semana",
+    "usado_pct": 61.5,
+    "renova_epoch": 1793692912.0,
+    "janela_min": 10080
+   }
+  ]
+ },
+ "cota_grok_bot": {
+  "estado": "ok",
+  "observado_epoch": 1793433112.0,
+  "barras": [
+   {
+    "tipo": "janela",
+    "usado_pct": 41.0,
+    "renova_epoch": 1793520112.0,
+    "janela_min": null
+   }
+  ]
+ },
+ "cota_cursor": {
+  "estado": "ok",
+  "plano": "pro_plus",
+  "assinatura": "active"
  },
  "presenca_linux": {
   "estado": "parada",

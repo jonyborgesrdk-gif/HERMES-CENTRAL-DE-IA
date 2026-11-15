@@ -346,6 +346,28 @@ function presencaLinuxDe(dados) {
   var v = presencaDe({ presenca_processos: { estado: "ok", itens: p.itens } });
   return { ativa: true, estado: "ok", host: host, itens: v.itens, total: v.total };
 }
+/* Uso observado em arquivos locais (E19): bloco próprio na seção Limites de uso; não entra em contasDe nem em #providers. Ordem fixa. */
+function cotasLocaisDe(dados) {
+  var fontes = [["cota_codex_local", "Codex", "observado localmente", "code"], ["cota_grok_bot", "Grok Bot", "observado localmente", "agents"],
+                ["cota_cursor", "Cursor", "plano local", "agents"]];
+  var enumerado = function (v) { return typeof v === "string" && /^[a-z_]{1,24}$/.test(v) ? v : ""; };
+  var saida = [];
+  fontes.forEach(function (f) {
+    var v = dados && dados[f[0]];
+    if (!v || typeof v !== "object" || Array.isArray(v) || (v.estado !== "ok" && v.estado !== "sem_dado")) return;
+    var cursor = f[0] === "cota_cursor", barras = [];
+    if (!cursor && v.estado === "ok") {
+      barras = lista(v.barras).filter(function (b) { return b && typeof b === "object" && numero(b.usado_pct); }).slice(0, 4).map(function (b) {
+        return { tipo: b.tipo === "5h" || b.tipo === "semana" ? b.tipo : "janela", pct: Math.max(0, Math.min(100, b.usado_pct)),
+                 renovaEpoch: numero(b.renova_epoch) ? b.renova_epoch : null };
+      });
+    }
+    saida.push({ chave: f[0], nome: f[1], detalhe: f[2], icone: f[3], estado: v.estado,
+                 observadoEm: !cursor && numero(v.observado_epoch) ? v.observado_epoch : null, barras: barras,
+                 plano: cursor ? enumerado(v.plano) : "", assinatura: cursor ? enumerado(v.assinatura) : "" });
+  });
+  return saida;
+}
 function processosDe(dados) {
   var p = objeto(dados && dados.processos);
   return Object.keys(p).sort().map(function (n) { return n + " × " + texto(p[n]); });
@@ -685,6 +707,60 @@ function criarApp(doc, win, opcoes) {
       });
     });
   }
+  /* Bloco "Observado em arquivos locais" (E19): o modelo traz todos os textos já calculados; #providers não muda. */
+  function desenharCotasLocais(lista) {
+    var agora = agoraS();
+    var assinaturas = { active: "ativa", trialing: "em teste", past_due: "pagamento atrasado", canceled: "cancelada", unpaid: "não paga",
+                        incomplete: "incompleta", incomplete_expired: "incompleta (expirada)", paused: "pausada" };
+    $("limits-local").hidden = lista.length === 0;
+    setTxt($("limits-local-badge"), plural(lista.length, "fonte", "fontes"));
+    var modelo = lista.map(function (item) {
+      var cursor = item.chave === "cota_cursor", ok = item.estado === "ok";
+      var selo = !ok ? "SEM DADOS" : !cursor ? "OBSERVADO" : item.plano ? capitalizar(item.plano.replace(/_/g, " ")) : "PLANO NÃO LIDO";
+      return {
+        nome: item.nome, detalhe: item.detalhe, icone: item.icone, selo: selo, semDado: !ok, cursor: ok && cursor,
+        assinatura: ok && cursor && item.assinatura ? "assinatura: " + (propria(assinaturas, item.assinatura) || "outra") : "",
+        barras: ok && !cursor ? item.barras.map(function (b) {
+          var r = rotuloBarra({ tipo: b.tipo, rotulo: "Janela atual" });
+          return { r: r, p: b.pct, t: textoReset({ renovaEpoch: b.renovaEpoch }, agora), w: b.tipo === "semana", a: m(r + " de " + item.nome) };
+        }) : [],
+        rodape: ok && !cursor ? (item.observadoEm !== null ? "último observado há " + duracao(agora - item.observadoEm) : "horário da observação não informado") : ""
+      };
+    });
+    desenharRegiao(doc, $("limits-local-cards"), modelo, function () {
+      return modelo.map(function (c) {
+        var prov = el(doc, "div", "provider"), cab = el(doc, "div", "provider-header");
+        var logo = el(doc, "span", "provider-logo codex");
+        logo.appendChild(icone(doc, c.icone));
+        var nome = el(doc, "div", "provider-name", c.nome);
+        nome.appendChild(el(doc, "small", null, c.detalhe));
+        cab.appendChild(logo); cab.appendChild(nome); cab.appendChild(el(doc, "span", "badge", c.selo));
+        prov.appendChild(cab);
+        if (c.semDado || c.cursor) {
+          var falta = el(doc, "div", "missing");
+          falta.appendChild(el(doc, "p", null, c.semDado ? "Nenhum uso encontrado nos arquivos locais." : "Sem dados de cota: o Cursor não guarda a cota em arquivo local."));
+          prov.appendChild(falta);
+          if (c.assinatura) prov.appendChild(el(doc, "div", "usage-sub", c.assinatura));
+          return prov;
+        }
+        c.barras.forEach(function (b) {
+          var linha = el(doc, "div", "usage-row" + (b.w ? " week" : ""));
+          var rot = el(doc, "div", "usage-label");
+          rot.appendChild(el(doc, "span", null, b.r));
+          rot.appendChild(el(doc, "strong", "mono", Math.round(b.p) + "%"));
+          var trilho = el(doc, "div", "track");
+          trilho.setAttribute("role", "meter"); trilho.setAttribute("aria-label", b.a);
+          trilho.setAttribute("aria-valuemin", "0"); trilho.setAttribute("aria-valuemax", "100");
+          trilho.setAttribute("aria-valuenow", String(Math.round(b.p)));
+          var cheio = el(doc, "span"); cheio.style.width = b.p + "%"; trilho.appendChild(cheio);
+          linha.appendChild(rot); linha.appendChild(trilho); linha.appendChild(el(doc, "div", "usage-sub", b.t));
+          prov.appendChild(linha);
+        });
+        prov.appendChild(el(doc, "div", "usage-sub", c.rodape));
+        return prov;
+      });
+    });
+  }
 
   /* ---- gastos ---- */
   function desenharGastos(g) {
@@ -957,6 +1033,7 @@ function criarApp(doc, win, opcoes) {
     secao("presence", "de presença por processo", function () { desenharPresenca(presencaDe(d)); });
     secao("presence-linux", "de presença no WSL", function () { desenharPresencaLinux(presencaLinuxDe(d)); });
     secao("limits", "de limites de uso", function () { desenharLimites(contas()); });
+    secao("limits-local", "de uso observado em arquivos locais", function () { desenharCotasLocais(cotasLocaisDe(d)); });
     secao("usage", "de gastos", function () { desenharGastos(gastos()); });
     secao("attention", "Precisa de você", function () { desenharPendencias(pendenciasDe(d)); });
     secao("services", "de serviços", function () { desenharServicos(servicos()); });
@@ -1137,7 +1214,7 @@ var api = {
   numero: numero, mascararEmails: mascararEmails, snapshotParaExportar: snapshotParaExportar, haSegundos: haSegundos, duracao: duracao, quando: quando,
   resetEmPtBr: resetEmPtBr, textoReset: textoReset, dinheiro: dinheiro, fmtUsd: fmtUsd, fmtBrl: fmtBrl, fmtTokens: fmtTokens, maxBonito: maxBonito,
   agentesDe: agentesDe, contasDe: contasDe, consumoClaude5h: consumoClaude5h, gastosDe: gastosDe, servicosDe: servicosDe, pendenciasDe: pendenciasDe,
-  fontesComProblema: fontesComProblema, presencaDe: presencaDe, presencaLinuxDe: presencaLinuxDe, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
+  fontesComProblema: fontesComProblema, presencaDe: presencaDe, presencaLinuxDe: presencaLinuxDe, cotasLocaisDe: cotasLocaisDe, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 else {

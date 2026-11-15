@@ -430,6 +430,12 @@ def extras_ativos():
         extras += ("presenca_processos",)
     if os.environ.get('PAINEL_PRESENCA_LINUX', '0') == '1':
         extras += ("presenca_linux",)
+    if os.environ.get('PAINEL_COTA_CODEX_LOCAL', '0') == '1':
+        extras += ("cota_codex_local",)
+    if os.environ.get('PAINEL_COTA_GROK_BOT', '0') == '1':
+        extras += ("cota_grok_bot",)
+    if os.environ.get('PAINEL_COTA_CURSOR', '0') == '1':
+        extras += ("cota_cursor",)
     return extras
 
 
@@ -449,6 +455,15 @@ def fontes_vivas(sem_contas=False):
     if os.environ.get('PAINEL_PRESENCA_LINUX', '0') == '1':
         from fontes import presenca_linux
         fontes["presenca_linux"] = presenca_linux.ler
+    if os.environ.get('PAINEL_COTA_CODEX_LOCAL', '0') == '1':
+        from fontes import cota_codex_local
+        fontes["cota_codex_local"] = cota_codex_local.ler
+    if os.environ.get('PAINEL_COTA_GROK_BOT', '0') == '1':
+        from fontes import cota_grok_bot
+        fontes["cota_grok_bot"] = cota_grok_bot.ler
+    if os.environ.get('PAINEL_COTA_CURSOR', '0') == '1':
+        from fontes import cota_cursor
+        fontes["cota_cursor"] = cota_cursor.ler
     return fontes
 
 
@@ -464,7 +479,8 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
     leituras, situacao = {}, {}
     intervalos = {"servicos": 10, "processos": 5, "cota_claude": 300,
                   "whatsapp": 10, "gastos_hermes": 60, "presenca_processos": 5,
-                  "presenca_linux": 20}
+                  "presenca_linux": 20,
+                  "cota_codex_local": 120, "cota_grok_bot": 60, "cota_cursor": 120}
     extras = extras_ativos()
     for nome in ("eventos_hooks", "sessoes_codex", "maestri_wire", "cota_claude", "processos", "servicos") + extras:
         anterior = cache.get(nome)
