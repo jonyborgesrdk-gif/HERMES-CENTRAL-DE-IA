@@ -38,6 +38,12 @@ class WhatsAppTests(unittest.TestCase):
         self.assertEqual(d['idade_s'], 5)
         self.assertEqual(d['updated_at'], '1970-01-01T00:16:30+00:00')
 
+    def test_retrying_aceito_e_estado_estranho_desconhecido(self):
+        for estado, esperado in (('retrying', 'retrying'), ('inventado', 'desconhecido')):
+            with self.subTest(estado=estado), patch.object(Path, 'read_text', return_value=json.dumps({
+                    'platforms': {'whatsapp': {'state': estado}}})):
+                self.assertEqual(self.fonte().ler(self.ctx)['whatsapp']['estado'], esperado)
+
     def test_disconnected_e_atencao(self):
         self.gravar('disconnected', needs_attention=True, error_code='logged_out')
         d = self.fonte().ler(self.ctx)['whatsapp']

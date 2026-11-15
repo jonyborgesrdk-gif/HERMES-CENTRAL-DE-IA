@@ -271,14 +271,18 @@ function gastosDe(dados, janela, agrupamento) {
   return { estado: "ok", cotacao: cot, usd: custoDe(total), tokens: tokensDe(total), serie: serie, granularidade: texto(j.granularidade), grupos: grupos,
            rateado: g.custo_modelo_rateado === true, aproximada: g.distribuicao_aproximada === true, tipoCusto: texto(g.custo_tipo) };
 }
-/* Mesma regra da página clássica para a ponte do WhatsApp. */
+/* Estado da ponte; uma reconexão ativa não é uma queda confirmada. */
 function estadoWhatsapp(w, meta, agoraS) {
   meta = objeto(meta);
   var leitura = numero(meta.ultima_leitura_ok) ? meta.ultima_leitura_ok : meta.hora;
   var idade = numero(w.idade_s) ? w.idade_s + (numero(leitura) ? Math.max(0, agoraS - leitura) : 0) : null;
   if (w.estado === "ausente" || w.estado === "erro") return w.estado;
   if (w.needs_attention || meta.desatualizado) return "atenção";
-  if (w.estado === "connected" && w.pid_vivo && w.gateway_state === "running") return idade === null || idade > 120 ? "atenção" : "conectado";
+  if (w.pid_vivo && w.gateway_state === "running") {
+    if (w.estado === "connected") return idade === null || idade > 120 ? "atenção" : "conectado";
+    if (["connecting", "reconnecting", "retrying", "starting"].indexOf(w.estado) >= 0) return "reconectando";
+    if (w.estado === "desconhecido") return "desconhecido";
+  }
   return "caído";
 }
 function servicosDe(dados, agoraS) {
@@ -521,6 +525,7 @@ function criarApp(doc, win, opcoes) {
   function aplicarPreferencias() {
     doc.documentElement.setAttribute("data-theme", temaResolvido());
     doc.body.classList.toggle("privacy-on", estado.privado);
+    $("cost-privacy-notice").hidden = !estado.privado;
     var pb = $("privacy-button"), tb = $("theme-button");
     trocarIcone(pb, estado.privado ? "eyeOff" : "eye");
     setAttr(pb, "aria-pressed", estado.privado);
@@ -815,7 +820,13 @@ function criarApp(doc, win, opcoes) {
         barra.type = "button";
         barra.style.setProperty("--height", (b.usd > 0 ? Math.max(2, b.usd * fator / topo * 100) : 0) + "%");
         var valor = dinheiro(b.usd, cot).principal;
+        if (b.usd > 0 && g.serie.length <= 7) {
+          var exibido = b.usd * fator;
+          var compacto = exibido >= 1000 ? (cot ? "R$ " : "US$ ") + exibido.toLocaleString("pt-BR", { notation: "compact", maximumFractionDigits: 1 }) : valor;
+          barra.appendChild(el(doc, "span", "chart-value", compacto));
+        }
         barra.setAttribute("aria-label", b.rotulo + ": " + (estado.privado ? "valor oculto" : valor));
+        if (!estado.privado) barra.setAttribute("title", b.rotulo + ": " + valor + (cot ? " (" + fmtUsd(b.usd) + ")" : ""));
         barra.addEventListener("click", function () { notificar(b.rotulo + " · " + (estado.privado ? "••••" : valor + (cot ? " (" + fmtUsd(b.usd) + ")" : ""))); });
         plot.appendChild(foco(barra, "barra:" + i));
         x.appendChild(el(doc, "span", null, i % passo === 0 || i === g.serie.length - 1 ? b.curto : ""));
@@ -1239,6 +1250,10 @@ function criarApp(doc, win, opcoes) {
       if (mq.addEventListener) mq.addEventListener("change", trocou); else if (mq.addListener) mq.addListener(trocou);
     }
     $("privacy-button").addEventListener("click", alternarPrivacidade);
+    $("cost-show-values").addEventListener("click", function () {
+      $("period-select").focus();     // foco estável antes de esconder o botão da faixa
+      alternarPrivacidade();
+    });
     $("theme-button").addEventListener("click", alternarTema);
     $("refresh-button").addEventListener("click", atualizarAgora);
     $("export-button").addEventListener("click", exportar);

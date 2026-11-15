@@ -200,6 +200,31 @@ test('serviços reais + WhatsApp; atenção = não ok', () => {
   assert.equal(s.filter((x) => !x.bom).length, 2);
   assert.equal(Hermes.servicosDe(fixture, T0 + 4000).at(-1).bom, false);       // leitura velha demais: atenção
 });
+test('WhatsApp: reconexão e estado desconhecido não significam caído nem disponível', () => {
+  const base = { gateway_state: 'running', pid_vivo: true, idade_s: 5 };
+  const casos = [['connecting', 'reconectando'], ['reconnecting', 'reconectando'], ['retrying', 'reconectando'], ['starting', 'reconectando'], ['desconhecido', 'desconhecido'], ['connected', 'conectado'], ['disconnected', 'caído']];
+  for (const [estado, esperado] of casos) {
+    const w = { ...base, estado };
+    assert.equal(Hermes.estadoWhatsapp(w, {}, T0), esperado);
+    const d = clone(fixture); d.whatsapp = w;
+    const s = Hermes.servicosDe(d, T0).at(-1);
+    assert.equal(s.bom, estado === 'connected');
+    assert.equal(s.rotulo.toLowerCase(), esperado);
+    const { a, doc, txt } = app(); a.receber(d);
+    assert.match(txt('services-grid'), new RegExp(s.rotulo + 'WhatsApp'));
+    assert.equal(txt('k-serv'), estado === 'connected' ? '3' : '2');
+    const filtro = doc.getElementById('service-filter'); filtro.value = 'atencao'; filtro.emit('change');
+    assert.equal(txt('services-grid').includes('WhatsApp'), estado !== 'connected');
+    a.abrirModal({ tipo: 'servico', chave: 'whatsapp' });
+    assert.ok(txt('modal-body').includes(s.rotulo));
+    assert.equal(Hermes.estadoWhatsapp({ ...w, pid_vivo: false }, {}, T0), 'caído');
+    assert.equal(Hermes.estadoWhatsapp({ ...w, gateway_state: 'stopped' }, {}, T0), 'caído');
+    assert.equal(Hermes.estadoWhatsapp({ ...w, needs_attention: true }, {}, T0), 'atenção');
+    assert.equal(Hermes.estadoWhatsapp(w, { desatualizado: true }, T0), 'atenção');
+  }
+  for (const estado of ['ausente', 'erro']) assert.equal(Hermes.estadoWhatsapp({ ...base, estado, needs_attention: true }, {}, T0), estado);
+  assert.equal(Hermes.estadoWhatsapp({ ...base, estado: 'connected', idade_s: 121 }, {}, T0), 'atenção');
+});
 test('privacidade: máscara de e-mail igual à da página clássica', () => {
   assert.equal(Hermes.mascararEmails('a ' + EMAIL + ' b'), 'a se••••••@example.com b');
   assert.equal(Hermes.mascararEmails('ab@x.com'), '••••••@x.com');
@@ -244,6 +269,36 @@ test('render: KPIs, tabela, limites, gastos, pendências e serviços mostram os 
   assert.equal(doc.getElementById('attention-foot').hidden, false); assert.match(txt('attention-foot-text'), /2 serviços precisam de atenção/);
   assert.match(txt('live-text'), /^conectando… · atualizado há 10 s$/);
   assert.match(txt('updated-label'), /^Última leitura do coletor: 31\/10\/2026 \d\d:\d\d$/);
+});
+test('gráfico: valores positivos em texto, sem rótulos nas séries densas e sem HTML de dados', () => {
+  for (const comCotacao of [true, false]) {
+    const d = clone(fixture); if (!comCotacao) delete d.gastos_hermes.cotacao;
+    const { a, doc } = app();
+    d.gastos_hermes['7d'].serie = [
+      { rotulo: '2026-10-24', total: [1, 1] },
+      { rotulo: '2026-10-25', total: [0, 0] },
+      { rotulo: '<img src=x onerror=alert(1)>', total: [10000, 1] }
+    ];
+    a.receber(d);
+    const chart = doc.getElementById('chart');
+    const valores = () => chart.descendentes().filter((e) => e.classList.contains('chart-value'));
+    assert.equal(valores().length, 2);
+    assert.equal(valores()[0].textContent, comCotacao ? 'R$ 5,50' : 'US$ 1,00');
+    assert.match(valores()[1].textContent, /mil/);
+    assert.ok(chart.classList.contains('sensitive'));
+    valores().forEach((e) => { assert.equal(e.tag, 'span'); assert.equal(e.children.length, 0); assert.deepEqual(e.attrs, {}); });
+    assert.equal(chart.descendentes().some((e) => e.tag === 'img'), false);
+    for (const [janela, quantidade] of [['24h', 24], ['30d', 30]]) {
+      d.gastos_hermes[janela].serie = Array.from({ length: quantidade }, (_, i) => ({ rotulo: String(i), total: [i + 1, 1] }));
+      a.receber(d);
+      const select = doc.getElementById('period-select'); select.value = janela; select.emit('change');
+      assert.equal(chart.children[1].children.length, quantidade);
+      assert.equal(valores().length, 0, 'série densa usa title, não amontoa rótulos');
+      a.alternarPrivacidade();
+      assert.ok(chart.children[1].children.every((b) => b.getAttribute('title')));
+      a.alternarPrivacidade();
+    }
+  }
 });
 test('render: período e agrupamento mudam gastos, KPI e gráfico', () => {
   const { a, doc, txt } = app(); a.estado.privado = false; a.receber(clone(fixture));
@@ -322,6 +377,27 @@ test('privacidade ligada (padrão): e-mail mascarado na tela e nos atributos; de
   assert.equal(win.localStorage.memoria['painel-privacidade'], '1');
   assert.ok(!todoTexto(doc).includes(EMAIL)); assert.equal(doc.body.classList.contains('privacy-on'), true);
 });
+test('privacidade: aviso local visível sem blur, botão revela valores e transfere foco ao período', () => {
+  const { a, doc, win } = app();
+  const aviso = doc.getElementById('cost-privacy-notice');
+  assert.ok(aviso, 'falta aviso dentro de Gastos de IA');
+  assert.equal(aviso.parentNode, doc.getElementById('usage'));
+  assert.equal(aviso.parentNode.children[1], aviso, 'aviso deve vir logo após o cabeçalho');
+  assert.match(aviso.textContent, /Valores ocultos pelo modo privacidade\./);
+  assert.equal(aviso.hidden, false);
+  for (let no = aviso; no; no = no.parentNode) assert.equal(no.classList.contains('sensitive'), false);
+  const botao = doc.getElementById('cost-show-values');
+  assert.equal(botao.tag, 'button'); assert.equal(botao.getAttribute('type'), 'button');
+  assert.equal(botao.textContent, 'Mostrar valores');
+  a.receber(clone(fixture)); botao.focus(); botao.click();
+  assert.equal(a.estado.privado, false); assert.equal(aviso.hidden, true);
+  assert.equal(doc.activeElement, doc.getElementById('period-select'));
+  assert.equal(win.localStorage.memoria['painel-privacidade'], '0');
+  const topo = doc.getElementById('privacy-button'); topo.focus(); topo.click();
+  assert.equal(aviso.hidden, false); assert.equal(doc.activeElement, topo);
+  const outro = app({ win: { localStorage: { getItem: (k) => k === 'painel-privacidade' ? '0' : null, setItem() {} } } });
+  assert.equal(outro.doc.getElementById('cost-privacy-notice').hidden, true);
+});
 test('privacidade: valor do gráfico some do aria-label; preferência vem do localStorage compartilhado com a clássica', () => {
   const { a, doc } = app();
   a.receber(clone(fixture));
@@ -332,6 +408,26 @@ test('privacidade: valor do gráfico some do aria-label; preferência vem do loc
   const outro = app({ win: { localStorage: { getItem: (k) => (k === 'painel-privacidade' ? '0' : k === 'painel-tema' ? 'escuro' : null), setItem() {} } } });
   assert.equal(outro.a.estado.privado, false); assert.equal(outro.a.estado.tema, 'escuro');
   assert.equal(outro.doc.documentElement.getAttribute('data-theme'), 'dark');
+});
+test('gráfico: title completo só sem privacidade; alternar remove valores de todos os atributos', () => {
+  for (const comCotacao of [true, false]) {
+    const d = clone(fixture); if (!comCotacao) delete d.gastos_hermes.cotacao;
+    const { a, doc } = app(); a.receber(d);
+    const barras = () => doc.getElementById('chart').children[1].children;
+    const ocultas = () => barras().forEach((b) => {
+      assert.equal(b.getAttribute('title'), null);
+      assert.match(b.getAttribute('aria-label'), /: valor oculto$/);
+      Object.values(b.attrs).forEach((v) => assert.doesNotMatch(v, /(?:R\$|US\$)\s*\d|tokens/));
+    });
+    ocultas(); a.alternarPrivacidade();
+    const modelo = Hermes.gastosDe(d, '7d', 'canal');
+    barras().forEach((b, i) => {
+      const ponto = modelo.serie[i], valor = Hermes.dinheiro(ponto.usd, modelo.cotacao).principal;
+      assert.equal(b.getAttribute('title'), ponto.rotulo + ': ' + valor + (comCotacao ? ' (' + Hermes.fmtUsd(ponto.usd) + ')' : ''));
+    });
+    barras()[0].focus(); a.alternarPrivacidade(); ocultas();
+    assert.equal(doc.activeElement, barras()[0], 'foco da barra deve sobreviver à troca');
+  }
 });
 test('exportar: baixa o snapshot atual em JSON; com privacidade, e-mail mascarado; sem, completo', () => {
   const { a, doc, win } = app();

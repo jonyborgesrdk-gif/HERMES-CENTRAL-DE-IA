@@ -25,11 +25,32 @@ def _ler_batimento(caminho, ler_texto):
         if (not isinstance(ts, (int, float)) or isinstance(ts, bool) or not math.isfinite(ts)
                 or not isinstance(pid, int) or isinstance(pid, bool)):
             raise ValueError('batimento JSON inválido: ts/pid')
-        horario = datetime.fromisoformat(dado['hora']).strftime('%H:%M:%S')
-        return ts, 'pid %d · %s' % (pid, horario)
+        data = datetime.fromisoformat(dado['hora'])
+        return ts, {'pid': pid, 'data': data}
     if ler_texto:
         datetime.strptime(texto, '%H:%M:%S')
     return mtime, texto
+
+
+def _detalhe_vigia(batimento, ts, observado, estado):
+    """Formata no fuso do batimento, com a idade do mesmo relógio da saúde."""
+    estruturado = isinstance(batimento, dict)
+    data = batimento['data'] if estruturado else datetime.fromtimestamp(ts)
+    hoje = datetime.fromtimestamp(observado, tz=data.tzinfo).date()
+    idade = observado - ts
+    if estado == 'fora' and idade > 0:
+        if idade >= 86400:
+            decorrido = '%d d' % (idade // 86400)
+        elif idade >= 3600:
+            decorrido = '%d h' % (idade // 3600)
+        else:
+            decorrido = '%d min' % (idade // 60)
+        detalhe = 'parado desde %s (há %s)' % (data.strftime('%d/%m %H:%M'), decorrido)
+        return detalhe + (' · pid %d' % batimento['pid'] if estruturado else '')
+    if estruturado:
+        formato = '%H:%M:%S' if data.date() == hoje else '%d/%m %H:%M:%S'
+        return 'pid %d · %s' % (batimento['pid'], data.strftime(formato))
+    return batimento if data.date() == hoje else '%s %s' % (data.strftime('%d/%m'), batimento)
 
 
 def _batimento_limitado(caminho, ler_texto):
@@ -114,8 +135,11 @@ def ler(ctx):
             mtime, detalhe = batimento
             # ctx.agora é o snapshot da passada; os health checks já consumiram tempo.
             observado = hora + (time.monotonic() - inicio)
-            estado = 'ok' if abs(observado - mtime) < ctx.get('batimento_max_s', 120) else 'fora'
-        except (OSError, ValueError, TypeError, KeyError) as erro:
+            estado_batimento = 'ok' if abs(observado - mtime) < ctx.get('batimento_max_s', 120) else 'fora'
+            if nome == 'Vigia':
+                detalhe = _detalhe_vigia(detalhe, mtime, observado, estado_batimento)
+            estado = estado_batimento
+        except (OSError, ValueError, OverflowError, TypeError, KeyError) as erro:
             detalhe = '%s: %s' % (type(erro).__name__, erro)
         servicos.append(dict(nome=nome, estado=estado, detalhe=detalhe, hora=hora))
     return {'servicos': servicos}

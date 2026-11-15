@@ -3,6 +3,7 @@ import json
 import math
 import os
 import re
+import subprocess
 import tempfile
 from . import agora, diretorio, executar
 
@@ -44,35 +45,49 @@ def atualizar(ctx):
     if tentativa is not None and 0 <= agora(ctx) - tentativa < 300:
         return anterior
     r = dict(anterior, tentativa=agora(ctx))
+    # A identidade vem primeiro: sem login confirmado não dispara /usage.
+    sem_login = False
+    auth = {'email': anterior.get('email'), 'plano': anterior.get('plano')}
     try:
-        saida = executar(ctx, ['claude', '--safe-mode', '--no-session-persistence',
-                              '-p', '/usage', '--output-format', 'stream-json', '--verbose'], 60)
-        textos = []
-        for linha in saida.splitlines():
-            try:
-                d = json.loads(linha)
-            except ValueError:
-                continue
-            if isinstance(d, dict) and d.get('type') == 'assistant':
-                textos.extend(b['text'] for b in d.get('message', {}).get('content', [])
-                              if isinstance(b, dict) and b.get('type') == 'text')
-        cotas = ler_usage('\n'.join(textos))
-        if cotas['sessao_5h'] is None and cotas['semanal'] is None:
-            raise ValueError('sem cota observada')
-        r = dict(cotas, hora=agora(ctx), tentativa=agora(ctx))
-    except Exception:
-        r['erro'] = 'consulta de cota falhou'
-    # Identidade acompanha a mesma tentativa/cooldown do /usage, sem ler credenciais em disco.
-    try:
-        identidade = json.loads(executar(ctx, ['claude', 'auth', 'status', '--json'], 10))
+        try:
+            identidade = json.loads(executar(ctx, ['claude', 'auth', 'status', '--json'], 10))
+        except subprocess.CalledProcessError as erro:
+            identidade = json.loads(erro.stdout if erro.stdout is not None else erro.output)
+            if not isinstance(identidade, dict) or identidade.get('loggedIn') is not False:
+                raise
         if not isinstance(identidade, dict):
             raise ValueError('identidade inválida')
-        r['email'] = identidade.get('email') if isinstance(identidade.get('email'), str) else None
-        r['plano'] = identidade.get('subscriptionType') if isinstance(identidade.get('subscriptionType'), str) else None
-        r.pop('erro_auth', None)
+        sem_login = identidade.get('loggedIn') is False
+        if sem_login:
+            auth['erro_auth'] = 'Claude Code sem login'
+        else:
+            auth['email'] = identidade.get('email') if isinstance(identidade.get('email'), str) else None
+            auth['plano'] = identidade.get('subscriptionType') if isinstance(identidade.get('subscriptionType'), str) else None
     except Exception:
-        r['email'], r['plano'] = anterior.get('email'), anterior.get('plano')
-        r['erro_auth'] = 'identidade Claude sem leitura'
+        auth['erro_auth'] = 'identidade Claude sem leitura'
+    if sem_login:
+        r['erro'] = 'Claude Code sem login'
+    else:
+        try:
+            saida = executar(ctx, ['claude', '--safe-mode', '--no-session-persistence',
+                                  '-p', '/usage', '--output-format', 'stream-json', '--verbose'], 60)
+            textos = []
+            for linha in saida.splitlines():
+                try:
+                    d = json.loads(linha)
+                except ValueError:
+                    continue
+                if isinstance(d, dict) and d.get('type') == 'assistant':
+                    textos.extend(b['text'] for b in d.get('message', {}).get('content', [])
+                                  if isinstance(b, dict) and b.get('type') == 'text')
+            cotas = ler_usage('\n'.join(textos))
+            if cotas['sessao_5h'] is None and cotas['semanal'] is None:
+                raise ValueError('sem cota observada')
+            r = dict(cotas, hora=agora(ctx), tentativa=agora(ctx))
+        except Exception:
+            r['erro'] = 'consulta de cota falhou'
+    r.pop('erro_auth', None)
+    r.update(auth)
     pasta = diretorio(ctx)
     tmp = None
     try:

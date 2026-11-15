@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Testes do script refresh-completo (reconciliação do quadro.json)."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
 import os
@@ -29,7 +29,7 @@ class TestReconciliacao(unittest.TestCase):
                 {"nome": "Agente 01"}
             ]
         }
-        self.agora = datetime(2026, 10, 12, 14, 30, 0).astimezone()
+        self.agora = datetime(2026, 10, 12, 14, 30, 0, tzinfo=timezone(timedelta(hours=-3)))
 
     def test_trabalhando_sem_evidencia_ha_mais_de_5min_vira_parado(self):
         quadro = {
