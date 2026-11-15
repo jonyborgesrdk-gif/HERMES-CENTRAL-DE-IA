@@ -80,6 +80,13 @@ da cota Claude. `--vivo` não pode ser combinado com `--telas`.
 O gatilho HTTP `/refresh` do modo antigo não é iniciado no modo vivo.
 Sem `--vivo`, o comportamento antigo via tmux ou telas de exemplo é preservado.
 
+No modo vivo o painel não publica a pasta de trabalho nem texto das sessões:
+cada sessão do Claude e do Codex aparece como `Claude · xxxx` ou `Codex · xxxx`
+(os quatro últimos caracteres do identificador da sessão), e cada terminal do
+Maestri pelo nome do workspace e do terminal. Para dar um apelido a quem trabalha
+numa pasta, crie `agentes.json` com `pasta` e `nome`: a pasta serve só para casar
+com a sessão e não é publicada.
+
 No modo vivo, os cartões de cota usam as fontes Claude/Codex: 5 h e semanal são
 porcentagens **usadas**, sem estimativas quando falta leitura. Plano/e-mail do
 Claude vêm de `claude auth status --json`, no mesmo cache de 5 min do `/usage`;
@@ -168,6 +175,8 @@ Para conferir sem enviar nada: `py -3.14 sentinela.py --ensaio --uma-vez`.
 As regras avisam sobre espera por mais de 60 s, atividade sem mudança por mais
 de 15 min, agente parado, cotas usadas a partir de 85%, serviço fora em duas
 avaliações, fonte falhando em três e dados velhos por mais de 60 s.
+No modo vivo nenhum agente publica atividade, então o aviso de atividade sem
+mudança só vale no modo antigo (terminais lidos pela tela).
 Cada avaliação ocorre a cada 5 s; a mesma chave espera pelo menos 30 min para
 novo aviso. Agente parado avisa uma vez por ocorrência; cota só rearma abaixo
 de 70%. Fechamentos são registrados uma vez, sem toast extra.

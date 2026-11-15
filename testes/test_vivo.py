@@ -22,6 +22,9 @@ coletor = module_from_spec(spec)
 loader.exec_module(coletor)
 from vivo import montar_agentes, montar_contas
 
+CAMINHO_CLAUDE = 'C:\\SEGREDO-PASTA-X\\projeto-alfa-zz'
+CAMINHO_CODEX = '/raiz-yy/SEGREDO-PASTA-Y/projeto-beta-ww'
+
 
 def setUpModule():
     for nome in ('run', 'Popen'):
@@ -53,7 +56,7 @@ class MontagemTests(unittest.TestCase):
     def test_permissao_modelo_cota(self):
         a = montar_agentes(leituras(), 100000, [])[0]
         self.assertEqual((a['ferramenta'], a['estado'], a['modelo']), ('claude', 'esperando', 'modelo-claude'))
-        self.assertEqual(a['atividade'], 'pede permissão: Read')
+        self.assertIsNone(a['atividade'])
         self.assertEqual((a['sessao_5h_pct'], a['semanal_pct']), (6, 42))
 
     def test_sessao_sobrevivente_sem_transcript_mantem_agente(self):
@@ -61,7 +64,7 @@ class MontagemTests(unittest.TestCase):
         r['transcripts_claude']['claude-1'] = None
         agentes = montar_agentes(r, 100000, [])
         self.assertEqual(agentes[0]['ferramenta'], 'claude')
-        self.assertEqual(agentes[0]['nome'], 'Claude · exemplo')
+        self.assertEqual(agentes[0]['nome'], 'Claude · ude1')
         self.assertIsNone(agentes[0]['modelo'])
         self.assertEqual(agentes[0]['estado'], 'esperando')
 
@@ -74,11 +77,11 @@ class MontagemTests(unittest.TestCase):
         r = leituras()
         r['eventos_hooks']['sessoes'].append(dict(r['eventos_hooks']['sessoes'][0], session_id='claude-2'))
         a = montar_agentes(r, 100000, [])
-        self.assertEqual([x['nome'] for x in a[:2]], ['Claude · exemplo', 'Claude · exemplo (2)'])
+        self.assertEqual([x['nome'] for x in a[:2]], ['Claude · ude1', 'Claude · ude2'])
 
     def test_overrides_por_pasta_e_nome(self):
         r = montar_agentes(leituras(), 100000, [{'pasta': 'c:\\EXEMPLO', 'nome': 'Revisor'},
-            {'nome': 'Codex · projeto', 'conta': 'Conta sintética'}])
+            {'nome': 'Codex · dex1', 'conta': 'Conta sintética'}])
         self.assertEqual(r[0]['nome'], 'Revisor')
         self.assertEqual(r[1]['conta'], 'Conta sintética')
 
@@ -88,7 +91,7 @@ class MontagemTests(unittest.TestCase):
         a = montar_agentes(r, 100000, [{'pasta': 'C:/exemplo', 'ferramenta': 'claude',
             'nome': 'Revisor', 'modelo': 'modelo-fallback'}])
         self.assertEqual((a[0]['nome'], a[0]['modelo']), ('Revisor', 'modelo-claude'))
-        self.assertEqual(a[1]['nome'], 'Codex · exemplo')
+        self.assertEqual(a[1]['nome'], 'Codex · dex1')
         self.assertEqual(a[1]['modelo'], 'modelo-codex')
         r['transcripts_claude']['claude-1']['modelo'] = None
         self.assertEqual(montar_agentes(r, 100000, [{'pasta': 'C:/exemplo',
@@ -201,13 +204,75 @@ class MontagemTests(unittest.TestCase):
         self.assertEqual(a['esforco'], 'alto')
         self.assertIsNone(a['pasta'])
 
-    def test_claude_e_codex_continuam_publicando_pasta(self):
+    def test_claude_e_codex_publicam_so_nome_tipo_e_estado(self):
         r = leituras()
+        r['eventos_hooks']['sessoes'][0].update(cwd=CAMINHO_CLAUDE, tool_name='FERRAMENTA-SECRETA')
+        r['transcripts_claude']['claude-1'].update(pasta=CAMINHO_CLAUDE, fala='FALA-SECRETA')
+        r['sessoes_codex']['sessoes'][0]['pasta'] = CAMINHO_CODEX
         agentes = montar_agentes(r, 100000, [])
         claude = next(a for a in agentes if a['fonte'] == 'eventos_hooks')
         codex = next(a for a in agentes if a['fonte'] == 'sessoes_codex')
-        self.assertEqual(claude['pasta'], r['eventos_hooks']['sessoes'][0]['cwd'])
-        self.assertEqual(codex['pasta'], r['sessoes_codex']['sessoes'][0]['pasta'])
+        self.assertEqual((claude['nome'], claude['ferramenta_nome'], claude['estado']),
+                         ('Claude · ude1', 'Claude Code', 'esperando'))
+        self.assertEqual((codex['nome'], codex['ferramenta_nome'], codex['estado']),
+                         ('Codex · dex1', 'Codex', 'trabalhando'))
+        for a in (claude, codex):
+            self.assertIsNone(a['pasta'])
+            self.assertIsNone(a['atividade'])
+            self.assertIsNone(a['ultima_fala'])
+        texto = json.dumps(agentes)
+        for trecho in ('SEGREDO', 'projeto-alfa', 'projeto-beta', 'raiz-yy', 'FALA-SECRETA',
+                       'FERRAMENTA-SECRETA', 'pede permiss'):
+            self.assertNotIn(trecho, texto)
+        self.assertEqual(claude['modelo'], 'modelo-claude')
+        self.assertEqual((claude['sessao_5h_pct'], claude['semanal_pct']), (6, 42))
+        self.assertEqual(codex['modelo'], 'modelo-codex')
+        self.assertEqual((codex['sessao_5h_pct'], codex['semanal_pct']), (17, 29))
+
+    def test_nome_padrao_vem_do_identificador_e_nao_da_pasta(self):
+        nomes = []
+        for pasta_claude, pasta_codex in (('C:/exemplo', 'C:/projeto'), (CAMINHO_CLAUDE, CAMINHO_CODEX)):
+            r = leituras()
+            r['eventos_hooks']['sessoes'][0]['cwd'] = pasta_claude
+            r['sessoes_codex']['sessoes'][0]['pasta'] = pasta_codex
+            agentes = montar_agentes(r, 100000, [])
+            nomes.append([next(a for a in agentes if a['fonte'] == 'eventos_hooks')['nome'],
+                          next(a for a in agentes if a['fonte'] == 'sessoes_codex')['nome']])
+        self.assertEqual(nomes, [['Claude · ude1', 'Codex · dex1'], ['Claude · ude1', 'Codex · dex1']])
+
+    def test_nome_padrao_casos_limite(self):
+        casos = ((None, 'Codex'), ('', 'Codex'), ('----', 'Codex'), ('C:\\SEGREDO\\x', 'Codex'),
+                 ('/home/x/y', 'Codex'), ('a.b', 'Codex'), ('ab', 'Codex · ab'), (123, 'Codex · 123'),
+                 ('0199a3f2-7c1e-7b2a-9d4e-1f2a3b4c5d6e', 'Codex · 5d6e'))
+        for session_id, esperado in casos:
+            with self.subTest(session_id=session_id):
+                r = leituras()
+                r['sessoes_codex']['sessoes'][0]['session_id'] = session_id
+                a = next(x for x in montar_agentes(r, 100000, []) if x['fonte'] == 'sessoes_codex')
+                self.assertEqual(a['nome'], esperado)
+                for proibido in ('/', '\\', ':'):
+                    self.assertNotIn(proibido, a['nome'])
+
+    def test_nomes_iguais_ganham_sufixo_numerado(self):
+        r = leituras()
+        s = r['eventos_hooks']['sessoes'][0]
+        r['eventos_hooks']['sessoes'] = [dict(s, session_id='x-ude1'), dict(s, session_id='y-ude1')]
+        agentes = montar_agentes(r, 100000, [])
+        self.assertEqual([a['nome'] for a in agentes if a['fonte'] == 'eventos_hooks'],
+                         ['Claude · ude1', 'Claude · ude1 (2)'])
+
+    def test_override_por_pasta_de_claude_e_codex_sem_publicar_a_pasta(self):
+        agentes = montar_agentes(leituras(), 100000, [{'pasta': 'c:\\EXEMPLO', 'nome': 'Revisor'},
+            {'pasta': 'C:/projeto', 'ferramenta': 'codex', 'nome': 'Painel', 'esforco': 'alto'}])
+        claude = next(a for a in agentes if a['fonte'] == 'eventos_hooks')
+        codex = next(a for a in agentes if a['fonte'] == 'sessoes_codex')
+        self.assertEqual((claude['nome'], codex['nome']), ('Revisor', 'Painel'))
+        self.assertEqual(codex['esforco'], 'alto')
+        self.assertIsNone(claude['pasta'])
+        self.assertIsNone(codex['pasta'])
+        texto = json.dumps([claude, codex]).lower()
+        self.assertNotIn('exemplo', texto)
+        self.assertNotIn('projeto', texto)
 
     def test_fonte_wire_real_http_falso_nao_publica_pasta_nem_tela(self):
         from lib.fontes import maestri_wire
@@ -234,7 +299,8 @@ class MontagemTests(unittest.TestCase):
         r['transcripts_claude']['claude-1']['fala'] = 'sk-' + 'a' * 40
         r['eventos_hooks']['sessoes'][0]['estado'] = 'ocioso'
         a = montar_agentes(r, 100000, [])[0]
-        self.assertNotIn('sk-' + 'a' * 40, a['atividade'])
+        self.assertIsNone(a['atividade'])
+        self.assertNotIn('sk-' + 'a' * 40, json.dumps(a))
         self.assertIsNone(a['contexto_pct'])
         self.assertEqual(montar_agentes({}, 100000, []), [])
 
@@ -293,6 +359,37 @@ class PassadaTests(unittest.TestCase):
         self.assertEqual((a['nome'], a['ferramenta_nome'], a['estado']),
                          ('Time/Agente', 'Maestri · custom', 'trabalhando'))
 
+    def test_arquivos_gravados_nao_levam_caminho_nem_texto_de_sessao(self):
+        sessao = self.r['eventos_hooks']['sessoes'][0]
+        sessao.update(cwd=CAMINHO_CLAUDE, transcript_path='C:\\TRANSCRIPT-SECRETO\\t.jsonl',
+                      tool_name='FERRAMENTA-SECRETA')
+        self.r['eventos_hooks']['sessoes'].append(dict(sessao, session_id='claude-2', estado='trabalhando',
+                                                       cwd=CAMINHO_CLAUDE + '\\sub-kk'))
+        self.r['transcripts_claude']['claude-1'].update(
+            pasta=CAMINHO_CLAUDE, fala='FALA-SECRETA em ' + CAMINHO_CLAUDE + '\\a.py')
+        self.r['sessoes_codex']['sessoes'][0]['pasta'] = CAMINHO_CODEX
+        self.r['maestri_wire']['terminais'].append({'id': 't-2', 'workspace': 'Time', 'nome': 'Duplicado',
+            'tipo': 'codex', 'status': 'running', 'rodando': True, 'atencao': False,
+            'descarregado': False, 'pasta': CAMINHO_CODEX})
+        dados = self.passada()
+        proibidos = ['SEGREDO', 'PASTA-X', 'PASTA-Y', 'projeto-alfa-zz', 'projeto-beta-ww', 'raiz-yy',
+                     'sub-kk', 'TRANSCRIPT-SECRETO', 'FALA-SECRETA', 'FERRAMENTA-SECRETA', 'pede permiss',
+                     'Duplicado']
+        for caminho in (CAMINHO_CLAUDE, CAMINHO_CODEX):
+            proibidos += [caminho, caminho.replace('\\', '/'), json.dumps(caminho)[1:-1]]
+        for nome in ('dados.json', 'dados.js'):
+            texto = (self.pasta / nome).read_text(encoding='utf-8')
+            for trecho in proibidos:
+                self.assertNotIn(trecho.lower(), texto.lower(), (nome, trecho))
+        self.assertEqual([a['nome'] for a in dados['agentes']],
+                         ['Claude · ude1', 'Claude · ude2', 'Codex · dex1', 'Time/Agente'])
+        self.assertEqual([(a['ferramenta_nome'], a['estado']) for a in dados['agentes'][:3]],
+                         [('Claude Code', 'esperando'), ('Claude Code', 'trabalhando'), ('Codex', 'trabalhando')])
+        for a in dados['agentes']:
+            self.assertIsNone(a['pasta'])
+            self.assertIsNone(a['atividade'])
+            self.assertIsNone(a['ultima_fala'])
+
     def test_html_chaves_em_escopos_reais(self):
         dados = self.passada()
         html = (RAIZ / 'publico' / 'classico.html').read_text(encoding='utf-8')
@@ -331,7 +428,7 @@ class PassadaTests(unittest.TestCase):
         self.fontes['transcripts_claude'] = lambda ctx: None
         dados = self.passada()
         claude = next(a for a in dados['agentes'] if a['ferramenta'] == 'claude')
-        self.assertEqual(claude['nome'], 'Claude · exemplo')
+        self.assertEqual(claude['nome'], 'Claude · ude1')
         self.assertIsNone(claude['modelo'])
         self.assertTrue(dados['fontes']['transcripts_claude']['ok'])
         self.assertIsNone(dados['fontes']['transcripts_claude']['erro'])
@@ -343,7 +440,7 @@ class PassadaTests(unittest.TestCase):
         dados = self.passada(cache=cache, agora=100002)
         claude = next(a for a in dados['agentes'] if a['ferramenta'] == 'claude')
         self.assertEqual(claude['modelo'], 'modelo-claude')
-        self.assertEqual(claude['ultima_fala'], 'Resposta sintética')
+        self.assertIsNone(claude['ultima_fala'])
         self.assertFalse(dados['fontes']['transcripts_claude']['ok'])
         self.assertEqual(dados['fontes']['transcripts_claude']['erro'], 'transcript sem leitura')
         self.assertEqual(cache['transcripts_claude']['dados']['claude-1']['modelo'], 'modelo-claude')

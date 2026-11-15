@@ -106,15 +106,16 @@ class HooksTests(unittest.TestCase):
             f.write('\nlixo\n[]')
         self.assertEqual(self.estado(), 'ocioso')
 
-    def test_transcript_modelo_fala_mascarada(self):
+    def test_transcript_modelo_e_pasta_sem_devolver_a_fala(self):
         self.transcript.write_text(json.dumps({'type': 'assistant', 'cwd': 'C:/exemplo',
             'timestamp': '2026-01-01T00:00:00Z', 'message': {'model': 'modelo-teste',
             'content': [{'type': 'text', 'text': 'sk-' + 'a' * 40 + ' texto' * 60}]}}), encoding='utf-8')
         r = transcripts_claude.ler({'transcript_path': self.transcript})
         self.assertEqual(r['modelo'], 'modelo-teste')
         self.assertEqual(r['pasta'], 'C:/exemplo')
-        self.assertLessEqual(len(r['fala']), 200)
-        self.assertNotIn('sk-' + 'a' * 40, r['fala'])
+        self.assertEqual(sorted(r), ['hora', 'modelo', 'pasta'])
+        self.assertNotIn('sk-', json.dumps(r))
+        self.assertNotIn(' texto', json.dumps(r))
 
     def test_so_final_64kb(self):
         self.transcript.write_text('x' * 70000 + '\n' + json.dumps(
