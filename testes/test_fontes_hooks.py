@@ -106,15 +106,16 @@ class HooksTests(unittest.TestCase):
             f.write('\nlixo\n[]')
         self.assertEqual(self.estado(), 'ocioso')
 
-    def test_transcript_modelo_fala_mascarada(self):
+    def test_transcript_modelo_e_pasta_sem_devolver_a_fala(self):
         self.transcript.write_text(json.dumps({'type': 'assistant', 'cwd': 'C:/exemplo',
             'timestamp': '2026-01-01T00:00:00Z', 'message': {'model': 'modelo-teste',
             'content': [{'type': 'text', 'text': 'sk-' + 'a' * 40 + ' texto' * 60}]}}), encoding='utf-8')
         r = transcripts_claude.ler({'transcript_path': self.transcript})
         self.assertEqual(r['modelo'], 'modelo-teste')
         self.assertEqual(r['pasta'], 'C:/exemplo')
-        self.assertLessEqual(len(r['fala']), 200)
-        self.assertNotIn('sk-' + 'a' * 40, r['fala'])
+        self.assertEqual(sorted(r), ['hora', 'modelo', 'pasta'])
+        self.assertNotIn('sk-', json.dumps(r))
+        self.assertNotIn(' texto', json.dumps(r))
 
     def test_so_final_64kb(self):
         self.transcript.write_text('x' * 70000 + '\n' + json.dumps(
@@ -157,3 +158,43 @@ class HooksTests(unittest.TestCase):
 
     def test_sem_path_nao_e_erro_de_leitura(self):
         self.assertIsNone(transcripts_claude.ler({}))
+
+    def linhas(self, *itens):
+        (self.pasta / 'eventos.jsonl').write_text(
+            '\n'.join(json.dumps(dict({'session_id': 'abc'}, **i)) for i in itens), encoding='utf-8')
+
+    def test_ferramenta_grok_ignorada(self):
+        self.linhas({'evento': 'SessionStart', 'ferramenta': 'grok', 'hora': 100000})
+        self.assertEqual(eventos_hooks.ler(self.ctx)['sessoes'], [])
+
+    def test_ferramenta_invalida_ignorada(self):
+        for valor in ('desconhecida', None, 123):
+            with self.subTest(valor=valor):
+                self.linhas({'evento': 'SessionStart', 'ferramenta': valor, 'hora': 100000})
+                self.assertEqual(eventos_hooks.ler(self.ctx)['sessoes'], [])
+
+    def test_ferramenta_grok_com_transcript_recente_ignorada(self):
+        self.crescer()
+        self.linhas({'evento': 'SessionStart', 'ferramenta': 'grok', 'hora': 99999,
+                     'transcript_path': str(self.transcript)})
+        self.assertEqual(eventos_hooks.ler(self.ctx)['sessoes'], [])
+
+    def test_legado_sem_ferramenta_vale_claude(self):
+        self.linhas({'evento': 'SessionStart', 'hora': 99940})
+        self.assertEqual(len(eventos_hooks.ler(self.ctx)['sessoes']), 1)
+
+    def test_session_end_do_grok_nao_encerra_sessao_do_claude(self):
+        self.linhas({'evento': 'SessionStart', 'ferramenta': 'claude', 'hora': 99990},
+                    {'evento': 'SessionEnd', 'ferramenta': 'grok', 'hora': 99995})
+        self.assertEqual(len(eventos_hooks.ler(self.ctx)['sessoes']), 1)
+
+    def test_stop_do_grok_nao_sobrescreve_permissao_do_claude(self):
+        self.linhas({'evento': 'PermissionRequest', 'ferramenta': 'claude', 'hora': 99990},
+                    {'evento': 'Stop', 'ferramenta': 'grok', 'hora': 99995})
+        self.assertEqual(self.estado(), 'esperando permissão')
+
+    def test_ttl_intacto_com_ferramenta_claude(self):
+        self.linhas({'evento': 'SessionStart', 'ferramenta': 'claude', 'hora': 100000 - 119})
+        self.assertEqual(len(eventos_hooks.ler(self.ctx)['sessoes']), 1)
+        self.linhas({'evento': 'SessionStart', 'ferramenta': 'claude', 'hora': 100000 - 121})
+        self.assertEqual(eventos_hooks.ler(self.ctx)['sessoes'], [])

@@ -68,7 +68,7 @@ class OverrideTests(unittest.TestCase):
         leituras = {'sessoes_codex': {'sessoes': [{'session_id': 'c', 'pasta': 'C:/projeto',
                                                  'modelo': 'modelo-real'}]}}
         agentes = coletor.vivo.montar_agentes(leituras, 1000, [
-            {'nome': 'Codex · projeto', 'pasta': 'C:/projeto',
+            {'nome': 'Codex · c', 'pasta': 'C:/projeto',
              'ferramenta': 'claude', 'conta': 'conta-claude'}])
         self.assertIsNone(agentes[0]['conta'])
         self.assertEqual(agentes[0]['modelo'], 'modelo-real')

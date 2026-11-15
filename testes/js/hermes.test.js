@@ -340,7 +340,7 @@ test('contrato: a página só lê, na raiz do dados.json, campos que o coletor p
   a.abrirModal({ tipo: 'agente', chave: 'sess-1' }); a.abrirModal({ tipo: 'agente', chave: 'sess-2' }); a.abrirModal({ tipo: 'servico', chave: 'whatsapp' }); a.abrirModal({ tipo: 'conta', chave: 'claude:abc' });
   const fora = [...lidos].filter((k) => !(k in fixture) && k !== 'toJSON');
   assert.deepEqual(fora, []);
-  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
+  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'presenca_linux', 'cota_codex_local', 'cota_grok_bot', 'cota_cursor', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
 });
 
 /* ---------- segurança e privacidade ---------- */
@@ -717,4 +717,499 @@ test('privacidade ligada: nenhum title/aria-label leva valor monetário ou e-mai
   assert.ok(doc.getElementById('breakdown').descendentes().some((e) => /US\$ \d/.test(e.getAttribute('title') || '')));
   a.alternarPrivacidade();
   assert.ok(!doc.getElementById('breakdown').descendentes().some((e) => e.getAttribute('title') !== null));
+});
+
+/* ---------- E16: presença por processo (aditiva; não muda os elementos que já existem) ---------- */
+const linhasPresenca = (doc) => doc.getElementById('presence-rows').children;
+const detalhePresenca = (tr) => nb(tr.descendentes().find((e) => e.tag === 'small').textContent);
+test('presencaDe: ausente/erro = inativa; válida soma instâncias; inválidos descartados; repetido fica o primeiro; família e tipo desconhecidos viram "outra"', () => {
+  const inativa = { ativa: false, itens: [], total: 0 };
+  [undefined, null, {}, { presenca_processos: null }, { presenca_processos: 'ok' }, { presenca_processos: [] }, { presenca_processos: { estado: 'erro' } },
+   { presenca_processos: { itens: clone(fixture.presenca_processos.itens) } }].forEach((d) => assert.deepEqual(Hermes.presencaDe(d), inativa));
+  const p = Hermes.presencaDe(fixture);
+  assert.equal(p.ativa, true); assert.equal(p.total, 3);
+  assert.deepEqual(p.itens.map((i) => [i.produto, i.rotulo, i.familia, i.tipo, i.instancias]), [['claude_cli', 'Claude Code CLI', 'claude', 'cli', 2], ['grok_bot', 'Grok Bot', 'grok', 'app', 1]]);
+  assert.deepEqual(Hermes.presencaDe({ presenca_processos: { estado: 'ok' } }), { ativa: true, itens: [], total: 0 });
+  const sujo = Hermes.presencaDe({ presenca_processos: { estado: 'ok', itens: [
+    { produto: 'sem_rotulo', familia: 'claude', tipo: 'cli', instancias: 1 },
+    { produto: 'rotulo_vazio', rotulo: '', familia: 'claude', tipo: 'cli', instancias: 1 },
+    { produto: 'rotulo_numero', rotulo: 7, familia: 'claude', tipo: 'cli', instancias: 1 },
+    { produto: 'zero', rotulo: 'Zero', familia: 'claude', tipo: 'cli', instancias: 0 },
+    { produto: 'negativo', rotulo: 'Negativo', familia: 'claude', tipo: 'cli', instancias: -1 },
+    { produto: 'texto', rotulo: 'Texto', familia: 'claude', tipo: 'cli', instancias: '2' },
+    { produto: 'fracao', rotulo: 'Fração', familia: 'claude', tipo: 'cli', instancias: 1.5 },
+    { produto: 'nan', rotulo: 'NaN', familia: 'claude', tipo: 'cli', instancias: NaN },
+    'lixo', null, 7, ['x'],
+    { produto: '', rotulo: 'Produto vazio', instancias: 1 },
+    { produto: 12, rotulo: 'Produto número', instancias: 1 },
+    { produto: 'p'.repeat(41), rotulo: 'Produto longo', instancias: 1 },
+    { produto: 'rotulo_longo', rotulo: 'r'.repeat(61), instancias: 1 },
+    { produto: 'p'.repeat(40), rotulo: 'r'.repeat(60), familia: 'cursor', tipo: 'app', instancias: 1 },
+    { produto: 'dup', rotulo: 'Primeiro', familia: 'codex', tipo: 'app', instancias: 2 },
+    { produto: 'dup', rotulo: 'Segundo', familia: 'claude', tipo: 'cli', instancias: 9 },
+    { produto: 'estranho', rotulo: 'Estranho', familia: 'gemini', tipo: 'daemon', instancias: 1 },
+    { produto: 'sem_familia', rotulo: 'Sem família', instancias: 3 },
+    { produto: '__proto__', rotulo: 'Proto', familia: 'constructor', tipo: 'toString', instancias: 1 }
+  ] } });
+  assert.equal(sujo.ativa, true);
+  assert.deepEqual(sujo.itens.map((i) => [i.produto, i.rotulo, i.familia, i.tipo, i.instancias]), [
+    ['p'.repeat(40), 'r'.repeat(60), 'cursor', 'app', 1], ['dup', 'Primeiro', 'codex', 'app', 2], ['estranho', 'Estranho', 'outra', 'outra', 1],
+    ['sem_familia', 'Sem família', 'outra', 'outra', 3], ['__proto__', 'Proto', 'outra', 'outra', 1]]);
+  assert.equal(sujo.total, 8);
+  sujo.itens.forEach((i) => assert.deepEqual(Object.keys(i).sort(), ['familia', 'instancias', 'produto', 'rotulo', 'tipo']));
+});
+test('presença: render com a fixture mostra bloco e linha do cartão; k-trab, k-total, nav-agentes, abas e agent-rows iguais a sem a chave', () => {
+  const semChave = clone(fixture); delete semChave.presenca_processos; delete semChave.fontes.presenca_processos;
+  const antes = app(); antes.a.receber(semChave);
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  assert.equal(doc.getElementById('presence').hidden, false);
+  const linhas = linhasPresenca(doc);
+  assert.equal(linhas.length, 2);
+  assert.equal(txt('presence-badge'), '3 processos');
+  assert.equal(doc.getElementById('k-online-foot').hidden, false);
+  assert.equal(txt('k-online-texto'), '3 processos de IA online');
+  assert.equal(nb(linhas[0].textContent), 'Claude Code CLICLI · 2 instânciasonlineatividade desconhecida');
+  assert.equal(nb(linhas[1].textContent), 'Grok Botaplicativoonlineatividade desconhecida');
+  assert.equal(linhas[0].className, 'presence-row');
+  assert.ok(linhas[0].descendentes().some((e) => e.className === 'status good'));
+  assert.ok(!linhas[0].descendentes().some((e) => e.tag === 'button' || 'aria-haspopup' in e.attrs), 'linha de presença não é botão');
+  linhas[0].click(); assert.equal(a.estado.modal, null);
+  assert.equal(txt('k-trab'), '1'); assert.equal(txt('k-total'), '/ 3'); assert.equal(txt('nav-agentes'), '3');
+  assert.equal(doc.getElementById('agent-rows').children.length, 3);
+  assert.equal(doc.getElementById('agent-rows').children.length, antes.doc.getElementById('agent-rows').children.length);
+  ['k-trab', 'k-total', 'k-agentes-texto', 'nav-agentes', 'agents-badge', 'tab-todos', 'tab-ativos', 'tab-ociosos', 'agent-rows', 'agent-empty']
+    .forEach((id) => {
+      assert.equal(txt(id), antes.txt(id), 'mudou ' + id);
+      assert.equal(doc.getElementById(id).hidden, antes.doc.getElementById(id).hidden, 'mudou a visibilidade de ' + id);
+    });
+  assert.equal(antes.doc.getElementById('presence').hidden, true); assert.equal(antes.doc.getElementById('k-online-foot').hidden, true);
+  // o bloco não depende das abas nem da busca
+  doc.querySelectorAll('[data-agent-filter]').find((b) => b.attrs['data-agent-filter'] === 'ociosos').click();
+  const busca = doc.getElementById('agent-search'); busca.emit('input', { target: Object.assign(busca, { value: 'zzz' }) });
+  assert.equal(doc.getElementById('agent-rows').children.length, 0);
+  assert.equal(linhasPresenca(doc).length, 2); assert.equal(doc.getElementById('presence').hidden, false);
+});
+test('presença: sem a chave, com estado erro ou antes da primeira leitura, bloco e linha do cartão ocultos e tabela vazia', () => {
+  assert.match(html, /<div class="stat-foot" id="k-online-foot" hidden>/);
+  assert.match(html, /<div class="presence" id="presence" role="group" aria-label="Processos de IA online" hidden>/);
+  const { a, doc } = app();
+  const oculto = (quando) => {
+    assert.equal(doc.getElementById('presence').hidden, true, 'bloco visível ' + quando);
+    assert.equal(doc.getElementById('k-online-foot').hidden, true, 'linha do cartão visível ' + quando);
+    assert.equal(linhasPresenca(doc).length, 0, 'linhas de presença ' + quando);
+  };
+  oculto('antes da primeira leitura');
+  const sem = clone(fixture); delete sem.presenca_processos;
+  a.receber(sem); oculto('sem a chave');
+  a.receber(clone(fixture)); assert.equal(linhasPresenca(doc).length, 2);
+  a.receber(clone(sem)); oculto('quando a chave some');
+  a.receber(clone(fixture));
+  a.receber(Object.assign(clone(fixture), { presenca_processos: { estado: 'erro' } })); oculto('com estado erro');
+});
+test('presença: estado ok sem itens esconde o bloco e mostra "nenhum processo de IA online" no cartão', () => {
+  const { a, doc, txt } = app();
+  a.receber(Object.assign(clone(fixture), { presenca_processos: { estado: 'ok', itens: [], ilegiveis: 2 } }));
+  assert.equal(doc.getElementById('presence').hidden, true);
+  assert.equal(doc.getElementById('k-online-foot').hidden, false);
+  assert.equal(txt('k-online-texto'), 'nenhum processo de IA online');
+  assert.equal(linhasPresenca(doc).length, 0);
+  a.receber(Object.assign(clone(fixture), { presenca_processos: { estado: 'ok', itens: [{ produto: 'x', instancias: 1 }] } }));   // só item inválido
+  assert.equal(doc.getElementById('presence').hidden, true); assert.equal(txt('k-online-texto'), 'nenhum processo de IA online');
+});
+test('presença: rótulo hostil aparece como texto literal e nenhum elemento é criado a partir dele', () => {
+  const { a, doc, txt } = app();
+  const d = clone(fixture);
+  d.presenca_processos.itens = [{ produto: 'hostil', rotulo: '<img src=x onerror=alert(1)>', familia: '<script>', tipo: '<b>', instancias: 2 }];
+  d.agentes = [];                                                   // só o rótulo da presença traz HTML nesta leitura
+  a.receber(d);
+  const rows = doc.getElementById('presence-rows');
+  assert.equal(linhasPresenca(doc).length, 1);
+  assert.equal(nb(rows.textContent), '<img src=x onerror=alert(1)>2 instânciasonlineatividade desconhecida');
+  assert.match(txt('presence'), /<img src=x onerror=alert\(1\)>/);
+  ['img', 'script', 'b'].forEach((t) => assert.ok(!rows.descendentes().some((e) => e.tag === t), 'elemento <' + t + '> criado a partir do rótulo'));
+  assert.equal(doc.documentElement.descendentes().filter((e) => e.tag === 'img').length, 0);
+  assert.ok(!rows.descendentes().some((e) => Object.keys(e.attrs).some((k) => /^on/.test(k))));
+});
+test('presença: atualização ao vivo remove o produto que saiu, atualiza instâncias, troca o ícone e reaproveita a linha', () => {
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  const primeira = linhasPresenca(doc)[0];
+  const icone = (tr) => tr.descendentes().find((e) => e.tag === 'path').attrs.d;
+  assert.equal(detalhePresenca(linhasPresenca(doc)[0]), 'CLI · 2 instâncias'); assert.equal(detalhePresenca(linhasPresenca(doc)[1]), 'aplicativo');
+  assert.equal(icone(primeira), Hermes.ICONES.claude[0][1].d);
+  const d1 = clone(fixture);
+  d1.presenca_processos.itens = d1.presenca_processos.itens.filter((i) => i.produto !== 'grok_bot'); d1.presenca_processos.itens[0].instancias = 5;
+  a.receber(d1);
+  assert.equal(linhasPresenca(doc).length, 1); assert.ok(linhasPresenca(doc)[0] === primeira, 'a linha foi recriada');
+  assert.doesNotMatch(txt('presence-rows'), /Grok Bot/);
+  assert.equal(detalhePresenca(primeira), 'CLI · 5 instâncias');
+  assert.equal(txt('presence-badge'), '5 processos'); assert.equal(txt('k-online-texto'), '5 processos de IA online');
+  const d2 = clone(fixture); d2.presenca_processos.itens.forEach((i) => { i.instancias = 1; });
+  a.receber(d2);
+  assert.equal(linhasPresenca(doc).length, 2); assert.ok(linhasPresenca(doc)[0] === primeira);
+  assert.equal(detalhePresenca(linhasPresenca(doc)[0]), 'CLI'); assert.equal(detalhePresenca(linhasPresenca(doc)[1]), 'aplicativo');
+  assert.equal(txt('presence-badge'), '2 processos');
+  const d3 = clone(fixture); d3.presenca_processos.itens = [Object.assign(d3.presenca_processos.itens[0], { familia: 'codex', instancias: 1 })];
+  a.receber(d3);
+  assert.equal(icone(linhasPresenca(doc)[0]), Hermes.ICONES.code[0][1].d);
+  assert.equal(txt('presence-badge'), '1 processo'); assert.equal(txt('k-online-texto'), '1 processo de IA online');
+  const d4 = clone(fixture);
+  d4.presenca_processos.itens = [{ produto: 'novo', rotulo: 'Novo', familia: 'nova', tipo: 'servico', instancias: 4 }, { produto: 'unico', rotulo: 'Único', instancias: 1 }];
+  a.receber(d4);
+  assert.equal(detalhePresenca(linhasPresenca(doc)[0]), '4 instâncias'); assert.equal(detalhePresenca(linhasPresenca(doc)[1]), '');
+});
+test('presença que lança não impede KPIs nem a lista de sessões; o aviso fica só no bloco de presença', () => {
+  const d = clone(fixture);
+  Object.defineProperty(d.presenca_processos, 'itens', { enumerable: true, get() { throw new Error('boom presença'); } });
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => {
+    assert.doesNotThrow(() => a.receber(d));
+    assert.equal(erros.length, 1); assert.match(String(erros[0][0]), /presença por processo/); assert.match(String(erros[0][1]), /boom presença/);
+  });
+  assert.equal(txt('k-trab'), '1'); assert.equal(txt('k-total'), '/ 3'); assert.equal(txt('nav-agentes'), '3');
+  assert.equal(doc.getElementById('agent-rows').children.length, d.agentes.length);
+  assert.equal(doc.getElementById('agents')._avisoSecao, undefined); assert.equal(doc.getElementById('stats')._avisoSecao, undefined);
+  assert.match(txt('services-grid'), /Hindsight/); assert.match(txt('providers'), /\S/); assert.match(txt('cost-total'), /\d/);
+  assert.match(txt('presence'), /não foi possível desenhar esta seção/);
+  silenciarErros(() => a.receber(clone(fixture)));                       // na próxima leitura boa o aviso some
+  assert.doesNotMatch(txt('presence'), /não foi possível desenhar/);
+  assert.equal(doc.getElementById('presence').hidden, false); assert.equal(linhasPresenca(doc).length, 2);
+});
+
+/* ---------- E18: presença no WSL (bloco próprio; a presença da E16 e o cartão-contador não mudam) ---------- */
+const linhasLinux = (doc) => doc.getElementById('presence-linux-rows').children;
+const comLinux = (pl) => Object.assign(clone(fixture), { presenca_linux: pl });
+const itensWsl = () => [{ produto: 'claude_cli', rotulo: 'Claude Code CLI', familia: 'claude', tipo: 'cli', instancias: 2 },
+                        { produto: 'cursor_agent', rotulo: 'Cursor Agent CLI', familia: 'cursor', tipo: 'cli', instancias: 1 }];
+const itensSujos = () => [
+  { produto: 'sem_rotulo', familia: 'claude', tipo: 'cli', instancias: 1 },
+  { produto: 'zero', rotulo: 'Zero', familia: 'claude', tipo: 'cli', instancias: 0 },
+  { produto: 'texto', rotulo: 'Texto', familia: 'claude', tipo: 'cli', instancias: '2' },
+  { produto: 'fracao', rotulo: 'Fração', familia: 'claude', tipo: 'cli', instancias: 1.5 },
+  { produto: 'nan', rotulo: 'NaN', familia: 'claude', tipo: 'cli', instancias: NaN },
+  'lixo', null, 7, ['x'],
+  { produto: 'p'.repeat(41), rotulo: 'Produto longo', instancias: 1 },
+  { produto: 'rotulo_longo', rotulo: 'r'.repeat(61), instancias: 1 },
+  { produto: 'dup', rotulo: 'Primeiro', familia: 'codex', tipo: 'cli', instancias: 2 },
+  { produto: 'dup', rotulo: 'Segundo', familia: 'claude', tipo: 'cli', instancias: 9 },
+  { produto: 'estranho', rotulo: 'Estranho', familia: 'gemini', tipo: 'daemon', instancias: 1 },
+  { produto: '__proto__', rotulo: 'Proto', familia: 'constructor', tipo: 'toString', instancias: 1 }
+];
+test('presencaLinuxDe: ausente/erro = inativa; parada ignora itens; ok valida itens pelas regras de presencaDe; host inválido vira ""', () => {
+  const inativa = { ativa: false, estado: '', host: '', itens: [], total: 0 };
+  [undefined, null, {}, { presenca_linux: null }, { presenca_linux: 'ok' }, { presenca_linux: [] }, { presenca_linux: { estado: 'erro' } },
+   { presenca_linux: { estado: 'OK', host: 'Ubuntu-26.04' } }, { presenca_linux: { host: 'Ubuntu-26.04', itens: itensWsl() } },
+   { presenca_processos: clone(fixture.presenca_processos) }].forEach((d) => assert.deepEqual(Hermes.presencaLinuxDe(d), inativa));
+  assert.deepEqual(Hermes.presencaLinuxDe(fixture), { ativa: true, estado: 'parada', host: 'Ubuntu-26.04', itens: [], total: 0 });
+  assert.deepEqual(Hermes.presencaLinuxDe({ presenca_linux: { estado: 'parada', host: 'Ubuntu-26.04', itens: itensWsl() } }),
+    { ativa: true, estado: 'parada', host: 'Ubuntu-26.04', itens: [], total: 0 }, 'parada nunca traz itens');
+  const ok = Hermes.presencaLinuxDe({ presenca_linux: { estado: 'ok', host: 'Ubuntu-26.04', itens: itensWsl() } });
+  assert.equal(ok.ativa, true); assert.equal(ok.estado, 'ok'); assert.equal(ok.host, 'Ubuntu-26.04'); assert.equal(ok.total, 3);
+  assert.deepEqual(ok.itens.map((i) => [i.produto, i.rotulo, i.familia, i.tipo, i.instancias]),
+    [['claude_cli', 'Claude Code CLI', 'claude', 'cli', 2], ['cursor_agent', 'Cursor Agent CLI', 'cursor', 'cli', 1]]);
+  assert.deepEqual(Hermes.presencaLinuxDe({ presenca_linux: { estado: 'ok', host: 'Ubuntu-26.04' } }), { ativa: true, estado: 'ok', host: 'Ubuntu-26.04', itens: [], total: 0 });
+  const sujo = Hermes.presencaLinuxDe({ presenca_linux: { estado: 'ok', host: 'Ubuntu-26.04', itens: itensSujos() } });
+  const e16 = Hermes.presencaDe({ presenca_processos: { estado: 'ok', itens: itensSujos() } });
+  assert.deepEqual(sujo.itens, e16.itens); assert.equal(sujo.total, e16.total);
+  assert.deepEqual(sujo.itens.map((i) => [i.produto, i.rotulo, i.familia, i.tipo, i.instancias]),
+    [['dup', 'Primeiro', 'codex', 'cli', 2], ['estranho', 'Estranho', 'outra', 'outra', 1], ['__proto__', 'Proto', 'outra', 'outra', 1]]);
+  assert.equal(sujo.total, 4);
+  sujo.itens.forEach((i) => assert.deepEqual(Object.keys(i).sort(), ['familia', 'instancias', 'produto', 'rotulo', 'tipo']));
+  [undefined, null, 7, true, '', 'h'.repeat(41), ['Ubuntu'], { nome: 'Ubuntu' }].forEach((host) => {
+    assert.equal(Hermes.presencaLinuxDe({ presenca_linux: { estado: 'ok', host, itens: [] } }).host, '', 'host ' + JSON.stringify(host));
+    assert.equal(Hermes.presencaLinuxDe({ presenca_linux: { estado: 'parada', host } }).host, '', 'host parada ' + JSON.stringify(host));
+  });
+  assert.equal(Hermes.presencaLinuxDe({ presenca_linux: { estado: 'ok', host: 'h'.repeat(40) } }).host, 'h'.repeat(40));
+  assert.equal(Hermes.presencaLinuxDe({ presenca_linux: { estado: 'parada', host: 'k' } }).host, 'k');
+});
+test('presença no WSL: render com a fixture (parada) mostra bloco, host e selo; o bloco e o cartão da E16 ficam iguais a sem a chave', () => {
+  assert.match(html, /<div class="presence" id="presence-linux" role="group" aria-label="Processos de IA no WSL" hidden><div class="presence-head"><span id="presence-linux-titulo">WSL<\/span><span class="badge" id="presence-linux-badge"><\/span><\/div>/);
+  const semChave = clone(fixture); delete semChave.presenca_linux; delete semChave.fontes.presenca_linux;
+  const antes = app(); antes.a.receber(semChave);
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  const bloco = doc.getElementById('presence-linux'), e16 = doc.getElementById('presence');
+  assert.ok(bloco.parentNode === e16.parentNode && bloco.parentNode === doc.getElementById('agents'), 'irmão de #presence na seção de agentes');
+  const irmaos = e16.parentNode.children; assert.ok(irmaos[irmaos.indexOf(e16) + 1] === bloco, 'logo depois de #presence');
+  assert.equal(bloco.hidden, false);
+  assert.equal(txt('presence-linux-titulo'), 'WSL · Ubuntu-26.04');
+  assert.equal(txt('presence-linux-badge'), 'parada');
+  assert.equal(linhasLinux(doc).length, 0);
+  assert.equal(txt('presence-badge'), '3 processos'); assert.equal(linhasPresenca(doc).length, 2);
+  assert.equal(txt('k-online-texto'), '3 processos de IA online'); assert.equal(doc.getElementById('k-online-foot').hidden, false);
+  ['presence', 'presence-badge', 'presence-rows', 'k-online-foot', 'k-online-texto', 'k-trab', 'k-total', 'nav-agentes', 'agent-rows', 'agent-empty']
+    .forEach((id) => {
+      assert.equal(txt(id), antes.txt(id), 'mudou ' + id);
+      assert.equal(doc.getElementById(id).hidden, antes.doc.getElementById(id).hidden, 'mudou a visibilidade de ' + id);
+    });
+  assert.equal(antes.doc.getElementById('presence-linux').hidden, true); assert.equal(linhasLinux(antes.doc).length, 0);
+});
+test('presença no WSL: estado ok com itens desenha as linhas e o selo "ligada"; o selo e o cartão da E16 não somam o WSL', () => {
+  const { a, doc, txt } = app();
+  a.receber(comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: itensWsl() }));
+  assert.equal(doc.getElementById('presence-linux').hidden, false);
+  const linhas = linhasLinux(doc);
+  assert.equal(linhas.length, 2);
+  assert.equal(txt('presence-linux-badge'), 'ligada · 3 processos');
+  assert.equal(txt('presence-linux-titulo'), 'WSL · Ubuntu-26.04');
+  assert.equal(detalhePresenca(linhas[0]), 'CLI · 2 instâncias'); assert.equal(detalhePresenca(linhas[1]), 'CLI');
+  assert.equal(nb(linhas[0].textContent), 'Claude Code CLICLI · 2 instânciasonlineatividade desconhecida');
+  assert.equal(nb(linhas[1].textContent), 'Cursor Agent CLICLIonlineatividade desconhecida');
+  assert.equal(linhas[0].className, 'presence-row');
+  assert.ok(!linhas[0].descendentes().some((e) => e.tag === 'button' || 'aria-haspopup' in e.attrs), 'linha de presença não é botão');
+  assert.equal(txt('presence-badge'), '3 processos'); assert.equal(txt('k-online-texto'), '3 processos de IA online');
+  assert.equal(linhasPresenca(doc).length, 2);
+  assert.equal(txt('k-trab'), '1'); assert.equal(txt('k-total'), '/ 3'); assert.equal(txt('nav-agentes'), '3');
+  const um = comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: [itensWsl()[1]] });
+  a.receber(um);
+  assert.equal(txt('presence-linux-badge'), 'ligada · 1 processo'); assert.equal(linhasLinux(doc).length, 1);
+  assert.equal(txt('presence-badge'), '3 processos'); assert.equal(txt('k-online-texto'), '3 processos de IA online');
+  const semE16 = comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: itensWsl() }); delete semE16.presenca_processos;
+  a.receber(semE16);                                                // só o WSL tem processos: o cartão continua sem a linha de presença
+  assert.equal(linhasLinux(doc).length, 2); assert.equal(txt('presence-linux-badge'), 'ligada · 3 processos');
+  assert.equal(doc.getElementById('presence').hidden, true); assert.equal(linhasPresenca(doc).length, 0);
+  assert.equal(doc.getElementById('k-online-foot').hidden, true); assert.equal(txt('k-online-texto'), 'nenhum processo de IA online');
+});
+test('presença no WSL: estado ok sem itens mostra o bloco com "ligada · nenhum processo" e sem linhas', () => {
+  const { a, doc, txt } = app();
+  const vazio = (quando) => {
+    assert.equal(doc.getElementById('presence-linux').hidden, false, 'bloco oculto ' + quando);
+    assert.equal(txt('presence-linux-badge'), 'ligada · nenhum processo', 'selo ' + quando);
+    assert.equal(linhasLinux(doc).length, 0, 'linhas ' + quando);
+  };
+  a.receber(comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: [] })); vazio('com itens []');
+  assert.equal(txt('presence-linux-titulo'), 'WSL · Ubuntu-26.04');
+  a.receber(comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: itensWsl() })); assert.equal(linhasLinux(doc).length, 2);
+  a.receber(comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: [{ produto: 'x', instancias: 1 }] })); vazio('só com item inválido');
+  a.receber(comLinux({ estado: 'ok', itens: [] })); vazio('sem host');
+  assert.equal(txt('presence-linux-titulo'), 'WSL');
+  assert.equal(txt('presence-badge'), '3 processos'); assert.equal(txt('k-online-texto'), '3 processos de IA online');
+});
+test('presença no WSL: sem a chave, com estado erro ou antes da primeira leitura, bloco oculto e tabela vazia', () => {
+  const { a, doc, txt } = app();
+  const oculto = (quando) => {
+    assert.equal(doc.getElementById('presence-linux').hidden, true, 'bloco visível ' + quando);
+    assert.equal(linhasLinux(doc).length, 0, 'linhas no WSL ' + quando);
+  };
+  oculto('antes da primeira leitura');
+  const sem = clone(fixture); delete sem.presenca_linux; delete sem.fontes.presenca_linux;
+  a.receber(sem); oculto('sem a chave');
+  assert.equal(doc.getElementById('presence').hidden, false); assert.equal(linhasPresenca(doc).length, 2);
+  a.receber(comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: itensWsl() })); assert.equal(linhasLinux(doc).length, 2);
+  a.receber(clone(sem)); oculto('quando a chave some');
+  a.receber(comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: itensWsl() })); assert.equal(linhasLinux(doc).length, 2);
+  a.receber(comLinux({ estado: 'erro' })); oculto('com estado erro');
+  a.receber(comLinux(null)); oculto('com a chave nula');
+  a.receber(comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: itensWsl() }));
+  a.receber(clone(fixture));                                        // de ok com linhas para parada: linhas somem, selo "parada"
+  assert.equal(doc.getElementById('presence-linux').hidden, false); assert.equal(linhasLinux(doc).length, 0); assert.equal(txt('presence-linux-badge'), 'parada');
+});
+test('presença no WSL: rótulo e host hostis aparecem como texto literal e nenhum elemento é criado a partir deles', () => {
+  const { a, doc, txt } = app();
+  const hostil = '<img src=x onerror=alert(1)>';
+  const d = comLinux({ estado: 'ok', host: hostil, itens: [{ produto: 'hostil', rotulo: hostil, familia: '<script>', tipo: '<b>', instancias: 2 }] });
+  d.agentes = [];                                                   // só a presença no WSL traz HTML nesta leitura
+  a.receber(d);
+  const bloco = doc.getElementById('presence-linux'), rows = doc.getElementById('presence-linux-rows');
+  assert.equal(txt('presence-linux-titulo'), 'WSL · ' + hostil);
+  assert.equal(linhasLinux(doc).length, 1);
+  assert.equal(nb(rows.textContent), hostil + '2 instânciasonlineatividade desconhecida');
+  ['img', 'script', 'b'].forEach((t) => assert.ok(!bloco.descendentes().some((e) => e.tag === t), 'elemento <' + t + '> criado a partir do dado do WSL'));
+  assert.equal(doc.documentElement.descendentes().filter((e) => e.tag === 'img').length, 0);
+  assert.ok(!bloco.descendentes().some((e) => Object.keys(e.attrs).some((k) => /^on/.test(k))));
+  a.receber(comLinux({ estado: 'parada', host: EMAIL }));            // o host passa pela máscara de privacidade como todo texto de dado
+  if (!a.estado.privado) a.alternarPrivacidade();
+  assert.ok(!txt('presence-linux-titulo').includes(EMAIL), 'e-mail no título com a privacidade ligada');
+  assert.match(txt('presence-linux-titulo'), /^WSL · \S/);
+  a.alternarPrivacidade();
+  assert.equal(a.estado.privado, false); assert.equal(txt('presence-linux-titulo'), 'WSL · ' + EMAIL);
+});
+test('presença no WSL que lança não impede o bloco da E16, os KPIs nem a lista de sessões; o aviso fica só no bloco do WSL', () => {
+  const d = comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: [] });
+  Object.defineProperty(d.presenca_linux, 'itens', { enumerable: true, get() { throw new Error('boom wsl'); } });
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => {
+    assert.doesNotThrow(() => a.receber(d));
+    assert.equal(erros.length, 1); assert.match(String(erros[0][0]), /presença no WSL/); assert.match(String(erros[0][1]), /boom wsl/);
+  });
+  assert.equal(txt('k-trab'), '1'); assert.equal(txt('k-total'), '/ 3'); assert.equal(txt('nav-agentes'), '3');
+  assert.equal(doc.getElementById('agent-rows').children.length, d.agentes.length);
+  assert.equal(doc.getElementById('agents')._avisoSecao, undefined); assert.equal(doc.getElementById('stats')._avisoSecao, undefined);
+  assert.equal(doc.getElementById('presence')._avisoSecao, undefined);
+  assert.equal(doc.getElementById('presence').hidden, false); assert.equal(linhasPresenca(doc).length, 2);
+  assert.equal(txt('presence-badge'), '3 processos'); assert.equal(txt('k-online-texto'), '3 processos de IA online');
+  assert.doesNotMatch(txt('presence'), /não foi possível desenhar/);
+  assert.match(txt('services-grid'), /Hindsight/); assert.match(txt('providers'), /\S/); assert.match(txt('cost-total'), /\d/);
+  assert.match(txt('presence-linux'), /não foi possível desenhar esta seção/);
+  silenciarErros(() => a.receber(clone(fixture)));                       // na próxima leitura boa o aviso some
+  assert.doesNotMatch(txt('presence-linux'), /não foi possível desenhar/);
+  assert.equal(doc.getElementById('presence-linux').hidden, false); assert.equal(txt('presence-linux-badge'), 'parada');
+});
+test('terminal do Maestri com pasta, atividade e última fala nulos desenha sem erro e a linha mostra o nome', () => {
+  const base = app();
+  silenciarErros(() => base.a.receber(clone(fixture)));
+  const antes = base.doc.getElementById('agent-rows').children.length;
+  const d = clone(fixture);
+  d.agentes.push({ nome: 'Time/Agente', ferramenta: 'maestri', ferramenta_nome: 'Maestri · custom', estado: 'trabalhando', leitura: 'ok', session_id: 't-1', fonte: 'maestri_wire', pasta: null, atividade: null, ultima_fala: null, missao: null, prs: [] });
+  const ag = Hermes.agentesDe(d).filter((x) => x.nome === 'Time/Agente')[0];
+  assert.equal(ag.atividade, ''); assert.equal(ag.ultimaFala, '');
+  const { a, doc } = app();
+  silenciarErros((erros) => {
+    assert.doesNotThrow(() => a.receber(d));
+    assert.equal(erros.length, 0);
+  });
+  const linhas = doc.getElementById('agent-rows').children;
+  assert.equal(linhas.length, antes + 1);
+  assert.ok(linhas.some((l) => nb(l.textContent).includes('Time/Agente')));
+});
+
+/* ---------- E19: uso observado em arquivos locais (bloco próprio na seção Limites de uso; #providers não muda) ---------- */
+const CHAVES_LOCAIS = ['cota_codex_local', 'cota_grok_bot', 'cota_cursor'];
+const semCotasLocais = () => { const d = clone(fixture); CHAVES_LOCAIS.forEach((k) => { delete d[k]; delete d.fontes[k]; }); return d; };
+const erroNasTres = () => Object.assign(semCotasLocais(), { cota_codex_local: { estado: 'erro' }, cota_grok_bot: { estado: 'erro' }, cota_cursor: { estado: 'erro' } });
+const cartoesLocais = (doc) => doc.getElementById('limits-local-cards').children;
+const porClasse = (no, cls) => no.descendentes().filter((e) => e.classList.contains(cls));
+const textosDe = (no, cls) => porClasse(no, cls).map((e) => nb(e.textContent));
+const rotulosDe = (cartao) => porClasse(cartao, 'usage-label').map((l) => nb(l.children[0].textContent));
+test('cotasLocaisDe: sem as chaves = []; erro fica fora; ordem fixa; barras validadas e limitadas; plano e assinatura por formato; sem_dado sem barras', () => {
+  assert.deepEqual(Hermes.cotasLocaisDe(null), []);
+  assert.deepEqual(Hermes.cotasLocaisDe(semCotasLocais()), []);
+  assert.deepEqual(Hermes.cotasLocaisDe(erroNasTres()), []);
+  [null, 'ok', 7, ['ok'], {}, { estado: 'outro' }].forEach((v) => assert.deepEqual(Hermes.cotasLocaisDe({ cota_codex_local: v, cota_cursor: v }), [], JSON.stringify(v)));
+  assert.deepEqual(Hermes.cotasLocaisDe(fixture), [
+    { chave: 'cota_codex_local', nome: 'Codex', detalhe: 'observado localmente', icone: 'code', estado: 'ok', observadoEm: T0 - 7200,
+      barras: [{ tipo: '5h', pct: 23, renovaEpoch: T0 + 3600 }, { tipo: 'semana', pct: 61.5, renovaEpoch: T0 + 259200 }], plano: '', assinatura: '' },
+    { chave: 'cota_grok_bot', nome: 'Grok Bot', detalhe: 'observado localmente', icone: 'agents', estado: 'ok', observadoEm: T0 - 600,
+      barras: [{ tipo: 'janela', pct: 41, renovaEpoch: T0 + 86400 }], plano: '', assinatura: '' },
+    { chave: 'cota_cursor', nome: 'Cursor', detalhe: 'plano local', icone: 'agents', estado: 'ok', observadoEm: null, barras: [], plano: 'pro_plus', assinatura: 'active' }
+  ]);
+  const invertido = { cota_cursor: clone(fixture.cota_cursor), cota_grok_bot: clone(fixture.cota_grok_bot), cota_codex_local: clone(fixture.cota_codex_local) };
+  assert.deepEqual(Hermes.cotasLocaisDe(invertido).map((x) => x.chave), CHAVES_LOCAIS);
+  assert.deepEqual(Hermes.cotasLocaisDe(Object.assign(clone(fixture), { cota_grok_bot: { estado: 'erro' } })).map((x) => x.chave), ['cota_codex_local', 'cota_cursor']);
+  const sujo = Hermes.cotasLocaisDe({ cota_codex_local: { estado: 'ok', observado_epoch: 'ontem', barras: [
+    { tipo: '5h', usado_pct: 150, renova_epoch: 'amanhã' }, { tipo: 'semana', usado_pct: -3, renova_epoch: Infinity }, { tipo: 'mensal', usado_pct: 10, renova_epoch: T0 },
+    { tipo: 'semana', usado_pct: '50' }, { tipo: '5h' }, { tipo: '5h', usado_pct: NaN }, { tipo: '5h', usado_pct: true }, null, 'lixo', 7,
+    { usado_pct: 20 }, { tipo: 'janela', usado_pct: 30 }] } })[0];
+  assert.equal(sujo.observadoEm, null);
+  assert.deepEqual(sujo.barras, [{ tipo: '5h', pct: 100, renovaEpoch: null }, { tipo: 'semana', pct: 0, renovaEpoch: null }, { tipo: 'janela', pct: 10, renovaEpoch: T0 },
+                                 { tipo: 'janela', pct: 20, renovaEpoch: null }]);
+  const vazio = Hermes.cotasLocaisDe({ cota_codex_local: { estado: 'sem_dado', observado_epoch: null, barras: [{ tipo: '5h', usado_pct: 10 }] },
+                                       cota_grok_bot: { estado: 'sem_dado', observado_epoch: null, barras: [] }, cota_cursor: { estado: 'sem_dado', plano: null, assinatura: null } });
+  assert.deepEqual(vazio.map((x) => [x.chave, x.estado, x.barras, x.plano, x.assinatura]),
+                   [['cota_codex_local', 'sem_dado', [], '', ''], ['cota_grok_bot', 'sem_dado', [], '', ''], ['cota_cursor', 'sem_dado', [], '', '']]);
+  ['Pro', 'pro-plus', 'pro plus', 'p'.repeat(25), '<img src=x onerror=alert(1)>', '', 7, null, ['pro']].forEach((v) => {
+    const c = Hermes.cotasLocaisDe({ cota_cursor: { estado: 'ok', plano: v, assinatura: v } })[0];
+    assert.equal(c.plano, '', 'plano ' + JSON.stringify(v)); assert.equal(c.assinatura, '', 'assinatura ' + JSON.stringify(v));
+  });
+  const limite = Hermes.cotasLocaisDe({ cota_cursor: { estado: 'ok', plano: 'p'.repeat(24), assinatura: 'outra' } })[0];
+  assert.equal(limite.plano, 'p'.repeat(24)); assert.equal(limite.assinatura, 'outra');
+  assert.equal(Hermes.cotasLocaisDe({ cota_codex_local: { estado: 'ok', plano: 'pro', barras: [] } })[0].plano, '');
+});
+test('limites locais: render com a fixture mostra o bloco depois de #providers com 3 cartões, selos, barras e rodapés; #providers igual a sem as chaves', () => {
+  assert.match(html, /<div class="providers" id="providers"><\/div>\s*<div class="presence" id="limits-local" role="group" aria-label="Uso observado em arquivos locais" hidden><div class="presence-head"><span>Observado em arquivos locais<\/span><span class="badge" id="limits-local-badge"><\/span><\/div><div class="providers" id="limits-local-cards"><\/div><\/div>\s*<\/section>/);
+  const antes = app(); antes.a.receber(semCotasLocais());
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  const bloco = doc.getElementById('limits-local'), prov = doc.getElementById('providers');
+  assert.ok(bloco.parentNode === doc.getElementById('limits'), 'dentro da seção Limites de uso');
+  const irmaos = prov.parentNode.children; assert.ok(irmaos[irmaos.indexOf(prov) + 1] === bloco, 'logo depois de #providers');
+  assert.equal(bloco.hidden, false);
+  assert.equal(txt('limits-local-badge'), '3 fontes');
+  const cards = cartoesLocais(doc); assert.equal(cards.length, 3);
+  cards.forEach((c) => assert.equal(c.className, 'provider'));
+  const [codex, grok, cursor] = cards;
+  assert.deepEqual(cards.map((c) => nb(porClasse(c, 'provider-name')[0].childNodes[0].textContent)), ['Codex', 'Grok Bot', 'Cursor']);
+  assert.deepEqual(cards.map((c) => nb(porClasse(c, 'provider-name')[0].children[0].textContent)), ['observado localmente', 'observado localmente', 'plano local']);
+  assert.deepEqual(textosDe(codex, 'badge'), ['OBSERVADO']);
+  assert.deepEqual(textosDe(codex, 'mono'), ['23%', '62%']);
+  assert.deepEqual(rotulosDe(codex), ['Janela de 5 horas', 'Limite semanal']);
+  assert.deepEqual(porClasse(codex, 'usage-row').map((r) => r.className), ['usage-row', 'usage-row week']);
+  const trilhos = porClasse(codex, 'track');
+  assert.deepEqual(trilhos.map((t) => [t.getAttribute('role'), t.getAttribute('aria-label'), t.getAttribute('aria-valuemin'), t.getAttribute('aria-valuemax'), t.getAttribute('aria-valuenow'), t.children[0].style.width]),
+                   [['meter', 'Janela de 5 horas de Codex', '0', '100', '23', '23%'], ['meter', 'Limite semanal de Codex', '0', '100', '62', '61.5%']]);
+  porClasse(codex, 'usage-row').forEach((r) => assert.match(nb(r.children[2].textContent), /^reinicia .+ \(em .+\)$/));
+  assert.equal(nb(codex.children.at(-1).textContent), 'último observado há 2 h'); assert.equal(codex.children.at(-1).className, 'usage-sub');
+  assert.deepEqual(textosDe(grok, 'badge'), ['OBSERVADO']);
+  assert.deepEqual(textosDe(grok, 'mono'), ['41%']);
+  assert.deepEqual(rotulosDe(grok), ['Janela atual']);
+  assert.equal(nb(grok.children.at(-1).textContent), 'último observado há 10 min');
+  assert.deepEqual(textosDe(cursor, 'badge'), ['Pro plus']);
+  assert.deepEqual(textosDe(cursor, 'missing'), ['Sem dados de cota: o Cursor não guarda a cota em arquivo local.']);
+  assert.deepEqual(textosDe(cursor, 'usage-sub'), ['assinatura: ativa']);
+  assert.equal(porClasse(cursor, 'usage-row').length, 0);
+  assert.equal(txt('providers'), antes.txt('providers'));
+  assert.equal(prov.children.length, antes.doc.getElementById('providers').children.length);
+  assert.equal(antes.doc.getElementById('limits-local').hidden, true); assert.equal(cartoesLocais(antes.doc).length, 0);
+});
+test('limites locais: sem as chaves, com erro nas três ou sem leitura, o bloco fica oculto e sem cartões', () => {
+  [['sem as chaves', semCotasLocais()], ['erro nas três', erroNasTres()]].forEach(([quando, d]) => {
+    const { a, doc } = app(); a.receber(d);
+    assert.equal(doc.getElementById('limits-local').hidden, true, 'visível ' + quando);
+    assert.equal(cartoesLocais(doc).length, 0, 'cartões ' + quando);
+  });
+  const nulo = app();
+  assert.equal(nulo.doc.getElementById('limits-local').hidden, true); assert.equal(cartoesLocais(nulo.doc).length, 0);
+  const { a, doc } = app(); a.receber(clone(fixture)); assert.equal(cartoesLocais(doc).length, 3);
+  a.receber(Object.assign(clone(fixture), { cota_codex_local: { estado: 'erro' }, cota_grok_bot: { estado: 'erro' }, cota_cursor: { estado: 'erro' } }));
+  assert.equal(doc.getElementById('limits-local').hidden, true); assert.equal(cartoesLocais(doc).length, 0);
+});
+test('limites locais: sem_dado no Codex mostra selo "SEM DADOS" e o aviso, nada mais; selo do bloco "1 fonte"', () => {
+  const d = Object.assign(semCotasLocais(), { cota_codex_local: { estado: 'sem_dado', observado_epoch: null, barras: [] } });
+  const { a, doc, txt } = app(); a.receber(d);
+  assert.equal(doc.getElementById('limits-local').hidden, false);
+  assert.equal(txt('limits-local-badge'), '1 fonte');
+  const cards = cartoesLocais(doc); assert.equal(cards.length, 1);
+  assert.deepEqual(textosDe(cards[0], 'badge'), ['SEM DADOS']);
+  assert.deepEqual(textosDe(cards[0], 'missing'), ['Nenhum uso encontrado nos arquivos locais.']);
+  assert.equal(porClasse(cards[0], 'usage-row').length, 0); assert.equal(porClasse(cards[0], 'usage-sub').length, 0);
+  assert.equal(cards[0].children.length, 2);
+});
+test('limites locais: reset já passado mantém o percentual com o texto de reset vencido; reset nulo = "reset não informado"', () => {
+  const d = Object.assign(semCotasLocais(), {
+    cota_codex_local: { estado: 'ok', observado_epoch: T0 - 90000, barras: [{ tipo: '5h', usado_pct: 87.0, renova_epoch: T0 - 60, janela_min: 300 },
+                                                                            { tipo: 'semana', usado_pct: 12.0, renova_epoch: null, janela_min: 10080 }] },
+    cota_grok_bot: { estado: 'ok', observado_epoch: null, barras: [{ tipo: 'janela', usado_pct: 5.0, renova_epoch: null, janela_min: null }] } });
+  const { a, doc } = app(); a.receber(d);
+  const [codex, grok] = cartoesLocais(doc);
+  assert.deepEqual(textosDe(codex, 'mono'), ['87%', '12%']);
+  assert.equal(porClasse(codex, 'track')[0].getAttribute('aria-valuenow'), '87'); assert.equal(porClasse(codex, 'track')[0].children[0].style.width, '87%');
+  assert.deepEqual(porClasse(codex, 'usage-row').map((r) => nb(r.children[2].textContent)), ['reset já passou; aguardando nova leitura', 'reset não informado']);
+  assert.equal(nb(codex.children.at(-1).textContent), 'último observado há 1 dia 1 h');
+  assert.deepEqual(textosDe(grok, 'mono'), ['5%']);
+  assert.deepEqual(porClasse(grok, 'usage-row').map((r) => nb(r.children[2].textContent)), ['reset não informado']);
+  assert.equal(nb(grok.children.at(-1).textContent), 'horário da observação não informado');
+});
+test('limites locais: textos hostis em plano, tipo e assinatura não viram elemento; selo "PLANO NÃO LIDO", rótulo "Janela atual" e assinatura fora da lista = "outra"', () => {
+  const hostil = '<img src=x onerror=alert(1)>';
+  const d = Object.assign(semCotasLocais(), {
+    cota_codex_local: { estado: 'ok', observado_epoch: T0 - 60, barras: [{ tipo: hostil, usado_pct: 33.0, renova_epoch: null, janela_min: hostil }] },
+    cota_cursor: { estado: 'ok', plano: hostil, assinatura: hostil } });
+  const { a, doc } = app(); a.receber(d);
+  const bloco = doc.getElementById('limits-local'), [codex, cursor] = cartoesLocais(doc);
+  assert.deepEqual(textosDe(cursor, 'badge'), ['PLANO NÃO LIDO']);
+  assert.equal(porClasse(cursor, 'usage-sub').length, 0, 'assinatura hostil não vira linha');
+  assert.deepEqual(rotulosDe(codex), ['Janela atual']);
+  assert.equal(porClasse(codex, 'track')[0].getAttribute('aria-label'), 'Janela atual de Codex');
+  assert.equal(bloco.descendentes().filter((e) => e.tag === 'img').length, 0);
+  assert.ok(!nb(bloco.textContent).includes('onerror'), 'texto hostil no bloco');
+  bloco.descendentes().forEach((e) => Object.values(e.attrs).forEach((v) => assert.ok(!v.includes('onerror'), 'texto hostil em atributo')));
+  const outra = app(); outra.a.receber(Object.assign(semCotasLocais(), { cota_cursor: { estado: 'ok', plano: null, assinatura: 'constructor' } }));
+  const c2 = cartoesLocais(outra.doc)[0];
+  assert.deepEqual(textosDe(c2, 'badge'), ['PLANO NÃO LIDO']); assert.deepEqual(textosDe(c2, 'usage-sub'), ['assinatura: outra']);
+});
+test('limites locais que lançam não impedem #providers, os KPIs nem a lista de sessões; o aviso fica só no bloco local', () => {
+  const base = app(); silenciarErros(() => base.a.receber(clone(fixture)));
+  const d = clone(fixture);
+  Object.defineProperty(d.cota_codex_local, 'barras', { enumerable: true, get() { throw new Error('boom cotas locais'); } });
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => {
+    assert.doesNotThrow(() => a.receber(d));
+    assert.equal(erros.length, 1); assert.match(String(erros[0][0]), /uso observado em arquivos locais/); assert.match(String(erros[0][1]), /boom cotas locais/);
+  });
+  ['k-trab', 'k-total', 'nav-agentes', 'providers'].forEach((id) => assert.equal(txt(id), base.txt(id), 'mudou ' + id));
+  assert.match(txt('providers'), /\S/); assert.doesNotMatch(txt('providers'), /não foi possível desenhar/);
+  assert.equal(doc.getElementById('agent-rows').children.length, d.agentes.length);
+  ['stats', 'agents', 'limits', 'presence', 'presence-linux'].forEach((id) => assert.equal(doc.getElementById(id)._avisoSecao, undefined, 'aviso em ' + id));
+  assert.match(txt('limits-local'), /não foi possível desenhar esta seção/);
+  assert.equal(cartoesLocais(doc).length, 0);
+  silenciarErros(() => a.receber(clone(fixture)));                       // na próxima leitura boa o aviso some
+  assert.doesNotMatch(txt('limits-local'), /não foi possível desenhar/);
+  assert.equal(doc.getElementById('limits-local').hidden, false); assert.equal(cartoesLocais(doc).length, 3);
 });

@@ -80,6 +80,13 @@ da cota Claude. `--vivo` não pode ser combinado com `--telas`.
 O gatilho HTTP `/refresh` do modo antigo não é iniciado no modo vivo.
 Sem `--vivo`, o comportamento antigo via tmux ou telas de exemplo é preservado.
 
+No modo vivo o painel não publica a pasta de trabalho nem texto das sessões:
+cada sessão do Claude e do Codex aparece como `Claude · xxxx` ou `Codex · xxxx`
+(os quatro últimos caracteres do identificador da sessão), e cada terminal do
+Maestri pelo nome do workspace e do terminal. Para dar um apelido a quem trabalha
+numa pasta, crie `agentes.json` com `pasta` e `nome`: a pasta serve só para casar
+com a sessão e não é publicada.
+
 No modo vivo, os cartões de cota usam as fontes Claude/Codex: 5 h e semanal são
 porcentagens **usadas**, sem estimativas quando falta leitura. Plano/e-mail do
 Claude vêm de `claude auth status --json`, no mesmo cache de 5 min do `/usage`;
@@ -120,6 +127,11 @@ inventa número.
 | --- | --- |
 | `PAINEL_GH_ORG` | Organização do GitHub usada para repositórios listados sem `dono/` no `agentes.json`. |
 | `PAINEL_QUADRO` | Caminho do `quadro.json` (missão, situação, previsão e pendências). |
+| `PAINEL_PRESENCA` | `1` liga a presença por processo (opt-in, desligada por padrão): produtos de IA com processo principal vivo aparecem como "online" na seção Agentes. Qualquer outro valor mantém a saída antiga. |
+| `PAINEL_PRESENCA_LINUX` | `1` liga a presença no WSL (opt-in, desligada por padrão): produtos de IA com processo vivo na distro `Ubuntu-26.04` aparecem num bloco próprio da seção Agentes. A distro só é consultada quando já está ligada; o painel nunca a liga. Qualquer outro valor mantém a saída antiga. |
+| `PAINEL_COTA_CODEX_LOCAL` | `1` liga a leitura local da cota do Codex (opt-in, desligada por padrão): o último uso observado nos arquivos de sessão de `~/.codex/sessions` aparece no bloco "Observado em arquivos locais" da seção Limites de uso, com o horário da observação. Sem rede. Qualquer outro valor mantém a saída antiga. |
+| `PAINEL_COTA_GROK_BOT` | `1` liga a leitura local do uso do Grok Bot (opt-in, desligada por padrão): percentual e próximo reset do último registro local do aplicativo, com o horário da leitura. Sem rede. Qualquer outro valor mantém a saída antiga. |
+| `PAINEL_COTA_CURSOR` | `1` liga a leitura local do plano do Cursor (opt-in, desligada por padrão): mostra o plano e a situação da assinatura guardados em cache pelo aplicativo e avisa que não há dados de cota. Sem rede. Qualquer outro valor mantém a saída antiga. O banco do Cursor é lido sem trava e sem gravar nada, com o aplicativo aberto ou fechado; com ele aberto, uma mudança de plano pode demorar a aparecer. |
 
 O GitHub é consultado pelo `gh` já logado na sua máquina; o painel não guarda token nenhum.
 
@@ -163,6 +175,8 @@ Para conferir sem enviar nada: `py -3.14 sentinela.py --ensaio --uma-vez`.
 As regras avisam sobre espera por mais de 60 s, atividade sem mudança por mais
 de 15 min, agente parado, cotas usadas a partir de 85%, serviço fora em duas
 avaliações, fonte falhando em três e dados velhos por mais de 60 s.
+No modo vivo nenhum agente publica atividade, então o aviso de atividade sem
+mudança só vale no modo antigo (terminais lidos pela tela).
 Cada avaliação ocorre a cada 5 s; a mesma chave espera pelo menos 30 min para
 novo aviso. Agente parado avisa uma vez por ocorrência; cota só rearma abaixo
 de 70%. Fechamentos são registrados uma vez, sem toast extra.

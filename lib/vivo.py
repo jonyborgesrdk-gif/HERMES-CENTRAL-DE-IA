@@ -19,6 +19,15 @@ def _pasta(valor):
     return ntpath.normcase(ntpath.normpath(valor)) if valor else None
 
 
+def _nome_padrao(rotulo, session_id):
+    """Nome sem caminho: o rótulo e o fim do identificador da sessão, quando ele é opaco."""
+    texto = '' if session_id is None else str(session_id)
+    if not re.fullmatch(r'[0-9A-Za-z_-]+', texto):
+        return rotulo
+    sufixo = re.sub(r'[^0-9A-Za-z]', '', texto)[-4:]
+    return '%s · %s' % (rotulo, sufixo) if sufixo else rotulo
+
+
 def montar_agentes(leituras_das_fontes, agora, overrides):
     """overrides é a lista opcional agentes do mapa; leituras são snapshots."""
     leituras = leituras_das_fontes
@@ -39,13 +48,15 @@ def montar_agentes(leituras_das_fontes, agora, overrides):
             numero += 1
         nomes.add(nome)
         r = leitor.sem_leitura(ferramenta, None)
-        r.update(leitura='ok', estado='ocioso', nome=nome, pasta=pasta,
+        r.update(leitura='ok', estado='ocioso', nome=nome,
                  session_id=session_id, fonte=fonte,
                  ferramenta_nome={'claude': 'Claude Code', 'codex': 'Codex'}.get(ferramenta),
                  conta=None, grupo_cota=None, grupo_semanal=None, rotulo_semanal=None,
                  nota_cota=None, missao=None, prs=[], modelo_lido_da_tela=False,
                  lido_em_epoch=agora)
         r.update(campos)
+        # Regra única do painel: nenhum agente publica pasta nem texto livre da sessão.
+        r.update(pasta=None, atividade=None, ultima_fala=None)
         for chave in ('modelo', 'esforco', 'conta', 'grupo_cota', 'semanal_do_modelo', 'nota_cota'):
             if override.get(chave) is not None and not (chave == 'modelo' and r.get('modelo')):
                 r[chave] = override[chave]
@@ -55,29 +66,30 @@ def montar_agentes(leituras_das_fontes, agora, overrides):
                 r[chave] = leitor.mascarar(r[chave])
         resultado.append(r)
 
+    pastas = set()      # (ferramenta, pasta normalizada) das sessões: uso interno, nunca publicado
     cota = leituras.get('cota_claude', {})
     for sessao in leituras.get('eventos_hooks', {}).get('sessoes', []):
         transcript = leituras.get('transcripts_claude', {}).get(sessao.get('session_id')) or {}
         pasta = sessao.get('cwd') or transcript.get('pasta')
         estado = sessao.get('estado', 'ocioso')
-        permissao = estado == 'esperando permissão'
-        atividade = ('pede permissão: ' + str(sessao.get('tool_name') or 'ferramenta')) if permissao else transcript.get('fala')
-        adicionar('claude', 'Claude · ' + (ntpath.basename((pasta or '').rstrip('/\\')) or 'sem pasta'),
+        if pasta:
+            pastas.add(('claude', _pasta(pasta)))
+        adicionar('claude', _nome_padrao('Claude', sessao.get('session_id')),
                   pasta, sessao.get('session_id'), 'eventos_hooks',
-                  estado='esperando' if permissao else estado,
-                  modelo=transcript.get('modelo'), atividade=atividade,
-                  ultima_fala=transcript.get('fala'), cotas=dict(cota),
+                  estado='esperando' if estado == 'esperando permissão' else estado,
+                  modelo=transcript.get('modelo'), cotas=dict(cota),
                   sessao_5h_pct=cota.get('sessao_5h'), semanal_pct=cota.get('semanal'))
 
     for sessao in leituras.get('sessoes_codex', {}).get('sessoes', []):
         pasta = sessao.get('pasta')
-        adicionar('codex', 'Codex · ' + (ntpath.basename((pasta or '').rstrip('/\\')) or 'sem pasta'),
+        if pasta:
+            pastas.add(('codex', _pasta(pasta)))
+        adicionar('codex', _nome_padrao('Codex', sessao.get('session_id')),
                   pasta, sessao.get('session_id'), 'sessoes_codex',
                   modelo=sessao.get('modelo'), estado=sessao.get('estado', 'ocioso'),
                   cotas={k: sessao.get(k) for k in ('sessao_5h', 'semanal', 'reset_5h', 'reset_semanal', 'hora')},
                   sessao_5h_pct=sessao.get('sessao_5h'), semanal_pct=sessao.get('semanal'))
 
-    pastas = {(r['ferramenta'], _pasta(r['pasta'])) for r in resultado if r['pasta']}
     for terminal in leituras.get('maestri_wire', {}).get('terminais', []):
         tipo = terminal.get('tipo')
         pasta = terminal.get('workingDirectory') or terminal.get('pasta')
@@ -94,12 +106,10 @@ def montar_agentes(leituras_das_fontes, agora, overrides):
             estado = 'ocioso'
         else:
             estado = 'indeterminado'
-        preview = terminal.get('preview') or []
-        ultima = next((linha.strip() for linha in reversed(preview) if linha.strip()), 'sem tela')
         adicionar('maestri', '%s/%s' % (terminal.get('workspace') or 'Workspace', terminal.get('nome') or 'Terminal'),
                   pasta, terminal.get('id'), 'maestri_wire',
                   ferramenta_nome='Maestri · ' + str(tipo or 'desconhecido'),
-                  estado=estado, atividade=ultima, ultima_fala=ultima, cotas={})
+                  estado=estado, cotas={})
     return resultado
 
 

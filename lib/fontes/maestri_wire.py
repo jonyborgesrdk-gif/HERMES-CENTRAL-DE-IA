@@ -1,6 +1,6 @@
 """Leitura local do Wire; configuração ausente desliga a fonte."""
 from urllib.parse import quote
-from . import agora, diretorio, http_get, mascarar
+from . import agora, diretorio, http_get
 
 _cache_settings = {}
 
@@ -27,15 +27,11 @@ def _pasta(ctx, terminal_id, headers):
 
 def interpretar(item, workspace):
     t = item.get('terminal', item)
-    preview = t.get('preview') or []
-    if isinstance(preview, str):
-        preview = preview.splitlines()
     return {'id': t.get('id'), 'workspace': workspace, 'nome': t.get('name'),
             'tipo': t.get('agentType'), 'status': t.get('status'),
             'atencao': bool(t.get('needsAttention')), 'rodando': bool(t.get('isRunning')),
             'descarregado': bool(t.get('isUnloaded')),
-            'preview': [mascarar(linha) for linha in preview[-10:]],
-            'tela': 'ok' if preview else 'sem tela'}
+            'tela': 'ok' if t.get('preview') else 'sem tela'}
 
 
 def ler(ctx):
@@ -61,7 +57,10 @@ def ler(ctx):
             feed = http_get(ctx, base + '/' + quote(str(w['id']), safe='') + '/feed', 3, headers)
             itens = feed.get('items', []) if isinstance(feed, dict) else feed
             for item in itens:
-                if item.get('type') != 'terminal' and 'agentType' not in item:
+                # Formato novo do feed: kind == 'terminal', campos em item['terminal'];
+                # os antigos (type == 'terminal' ou agentType no item) seguem aceitos.
+                if (item.get('kind') != 'terminal' and item.get('type') != 'terminal'
+                        and 'agentType' not in item):
                     continue
                 terminal = interpretar(item, w.get('name', w['id']))
                 terminal['pasta'], erro = _pasta(ctx, terminal['id'], headers)
