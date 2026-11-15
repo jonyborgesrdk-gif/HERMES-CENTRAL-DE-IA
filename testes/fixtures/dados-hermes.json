@@ -239,6 +239,13 @@
    "ultima_leitura_ok": 1793433672.0,
    "desatualizado": false
   },
+  "presenca_linux": {
+   "ok": true,
+   "erro": null,
+   "hora": 1793433709.0,
+   "ultima_leitura_ok": 1793433709.0,
+   "desatualizado": false
+  },
   "presenca_processos": {
    "ok": true,
    "erro": null,
@@ -638,6 +645,11 @@
     }
    ]
   }
+ },
+ "presenca_linux": {
+  "estado": "parada",
+  "host": "Ubuntu-26.04",
+  "itens": []
  },
  "presenca_processos": {
   "estado": "ok",

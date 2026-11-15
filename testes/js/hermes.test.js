@@ -285,7 +285,7 @@ test('contrato: a página só lê, na raiz do dados.json, campos que o coletor p
   a.abrirModal({ tipo: 'agente', chave: 'sess-1' }); a.abrirModal({ tipo: 'agente', chave: 'sess-2' }); a.abrirModal({ tipo: 'servico', chave: 'whatsapp' }); a.abrirModal({ tipo: 'conta', chave: 'claude:abc' });
   const fora = [...lidos].filter((k) => !(k in fixture) && k !== 'toJSON');
   assert.deepEqual(fora, []);
-  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
+  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'presenca_linux', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
 });
 
 /* ---------- segurança e privacidade ---------- */
@@ -777,4 +777,173 @@ test('presença que lança não impede KPIs nem a lista de sessões; o aviso fic
   silenciarErros(() => a.receber(clone(fixture)));                       // na próxima leitura boa o aviso some
   assert.doesNotMatch(txt('presence'), /não foi possível desenhar/);
   assert.equal(doc.getElementById('presence').hidden, false); assert.equal(linhasPresenca(doc).length, 2);
+});
+
+/* ---------- E18: presença no WSL (bloco próprio; a presença da E16 e o cartão-contador não mudam) ---------- */
+const linhasLinux = (doc) => doc.getElementById('presence-linux-rows').children;
+const comLinux = (pl) => Object.assign(clone(fixture), { presenca_linux: pl });
+const itensWsl = () => [{ produto: 'claude_cli', rotulo: 'Claude Code CLI', familia: 'claude', tipo: 'cli', instancias: 2 },
+                        { produto: 'cursor_agent', rotulo: 'Cursor Agent CLI', familia: 'cursor', tipo: 'cli', instancias: 1 }];
+const itensSujos = () => [
+  { produto: 'sem_rotulo', familia: 'claude', tipo: 'cli', instancias: 1 },
+  { produto: 'zero', rotulo: 'Zero', familia: 'claude', tipo: 'cli', instancias: 0 },
+  { produto: 'texto', rotulo: 'Texto', familia: 'claude', tipo: 'cli', instancias: '2' },
+  { produto: 'fracao', rotulo: 'Fração', familia: 'claude', tipo: 'cli', instancias: 1.5 },
+  { produto: 'nan', rotulo: 'NaN', familia: 'claude', tipo: 'cli', instancias: NaN },
+  'lixo', null, 7, ['x'],
+  { produto: 'p'.repeat(41), rotulo: 'Produto longo', instancias: 1 },
+  { produto: 'rotulo_longo', rotulo: 'r'.repeat(61), instancias: 1 },
+  { produto: 'dup', rotulo: 'Primeiro', familia: 'codex', tipo: 'cli', instancias: 2 },
+  { produto: 'dup', rotulo: 'Segundo', familia: 'claude', tipo: 'cli', instancias: 9 },
+  { produto: 'estranho', rotulo: 'Estranho', familia: 'gemini', tipo: 'daemon', instancias: 1 },
+  { produto: '__proto__', rotulo: 'Proto', familia: 'constructor', tipo: 'toString', instancias: 1 }
+];
+test('presencaLinuxDe: ausente/erro = inativa; parada ignora itens; ok valida itens pelas regras de presencaDe; host inválido vira ""', () => {
+  const inativa = { ativa: false, estado: '', host: '', itens: [], total: 0 };
+  [undefined, null, {}, { presenca_linux: null }, { presenca_linux: 'ok' }, { presenca_linux: [] }, { presenca_linux: { estado: 'erro' } },
+   { presenca_linux: { estado: 'OK', host: 'Ubuntu-26.04' } }, { presenca_linux: { host: 'Ubuntu-26.04', itens: itensWsl() } },
+   { presenca_processos: clone(fixture.presenca_processos) }].forEach((d) => assert.deepEqual(Hermes.presencaLinuxDe(d), inativa));
+  assert.deepEqual(Hermes.presencaLinuxDe(fixture), { ativa: true, estado: 'parada', host: 'Ubuntu-26.04', itens: [], total: 0 });
+  assert.deepEqual(Hermes.presencaLinuxDe({ presenca_linux: { estado: 'parada', host: 'Ubuntu-26.04', itens: itensWsl() } }),
+    { ativa: true, estado: 'parada', host: 'Ubuntu-26.04', itens: [], total: 0 }, 'parada nunca traz itens');
+  const ok = Hermes.presencaLinuxDe({ presenca_linux: { estado: 'ok', host: 'Ubuntu-26.04', itens: itensWsl() } });
+  assert.equal(ok.ativa, true); assert.equal(ok.estado, 'ok'); assert.equal(ok.host, 'Ubuntu-26.04'); assert.equal(ok.total, 3);
+  assert.deepEqual(ok.itens.map((i) => [i.produto, i.rotulo, i.familia, i.tipo, i.instancias]),
+    [['claude_cli', 'Claude Code CLI', 'claude', 'cli', 2], ['cursor_agent', 'Cursor Agent CLI', 'cursor', 'cli', 1]]);
+  assert.deepEqual(Hermes.presencaLinuxDe({ presenca_linux: { estado: 'ok', host: 'Ubuntu-26.04' } }), { ativa: true, estado: 'ok', host: 'Ubuntu-26.04', itens: [], total: 0 });
+  const sujo = Hermes.presencaLinuxDe({ presenca_linux: { estado: 'ok', host: 'Ubuntu-26.04', itens: itensSujos() } });
+  const e16 = Hermes.presencaDe({ presenca_processos: { estado: 'ok', itens: itensSujos() } });
+  assert.deepEqual(sujo.itens, e16.itens); assert.equal(sujo.total, e16.total);
+  assert.deepEqual(sujo.itens.map((i) => [i.produto, i.rotulo, i.familia, i.tipo, i.instancias]),
+    [['dup', 'Primeiro', 'codex', 'cli', 2], ['estranho', 'Estranho', 'outra', 'outra', 1], ['__proto__', 'Proto', 'outra', 'outra', 1]]);
+  assert.equal(sujo.total, 4);
+  sujo.itens.forEach((i) => assert.deepEqual(Object.keys(i).sort(), ['familia', 'instancias', 'produto', 'rotulo', 'tipo']));
+  [undefined, null, 7, true, '', 'h'.repeat(41), ['Ubuntu'], { nome: 'Ubuntu' }].forEach((host) => {
+    assert.equal(Hermes.presencaLinuxDe({ presenca_linux: { estado: 'ok', host, itens: [] } }).host, '', 'host ' + JSON.stringify(host));
+    assert.equal(Hermes.presencaLinuxDe({ presenca_linux: { estado: 'parada', host } }).host, '', 'host parada ' + JSON.stringify(host));
+  });
+  assert.equal(Hermes.presencaLinuxDe({ presenca_linux: { estado: 'ok', host: 'h'.repeat(40) } }).host, 'h'.repeat(40));
+  assert.equal(Hermes.presencaLinuxDe({ presenca_linux: { estado: 'parada', host: 'k' } }).host, 'k');
+});
+test('presença no WSL: render com a fixture (parada) mostra bloco, host e selo; o bloco e o cartão da E16 ficam iguais a sem a chave', () => {
+  assert.match(html, /<div class="presence" id="presence-linux" role="group" aria-label="Processos de IA no WSL" hidden><div class="presence-head"><span id="presence-linux-titulo">WSL<\/span><span class="badge" id="presence-linux-badge"><\/span><\/div>/);
+  const semChave = clone(fixture); delete semChave.presenca_linux; delete semChave.fontes.presenca_linux;
+  const antes = app(); antes.a.receber(semChave);
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  const bloco = doc.getElementById('presence-linux'), e16 = doc.getElementById('presence');
+  assert.ok(bloco.parentNode === e16.parentNode && bloco.parentNode === doc.getElementById('agents'), 'irmão de #presence na seção de agentes');
+  const irmaos = e16.parentNode.children; assert.ok(irmaos[irmaos.indexOf(e16) + 1] === bloco, 'logo depois de #presence');
+  assert.equal(bloco.hidden, false);
+  assert.equal(txt('presence-linux-titulo'), 'WSL · Ubuntu-26.04');
+  assert.equal(txt('presence-linux-badge'), 'parada');
+  assert.equal(linhasLinux(doc).length, 0);
+  assert.equal(txt('presence-badge'), '3 processos'); assert.equal(linhasPresenca(doc).length, 2);
+  assert.equal(txt('k-online-texto'), '3 processos de IA online'); assert.equal(doc.getElementById('k-online-foot').hidden, false);
+  ['presence', 'presence-badge', 'presence-rows', 'k-online-foot', 'k-online-texto', 'k-trab', 'k-total', 'nav-agentes', 'agent-rows', 'agent-empty']
+    .forEach((id) => {
+      assert.equal(txt(id), antes.txt(id), 'mudou ' + id);
+      assert.equal(doc.getElementById(id).hidden, antes.doc.getElementById(id).hidden, 'mudou a visibilidade de ' + id);
+    });
+  assert.equal(antes.doc.getElementById('presence-linux').hidden, true); assert.equal(linhasLinux(antes.doc).length, 0);
+});
+test('presença no WSL: estado ok com itens desenha as linhas e o selo "ligada"; o selo e o cartão da E16 não somam o WSL', () => {
+  const { a, doc, txt } = app();
+  a.receber(comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: itensWsl() }));
+  assert.equal(doc.getElementById('presence-linux').hidden, false);
+  const linhas = linhasLinux(doc);
+  assert.equal(linhas.length, 2);
+  assert.equal(txt('presence-linux-badge'), 'ligada · 3 processos');
+  assert.equal(txt('presence-linux-titulo'), 'WSL · Ubuntu-26.04');
+  assert.equal(detalhePresenca(linhas[0]), 'CLI · 2 instâncias'); assert.equal(detalhePresenca(linhas[1]), 'CLI');
+  assert.equal(nb(linhas[0].textContent), 'Claude Code CLICLI · 2 instânciasonlineatividade desconhecida');
+  assert.equal(nb(linhas[1].textContent), 'Cursor Agent CLICLIonlineatividade desconhecida');
+  assert.equal(linhas[0].className, 'presence-row');
+  assert.ok(!linhas[0].descendentes().some((e) => e.tag === 'button' || 'aria-haspopup' in e.attrs), 'linha de presença não é botão');
+  assert.equal(txt('presence-badge'), '3 processos'); assert.equal(txt('k-online-texto'), '3 processos de IA online');
+  assert.equal(linhasPresenca(doc).length, 2);
+  assert.equal(txt('k-trab'), '1'); assert.equal(txt('k-total'), '/ 3'); assert.equal(txt('nav-agentes'), '3');
+  const um = comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: [itensWsl()[1]] });
+  a.receber(um);
+  assert.equal(txt('presence-linux-badge'), 'ligada · 1 processo'); assert.equal(linhasLinux(doc).length, 1);
+  assert.equal(txt('presence-badge'), '3 processos'); assert.equal(txt('k-online-texto'), '3 processos de IA online');
+  const semE16 = comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: itensWsl() }); delete semE16.presenca_processos;
+  a.receber(semE16);                                                // só o WSL tem processos: o cartão continua sem a linha de presença
+  assert.equal(linhasLinux(doc).length, 2); assert.equal(txt('presence-linux-badge'), 'ligada · 3 processos');
+  assert.equal(doc.getElementById('presence').hidden, true); assert.equal(linhasPresenca(doc).length, 0);
+  assert.equal(doc.getElementById('k-online-foot').hidden, true); assert.equal(txt('k-online-texto'), 'nenhum processo de IA online');
+});
+test('presença no WSL: estado ok sem itens mostra o bloco com "ligada · nenhum processo" e sem linhas', () => {
+  const { a, doc, txt } = app();
+  const vazio = (quando) => {
+    assert.equal(doc.getElementById('presence-linux').hidden, false, 'bloco oculto ' + quando);
+    assert.equal(txt('presence-linux-badge'), 'ligada · nenhum processo', 'selo ' + quando);
+    assert.equal(linhasLinux(doc).length, 0, 'linhas ' + quando);
+  };
+  a.receber(comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: [] })); vazio('com itens []');
+  assert.equal(txt('presence-linux-titulo'), 'WSL · Ubuntu-26.04');
+  a.receber(comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: itensWsl() })); assert.equal(linhasLinux(doc).length, 2);
+  a.receber(comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: [{ produto: 'x', instancias: 1 }] })); vazio('só com item inválido');
+  a.receber(comLinux({ estado: 'ok', itens: [] })); vazio('sem host');
+  assert.equal(txt('presence-linux-titulo'), 'WSL');
+  assert.equal(txt('presence-badge'), '3 processos'); assert.equal(txt('k-online-texto'), '3 processos de IA online');
+});
+test('presença no WSL: sem a chave, com estado erro ou antes da primeira leitura, bloco oculto e tabela vazia', () => {
+  const { a, doc, txt } = app();
+  const oculto = (quando) => {
+    assert.equal(doc.getElementById('presence-linux').hidden, true, 'bloco visível ' + quando);
+    assert.equal(linhasLinux(doc).length, 0, 'linhas no WSL ' + quando);
+  };
+  oculto('antes da primeira leitura');
+  const sem = clone(fixture); delete sem.presenca_linux; delete sem.fontes.presenca_linux;
+  a.receber(sem); oculto('sem a chave');
+  assert.equal(doc.getElementById('presence').hidden, false); assert.equal(linhasPresenca(doc).length, 2);
+  a.receber(comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: itensWsl() })); assert.equal(linhasLinux(doc).length, 2);
+  a.receber(clone(sem)); oculto('quando a chave some');
+  a.receber(comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: itensWsl() })); assert.equal(linhasLinux(doc).length, 2);
+  a.receber(comLinux({ estado: 'erro' })); oculto('com estado erro');
+  a.receber(comLinux(null)); oculto('com a chave nula');
+  a.receber(comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: itensWsl() }));
+  a.receber(clone(fixture));                                        // de ok com linhas para parada: linhas somem, selo "parada"
+  assert.equal(doc.getElementById('presence-linux').hidden, false); assert.equal(linhasLinux(doc).length, 0); assert.equal(txt('presence-linux-badge'), 'parada');
+});
+test('presença no WSL: rótulo e host hostis aparecem como texto literal e nenhum elemento é criado a partir deles', () => {
+  const { a, doc, txt } = app();
+  const hostil = '<img src=x onerror=alert(1)>';
+  const d = comLinux({ estado: 'ok', host: hostil, itens: [{ produto: 'hostil', rotulo: hostil, familia: '<script>', tipo: '<b>', instancias: 2 }] });
+  d.agentes = [];                                                   // só a presença no WSL traz HTML nesta leitura
+  a.receber(d);
+  const bloco = doc.getElementById('presence-linux'), rows = doc.getElementById('presence-linux-rows');
+  assert.equal(txt('presence-linux-titulo'), 'WSL · ' + hostil);
+  assert.equal(linhasLinux(doc).length, 1);
+  assert.equal(nb(rows.textContent), hostil + '2 instânciasonlineatividade desconhecida');
+  ['img', 'script', 'b'].forEach((t) => assert.ok(!bloco.descendentes().some((e) => e.tag === t), 'elemento <' + t + '> criado a partir do dado do WSL'));
+  assert.equal(doc.documentElement.descendentes().filter((e) => e.tag === 'img').length, 0);
+  assert.ok(!bloco.descendentes().some((e) => Object.keys(e.attrs).some((k) => /^on/.test(k))));
+  a.receber(comLinux({ estado: 'parada', host: EMAIL }));            // o host passa pela máscara de privacidade como todo texto de dado
+  if (!a.estado.privado) a.alternarPrivacidade();
+  assert.ok(!txt('presence-linux-titulo').includes(EMAIL), 'e-mail no título com a privacidade ligada');
+  assert.match(txt('presence-linux-titulo'), /^WSL · \S/);
+  a.alternarPrivacidade();
+  assert.equal(a.estado.privado, false); assert.equal(txt('presence-linux-titulo'), 'WSL · ' + EMAIL);
+});
+test('presença no WSL que lança não impede o bloco da E16, os KPIs nem a lista de sessões; o aviso fica só no bloco do WSL', () => {
+  const d = comLinux({ estado: 'ok', host: 'Ubuntu-26.04', itens: [] });
+  Object.defineProperty(d.presenca_linux, 'itens', { enumerable: true, get() { throw new Error('boom wsl'); } });
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => {
+    assert.doesNotThrow(() => a.receber(d));
+    assert.equal(erros.length, 1); assert.match(String(erros[0][0]), /presença no WSL/); assert.match(String(erros[0][1]), /boom wsl/);
+  });
+  assert.equal(txt('k-trab'), '1'); assert.equal(txt('k-total'), '/ 3'); assert.equal(txt('nav-agentes'), '3');
+  assert.equal(doc.getElementById('agent-rows').children.length, d.agentes.length);
+  assert.equal(doc.getElementById('agents')._avisoSecao, undefined); assert.equal(doc.getElementById('stats')._avisoSecao, undefined);
+  assert.equal(doc.getElementById('presence')._avisoSecao, undefined);
+  assert.equal(doc.getElementById('presence').hidden, false); assert.equal(linhasPresenca(doc).length, 2);
+  assert.equal(txt('presence-badge'), '3 processos'); assert.equal(txt('k-online-texto'), '3 processos de IA online');
+  assert.doesNotMatch(txt('presence'), /não foi possível desenhar/);
+  assert.match(txt('services-grid'), /Hindsight/); assert.match(txt('providers'), /\S/); assert.match(txt('cost-total'), /\d/);
+  assert.match(txt('presence-linux'), /não foi possível desenhar esta seção/);
+  silenciarErros(() => a.receber(clone(fixture)));                       // na próxima leitura boa o aviso some
+  assert.doesNotMatch(txt('presence-linux'), /não foi possível desenhar/);
+  assert.equal(doc.getElementById('presence-linux').hidden, false); assert.equal(txt('presence-linux-badge'), 'parada');
 });

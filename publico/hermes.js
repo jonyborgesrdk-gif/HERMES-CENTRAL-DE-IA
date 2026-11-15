@@ -337,6 +337,15 @@ function presencaDe(dados) {
   });
   return { ativa: true, itens: itens, total: total };
 }
+/* Presença no WSL (E18): bloco próprio, com o host no título; os itens passam pela mesma validação de presencaDe (sem alterá-la). */
+function presencaLinuxDe(dados) {
+  var p = dados && dados.presenca_linux;
+  if (!p || typeof p !== "object" || (p.estado !== "ok" && p.estado !== "parada")) return { ativa: false, estado: "", host: "", itens: [], total: 0 };
+  var host = typeof p.host === "string" && p.host.length >= 1 && p.host.length <= 40 ? p.host : "";
+  if (p.estado === "parada") return { ativa: true, estado: "parada", host: host, itens: [], total: 0 };
+  var v = presencaDe({ presenca_processos: { estado: "ok", itens: p.itens } });
+  return { ativa: true, estado: "ok", host: host, itens: v.itens, total: v.total };
+}
 function processosDe(dados) {
   var p = objeto(dados && dados.processos);
   return Object.keys(p).sort().map(function (n) { return n + " × " + texto(p[n]); });
@@ -619,6 +628,12 @@ function criarApp(doc, win, opcoes) {
     setTxt($("presence-badge"), plural(p.total, "processo", "processos"));
     $("k-online-foot").hidden = !p.ativa;
     setTxt($("k-online-texto"), p.total > 0 ? plural(p.total, "processo de IA online", "processos de IA online") : "nenhum processo de IA online");
+  }
+  function desenharPresencaLinux(l) {      // bloco próprio do WSL: não mexe no bloco nem no cartão da E16 (o cartão-contador não soma o WSL)
+    $("presence-linux").hidden = !l.ativa;
+    setTxt($("presence-linux-titulo"), l.host ? "WSL · " + m(l.host) : "WSL");
+    setTxt($("presence-linux-badge"), l.estado === "parada" ? "parada" : l.total > 0 ? "ligada · " + plural(l.total, "processo", "processos") : "ligada · nenhum processo");
+    sincronizar($("presence-linux-rows"), l.itens, function (item) { return item.produto; }, criarLinhaPresenca, atualizarLinhaPresenca);
   }
 
   /* ---- limites de uso ---- */
@@ -940,6 +955,7 @@ function criarApp(doc, win, opcoes) {
     secao("stats", "de resumo", function () { desenharKpis(agentes(), contas(), servicos(), gastos()); });
     secao("agents", "de agentes", function () { desenharAgentes(agentes()); });
     secao("presence", "de presença por processo", function () { desenharPresenca(presencaDe(d)); });
+    secao("presence-linux", "de presença no WSL", function () { desenharPresencaLinux(presencaLinuxDe(d)); });
     secao("limits", "de limites de uso", function () { desenharLimites(contas()); });
     secao("usage", "de gastos", function () { desenharGastos(gastos()); });
     secao("attention", "Precisa de você", function () { desenharPendencias(pendenciasDe(d)); });
@@ -1121,7 +1137,7 @@ var api = {
   numero: numero, mascararEmails: mascararEmails, snapshotParaExportar: snapshotParaExportar, haSegundos: haSegundos, duracao: duracao, quando: quando,
   resetEmPtBr: resetEmPtBr, textoReset: textoReset, dinheiro: dinheiro, fmtUsd: fmtUsd, fmtBrl: fmtBrl, fmtTokens: fmtTokens, maxBonito: maxBonito,
   agentesDe: agentesDe, contasDe: contasDe, consumoClaude5h: consumoClaude5h, gastosDe: gastosDe, servicosDe: servicosDe, pendenciasDe: pendenciasDe,
-  fontesComProblema: fontesComProblema, presencaDe: presencaDe, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
+  fontesComProblema: fontesComProblema, presencaDe: presencaDe, presencaLinuxDe: presencaLinuxDe, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 else {
