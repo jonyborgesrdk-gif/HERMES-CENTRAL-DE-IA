@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Hermes: central de operações para agentes de IA, consumo, serviços e gastos, ligada aos dados do coletor local.">
+<meta name="theme-color" content="#111111">
+<title>Hermes — Central de operações</title>
+<link rel="stylesheet" href="hermes.css">
+</head>
+<body>
+<a href="#main" class="skip-link">Pular para o conteúdo</a>
+<div class="mobile-backdrop" id="mobile-backdrop"></div>
+<aside class="sidebar" id="sidebar" aria-label="Navegação principal">
+  <a href="#overview" class="brand" aria-label="Hermes, início"><svg class="brand-mark" viewBox="0 0 32 34" fill="none" aria-hidden="true"><path d="M3 4v26h7V19h12v11h7V4h-7v9H10V4H3Z" stroke="currentColor" stroke-width="1.5"/><path d="m12 1 4 5 4-5M12 33l4-5 4 5" stroke="currentColor" stroke-width="1.2"/></svg>HERMES</a>
+  <p class="brand-sub">CENTRAL DE IA</p>
+  <div class="workspace"><span class="workspace-icon" data-icon="monitor"></span><div><b>Coletor local</b><small id="side-origem">sem dados</small></div></div>
+  <p class="nav-label">PAINEL</p>
+  <nav class="nav" id="nav">
+    <a href="#overview" data-nav="overview" class="active"><span data-icon="grid"></span>Visão geral</a>
+    <a href="#agents" data-nav="agents"><span data-icon="agents"></span>Agentes<span class="nav-count" id="nav-agentes" hidden>0</span></a>
+    <a href="#usage" data-nav="usage"><span data-icon="chart"></span>Consumo e gastos</a>
+    <a href="#services" data-nav="services"><span data-icon="layers"></span>Serviços<span class="nav-count danger" id="nav-servicos" hidden>0</span></a>
+    <a href="#events" data-nav="events"><span data-icon="activity"></span>Eventos</a>
+  </nav>
+  <div class="sidebar-bottom">
+    <a class="side-action classic" href="/classico" id="link-classico"><span data-icon="terminal"></span>Painel clássico</a>
+  </div>
+</aside>
+<div class="shell">
+  <header class="topbar">
+    <div class="breadcrumb"><button class="icon-button menu-button" id="menu-button" aria-label="Abrir navegação" aria-expanded="false"><span data-icon="menu"></span></button><span class="breadcrumb-home" data-icon="home"></span><span class="breadcrumb-home">Hermes</span><span class="breadcrumb-home" data-icon="chevron"></span><strong id="breadcrumb-current">Visão geral</strong></div>
+    <div class="top-controls"><span class="live-chip off" id="live-chip"><span class="dot"></span><span id="live-text">conectando…</span></span><span class="separator"></span><button class="icon-button" id="privacy-button" type="button" title="Privacidade" aria-label="Privacidade" aria-pressed="false"><span data-icon="eye"></span></button><button class="icon-button" id="theme-button" type="button" title="Tema" aria-label="Tema"><span data-icon="sun"></span></button></div>
+  </header>
+  <main class="content" id="main" tabindex="-1">
+    <div class="page-heading" id="overview"><div><div class="eyebrow">SEU ECOSSISTEMA DE IA, EM UM SÓ LUGAR</div><h1 id="page-title">Visão geral</h1><p id="page-subtitle">Acompanhe seus agentes. Mantenha o controle.</p></div><div class="heading-actions"><button class="button export-btn" id="export-button" type="button"><span data-icon="download"></span>Exportar dados</button><button class="button" id="refresh-button" type="button"><span data-icon="refresh"></span><span id="refresh-label">Atualizar</span></button></div></div>
+
+    <div class="file-warning" id="file-warning" role="alert" hidden></div>
+
+    <section class="stats" id="stats" aria-label="Resumo do ambiente">
+      <article class="stat"><div class="stat-title">Agentes trabalhando<span data-icon="agents"></span></div><div class="stat-value mono"><span id="k-trab">—</span><small id="k-total">/ —</small></div><div class="stat-foot" id="k-agentes-foot"><span class="dot"></span><span id="k-agentes-texto">sem dados</span></div><div class="stat-foot" id="k-online-foot" hidden><span class="dot"></span><span id="k-online-texto"></span></div></article>
+      <article class="stat"><div class="stat-title">Consumo da sessão<span data-icon="chart"></span></div><div class="stat-value mono"><span id="k-sessao">—</span><small id="k-sessao-un"></small></div><div class="stat-foot" id="k-sessao-foot"><span id="k-sessao-texto">sem dados de cota do Claude</span></div></article>
+      <article class="stat"><div class="stat-title">Gasto no período<span data-icon="wallet"></span></div><div class="stat-value mono sensitive"><span class="currency" id="k-moeda"></span><span id="k-gasto">—</span></div><div class="stat-foot"><span><span class="sensitive" id="k-gasto-usd"></span><span id="k-gasto-texto">sem dados</span></span></div></article>
+      <article class="stat"><div class="stat-title">Serviços disponíveis<span data-icon="layers"></span></div><div class="stat-value mono"><span id="k-serv">—</span><small id="k-serv-total">/ —</small></div><div class="stat-foot" id="k-serv-foot"><span class="dot"></span><span id="k-serv-texto">sem dados</span></div></article>
+    </section>
+
+    <div class="dashboard-row">
+      <section class="panel agents-panel" id="agents" aria-labelledby="agents-title">
+        <div class="panel-head"><div class="panel-title"><h2 id="agents-title">Agentes</h2><span class="badge" id="agents-badge">0 sessões</span></div></div>
+        <div class="agent-toolbar">
+          <div class="tabs" role="group" aria-label="Filtrar agentes">
+            <button class="tab active" type="button" data-agent-filter="todos" aria-pressed="true">Todos<span id="tab-todos">0</span></button>
+            <button class="tab" type="button" data-agent-filter="ativos" aria-pressed="false">Ativos<span id="tab-ativos">0</span></button>
+            <button class="tab" type="button" data-agent-filter="ociosos" aria-pressed="false">Ociosos<span id="tab-ociosos">0</span></button>
+          </div>
+          <label class="search"><span data-icon="search"></span><input type="search" id="agent-search" placeholder="Buscar agente" aria-label="Buscar agente" autocomplete="off"></label>
+        </div>
+        <div class="table-scroll"><table><thead><tr><th>AGENTE</th><th>ESTADO</th><th>CONTEXTO</th><th class="mission-col">MISSÃO ATUAL</th><th aria-label="Detalhes"></th></tr></thead><tbody id="agent-rows"></tbody></table><div class="empty-table" id="agent-empty" hidden></div></div>
+        <div class="presence" id="presence" role="group" aria-label="Processos de IA online" hidden><div class="presence-head"><span>Online agora · por processo</span><span class="badge" id="presence-badge"></span></div><div class="table-scroll"><table><tbody id="presence-rows"></tbody></table></div></div>
+        <div class="presence" id="presence-linux" role="group" aria-label="Processos de IA no WSL" hidden><div class="presence-head"><span id="presence-linux-titulo">WSL</span><span class="badge" id="presence-linux-badge"></span></div><div class="table-scroll"><table><tbody id="presence-linux-rows"></tbody></table></div></div>
+        <div class="presence" id="errors" role="group" aria-label="Erros de ferramenta dos agentes" hidden><div class="presence-head"><span>Erros de ferramenta</span><span class="badge" id="errors-badge"></span></div><div class="table-scroll"><table><tbody id="errors-rows"></tbody></table></div><div class="presence-head"><span id="errors-resumo"></span></div><div class="presence-head"><span id="errors-nota"></span></div></div>
+        <div class="presence" id="extra-agents" role="group" aria-label="Sessões de outros agentes" hidden><div class="presence-head"><span>Outros agentes · por sessão</span><span class="badge" id="extra-agents-badge"></span></div><div class="table-scroll"><table><tbody id="extra-agents-rows"></tbody></table></div><div class="presence-head"><span id="extra-agents-cursor"></span></div></div>
+        <div class="panel-footer"><span data-icon="info"></span>Selecione um agente para ver contexto, missão e PR/CI.</div>
+      </section>
+
+      <section class="panel usage-panel" id="limits" aria-labelledby="limits-title">
+        <div class="panel-head"><div class="panel-title"><h2 id="limits-title">Limites de uso</h2></div><span class="badge">ASSINATURAS</span></div>
+        <div class="providers" id="providers"></div>
+        <div class="presence" id="limits-local" role="group" aria-label="Uso observado em arquivos locais" hidden><div class="presence-head"><span>Observado em arquivos locais</span><span class="badge" id="limits-local-badge"></span></div><div class="providers" id="limits-local-cards"></div></div>
+      </section>
+    </div>
+
+    <div class="dashboard-row">
+      <section class="panel cost-panel" id="usage" aria-labelledby="cost-title">
+        <div class="panel-head"><div><div class="panel-title"><h2 id="cost-title">Gastos de IA</h2></div><p class="panel-desc" id="cost-desc">Distribuição do consumo no período</p></div><label><select class="compact-select" id="period-select" aria-label="Período de gastos"><option value="24h">Últimas 24 h</option><option value="hoje">Hoje</option><option value="7d" selected>Últimos 7 dias</option><option value="30d">Últimos 30 dias</option></select></label></div>
+        <div class="cost-privacy-notice" id="cost-privacy-notice" hidden><span>Valores ocultos pelo modo privacidade.</span><button class="button" id="cost-show-values" type="button">Mostrar valores</button></div>
+        <div class="cost-top"><div class="cost-total mono sensitive" id="cost-total">—</div><span class="neutral-label sensitive" id="cost-tokens"></span></div>
+        <div class="cost-body">
+          <div class="chart sensitive" id="chart" role="group" aria-label="Distribuição dos gastos por intervalo"></div>
+          <div><div class="breakdown-title"><span>DISTRIBUIÇÃO</span><select class="compact-select" id="group-select" aria-label="Agrupar gastos"><option value="canal" selected>Por canal</option><option value="modelo">Por modelo</option></select></div><div id="breakdown"></div></div>
+        </div>
+        <div class="cost-notes" id="cost-notes"></div>
+      </section>
+
+      <section class="panel attention-panel" id="attention" aria-labelledby="attention-title">
+        <div class="panel-head"><div class="panel-title"><h2 id="attention-title">Precisa de você</h2><span class="badge" id="attention-badge">0</span></div><span data-icon="info"></span></div>
+        <div id="attention-body"></div>
+        <div class="attention-note" id="attention-note" hidden></div>
+        <div class="attention-foot" id="attention-foot" hidden><span data-icon="warning"></span><span id="attention-foot-text"></span><a class="text-button" href="#services" id="attention-foot-link">Ver serviços</a></div>
+      </section>
+    </div>
+
+    <section class="panel services-panel" id="services" aria-labelledby="services-title">
+      <div class="panel-head"><div><div class="panel-title"><h2 id="services-title">Saúde dos serviços</h2><span class="badge" id="services-badge">0 serviços</span></div></div><select id="service-filter" class="compact-select" aria-label="Filtrar serviços"><option value="todos">Todos os serviços</option><option value="atencao">Precisam de atenção</option></select></div>
+      <div class="services-grid" id="services-grid"></div>
+      <div class="empty-table" id="services-empty" hidden></div>
+      <div class="presence" id="vigilante" role="group" aria-label="Vigilante 2" hidden><div class="presence-head"><span>Vigilante 2</span><span class="badge" id="vigilante-badge"></span></div><div class="services-grid" id="vigilante-grid"></div></div>
+      <div class="panel-footer services-foot"><span class="source-summary" id="services-summary"><span class="dot"></span><span id="services-summary-text">sem dados</span></span><span id="services-processes">sem processos observados</span></div>
+      <div class="panel-footer" id="sources-foot" hidden></div>
+    </section>
+
+    <section class="panel events-panel" id="events" aria-labelledby="events-title">
+      <div class="panel-head"><div><div class="panel-title"><h2 id="events-title">Histórico de eventos</h2><span class="badge">sem fonte</span></div><p class="panel-desc">Sinais e alertas do ambiente</p></div></div>
+      <div class="empty-state"><div class="empty-icon"><span data-icon="activity"></span></div><h3>Sem histórico de eventos.</h3><p>O coletor ainda não publica uma lista de eventos em dados.json. Os estados atuais estão em Saúde dos serviços.</p></div>
+    </section>
+
+    <footer class="footer"><span><span data-icon="shield"></span>Hermes · Central de operações</span><span id="updated-label">sem leitura do coletor</span></footer>
+  </main>
+</div>
+<div class="overlay" id="overlay"><section class="modal" id="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1"><div class="modal-head"><h2 id="modal-title"></h2><button class="icon-button" id="close-modal" type="button" aria-label="Fechar detalhes"><span data-icon="close"></span></button></div><div class="modal-body"><div id="modal-body"></div><div class="modal-actions"><button class="button primary" type="button" id="modal-ok">Fechar</button></div></div></section></div>
+<div class="toast" id="toast" role="status" aria-live="polite"><span id="toast-icon"></span><span id="toast-text"></span></div>
+<script src="hermes.js"></script>
+</body>
+</html>
