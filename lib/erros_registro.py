@@ -893,12 +893,17 @@ def _trava(dir_dados):
     except OSError:
         raise ErroEstado(_MSG_GRAVAR) from None
     limite = time.monotonic() + ESPERA_TRAVA_S
+    negado = False
     while True:
         try:
             fd = os.open(caminho, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             break
         except FileExistsError:
-            pass
+            negado = False
+        except PermissionError:
+            # No Windows, criar a trava enquanto o dono anterior acaba de apagá-la (nome ainda em
+            # exclusão pendente) dá acesso negado em vez de "já existe": é trava ocupada, não erro.
+            negado = True
         except OSError:
             raise ErroEstado(_MSG_GRAVAR) from None
         try:
@@ -914,7 +919,7 @@ def _trava(dir_dados):
             except OSError:
                 pass
         if time.monotonic() >= limite:
-            raise ErroEstado(_MSG_OCUPADO)
+            raise ErroEstado(_MSG_GRAVAR if negado else _MSG_OCUPADO)
         time.sleep(_PAUSA_S)
     try:
         yield
