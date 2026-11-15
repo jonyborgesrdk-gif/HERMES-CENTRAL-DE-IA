@@ -1,11 +1,11 @@
 """Plano local do Cursor (opt-in, sem rede, sem cota).
 
 Lê só as chaves de plano e de situação da assinatura da tabela ``ItemTable``
-do banco ``state.vscdb`` do Cursor, abrindo sempre só para leitura
-(``mode=ro``). Com os dois auxiliares do modo WAL presentes (aplicativo
-aberto) usa ``mode=ro``; em qualquer outro caso, ``mode=ro&immutable=1``,
-para nunca gerar arquivo na pasta do banco. Os valores saem por lista fixa;
-qualquer outro texto vira ``"outra"``.
+do banco ``state.vscdb`` do Cursor, sempre com ``mode=ro&immutable=1``: o
+SQLite lê sem pedir trava, sem abrir os auxiliares do banco e sem gravar
+nada, com o aplicativo aberto ou fechado. O que ainda está só no registro
+de gravação do aplicativo não é visto até ele consolidar ou fechar. Os
+valores saem por lista fixa; qualquer outro texto vira ``"outra"``.
 """
 import os
 import sqlite3
@@ -50,14 +50,9 @@ def ler(ctx):
     if caminho is None or not os.path.isfile(caminho):
         return {CHAVE: dict(VAZIO)}
     try:
-        base = str(caminho)
-        # D13: com -wal e -shm presentes o aplicativo está aberto e o dado novo
-        # pode estar só no -wal; sem os dois, immutable=1 lê sem gerar auxiliar.
-        if os.path.isfile(base + '-wal') and os.path.isfile(base + '-shm'):
-            modo = 'mode=ro'
-        else:
-            modo = 'mode=ro&immutable=1'
-        uri = Path(caminho).resolve().as_uri() + '?' + modo
+        # Sempre immutable: sem pedir trava, sem abrir -wal/-shm/-journal e sem gravar nada,
+        # com o Cursor aberto ou fechado. Não vê o que ainda está só no -wal.
+        uri = Path(caminho).resolve().as_uri() + '?mode=ro&immutable=1'
         con = sqlite3.connect(uri, uri=True, timeout=T_ESPERA_S)
         try:
             linhas = con.execute(

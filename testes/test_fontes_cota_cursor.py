@@ -1,9 +1,11 @@
 """Fonte cota_cursor (E19, CONTRATOS §10): só bancos SQLite sintéticos em pasta temporária."""
+import hashlib
 import json
 import os
 from pathlib import Path
 import sqlite3
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -34,6 +36,16 @@ def listagem(pasta, com_tamanho=True):
     itens = []
     for nome in sorted(os.listdir(pasta)):
         itens.append((nome, os.path.getsize(os.path.join(pasta, nome))) if com_tamanho else nome)
+    return itens
+
+
+def retrato(pasta):
+    """Nome, tamanho e resumo do conteúdo de cada arquivo da pasta."""
+    itens = []
+    for nome in sorted(os.listdir(pasta)):
+        with open(os.path.join(pasta, nome), 'rb') as arquivo:
+            dados = arquivo.read()
+        itens.append((nome, len(dados), hashlib.sha256(dados).hexdigest()))
     return itens
 
 
@@ -139,20 +151,23 @@ class CotaCursorTests(unittest.TestCase):
         self.assertEqual(listagem(self.pasta), antes)
 
     # 7b
-    def test_07b_aplicativo_aberto_le_o_valor_novo(self):
+    def test_07b_aplicativo_aberto_le_sem_trava_o_valor_consolidado(self):
         criar_banco(self.banco, [(PLANO, 'free'), (ASSINATURA, 'active')])
-        escritora = sqlite3.connect(str(self.banco))
+        escritora = sqlite3.connect(str(self.banco), isolation_level=None)
         self.addCleanup(escritora.close)
         escritora.execute('UPDATE ItemTable SET value = ? WHERE key = ?', ('pro', PLANO))
-        escritora.commit()
         self.assertTrue(os.path.isfile(str(self.banco) + '-wal'))
         self.assertTrue(os.path.isfile(str(self.banco) + '-shm'))
-        antes = listagem(self.pasta, com_tamanho=False)
+        antes = retrato(self.pasta)
         saida, uri = self.ler_espiando()
-        self.assertTrue(uri.endswith('?mode=ro'), uri)
-        self.assertNotIn('immutable', uri)
-        self.assertEqual(saida[mod.CHAVE], {'estado': 'ok', 'plano': 'pro', 'assinatura': 'active'})
-        self.assertEqual(listagem(self.pasta, com_tamanho=False), antes)
+        self.assertTrue(uri.endswith('?mode=ro&immutable=1'), uri)
+        # O valor novo ainda está só no -wal: a leitura sem trava devolve o consolidado.
+        self.assertEqual(saida[mod.CHAVE], {'estado': 'ok', 'plano': 'free', 'assinatura': 'active'})
+        # Nem o conteúdo do -shm muda.
+        self.assertEqual(retrato(self.pasta), antes)
+        # O aplicativo consolida por inteiro (0 = não teve de esperar leitor nenhum).
+        self.assertEqual(escritora.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0], 0)
+        self.assertEqual(self.ler()[mod.CHAVE]['plano'], 'pro')
 
     # 7c
     def test_07c_so_um_auxiliar(self):
@@ -188,6 +203,36 @@ class CotaCursorTests(unittest.TestCase):
         self.assertEqual(self.ler(banco)[mod.CHAVE], {
             'estado': 'ok', 'plano': 'free_trial', 'assinatura': 'paused'})
         self.assertEqual(listagem(pasta, com_tamanho=False), ['state.vscdb'])
+
+    # 10
+    def test_10_diario_com_gravacao_em_curso_le_sem_esperar(self):
+        criar_banco(self.banco, [(PLANO, 'pro'), (ASSINATURA, 'active')], wal=False)
+        escritora = sqlite3.connect(str(self.banco), isolation_level=None, timeout=0.2)
+        self.addCleanup(escritora.close)
+        escritora.execute('BEGIN EXCLUSIVE')
+        inicio = time.monotonic()
+        saida = self.ler()
+        duracao = time.monotonic() - inicio
+        escritora.execute('ROLLBACK')
+        self.assertEqual(saida[mod.CHAVE], {'estado': 'ok', 'plano': 'pro', 'assinatura': 'active'})
+        self.assertLess(duracao, 0.5)
+
+    # 11
+    def test_11_sempre_immutable_qualquer_que_seja_o_auxiliar(self):
+        casos = {'nenhum': (), 'so_wal': ('-wal',), 'so_shm': ('-shm',),
+                 'wal_e_shm': ('-wal', '-shm'), 'diario': ('-journal',)}
+        for nome, sufixos in casos.items():
+            with self.subTest(caso=nome):
+                pasta = self.base / nome
+                pasta.mkdir()
+                banco = criar_banco(pasta / 'state.vscdb', [(PLANO, 'team'), (ASSINATURA, 'trialing')], wal=False)
+                for sufixo in sufixos:
+                    Path(str(banco) + sufixo).write_bytes(b'')
+                antes = retrato(pasta)
+                saida, uri = self.ler_espiando(banco)
+                self.assertTrue(uri.endswith('?mode=ro&immutable=1'), uri)
+                self.assertEqual(saida[mod.CHAVE], {'estado': 'ok', 'plano': 'team', 'assinatura': 'trialing'})
+                self.assertEqual(retrato(pasta), antes)
 
     def test_enumerar(self):
         self.assertIsNone(mod.enumerar(None, mod.PLANOS))
