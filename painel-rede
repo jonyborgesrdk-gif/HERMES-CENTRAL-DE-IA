@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Uso de rede por programa (E22): inicia, mostra e encerra a captura que alimenta o painel com PAINEL_REDE=1.
+
+Uso:
+  painel-rede capturar   inicia a captura; só num terminal de administrador (de preferência
+                         py -3.14 -I -B painel-rede capturar). Fica rodando até Ctrl+C ou painel-rede parar.
+                         Lê os eventos de rede do Windows pela sessão ETW painel-ias-rede e grava, a cada 4 s,
+                         rede-resumo.json no diretório de dados do painel, só com bytes e conexões por programa
+                         da tabela fixa e por categoria de destino (local, rede privada, tailnet, internet).
+                         Acima de 5% de um núcleo a captura pausa e tenta de novo depois de 60, 120, 300 ou
+                         600 s.
+  painel-rede estado     mostra o estado da captura, só com o que a leitura do painel validou no resumo
+                         (não precisa de administrador)
+  painel-rede parar      pede à captura que pare e espera até 20 s; só num terminal de administrador
+
+O diretório de dados (PAINEL_IAS_DIR, ou %LOCALAPPDATA%\\painel-ias) precisa existir antes e não pode ser
+junção nem link; este comando não o cria. Nenhum endereço, porta, PID ou nome de processo é gravado.
+O painel não cria tarefa agendada nem serviço e nunca pede elevação por conta própria.
+"""
+import argparse
+import ctypes
+import os
+import signal
+import sys
+import threading
+import time
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+
+import comum                                                  # noqa: E402
+import rede_captura                                           # noqa: E402
+from fontes import diretorio, presenca_processos, rede_uso    # noqa: E402
+
+ESPERA_PARAR_S = 20
+PASSO_PARAR_S = 0.25
+PREFIXO = "painel-rede: "
+MSG_SO_WINDOWS = "só funciona no Windows"
+MSG_ADMIN_CAPTURAR = "a captura precisa de um terminal de administrador; nada foi iniciado"
+MSG_DIRETORIO = "o diretório de dados não existe ou não é um diretório comum; nada foi gravado"
+MSG_CODIGOS = {0: "captura encerrada", 1: "captura encerrada com erro", 3: "já existe uma captura rodando",
+               4: "o nome do evento de parada já está em uso; nada foi iniciado"}
+MSG_ADMIN_PARAR = "parar precisa de um terminal de administrador"
+MSG_NAO_RESPONDEU = "a captura não respondeu; nada foi encerrado"
+MSG_ENCERRADA = "captura encerrada"
+MSG_NENHUMA = "nenhuma captura rodando"
+MSG_ILEGIVEL = "resumo ilegível"
+MSG_ARQUIVO = "falha de arquivo ou do sistema"
+MSG_INTERROMPIDO = "interrompido"
+MSG_INESPERADA = "falha inesperada"
+SEM_CAPTURA = "sem captura"
+ESTADOS_VISTOS = ("ativo", "pausado_carga", "parado", "encerrado", "erro_captura")
+MOTIVOS_VISTOS = rede_uso.MOTIVOS + ("outro",)
+
+# EMENDA B0: a sessão ETW guarda o objeto de retorno e as estruturas de cada abertura, que não podem ser
+# soltos enquanto o processo vive. Esta lista só cresce e nunca é esvaziada.
+_VIVOS = []
+
+
+class Analisador(argparse.ArgumentParser):
+    def error(self, message):
+        raise comum.ErroDeEntrada("argumentos inválidos (%s). Veja painel-rede --help." % message)
+
+
+def _elevado():
+    """Verdadeiro só num terminal de administrador. Só consulta: nunca pede elevação."""
+    if os.name != "nt":
+        return False
+    return ctypes.windll.shell32.IsUserAnAdmin() != 0
+
+
+def _avisar(texto):
+    print(PREFIXO + texto, file=sys.stderr)
+
+
+def _informar(texto):
+    print(PREFIXO + texto)
+
+
+def _segundos(valor):
+    return max(0, int(valor))
+
+
+def _numero(valor, formato):
+    return "-" if valor is None else formato % valor
+
+
+def capturar(c):
+    if c["plataforma"] != "nt":
+        _avisar(MSG_SO_WINDOWS)
+        return 1
+    if not c["elevado"]():
+        _avisar(MSG_ADMIN_CAPTURAR)
+        return 1
+    pasta = c["prender"](str(diretorio({})))
+    if pasta is None:
+        _avisar(MSG_DIRETORIO)
+        return 1
+    anteriores = []
+    try:
+        sessao = c["sessao"] if c["sessao"] is not None else rede_captura.SessaoETW()
+        _VIVOS.append(sessao)
+        mutex = c["mutex"] if c["mutex"] is not None else rede_captura.MutexNomeado(rede_captura.NOME_MUTEX)
+        evento = (c["evento"] if c["evento"] is not None
+                  else rede_captura.EventoNomeado(rede_captura.NOME_EVENTO_PARAR))
+        tabela = presenca_processos.tabela_resolvida(c["ambiente"])
+        sinal = threading.Event()
+
+        def tratador(numero, quadro):
+            sinal.set()
+
+        for nome in ("SIGINT", "SIGBREAK"):
+            numero = getattr(signal, nome, None)
+            if numero is not None:
+                anteriores.append((numero, signal.signal(numero, tratador)))
+        codigo = rede_captura.capturar(pasta, sessao, c["listar"], tabela, sinal.is_set, c["relogio"], c["cpu"],
+                                       c["dormir"], c["agora"], mutex, evento)
+    finally:
+        try:
+            pasta.fechar()
+        except Exception:
+            pass
+        for numero, anterior in reversed(anteriores):
+            if anterior is not None:
+                signal.signal(numero, anterior)
+    texto = MSG_CODIGOS.get(codigo, MSG_CODIGOS[1])
+    if codigo == 0:
+        _informar(texto)
+    else:
+        _avisar(texto)
+    return codigo
+
+
+def estado(c):
+    agora_s = c["agora"]()
+    r = rede_uso.ler({"rede_resumo": diretorio({}) / rede_captura.ARQ_RESUMO, "agora": agora_s})
+    v = r.get(rede_uso.CHAVE) if isinstance(r, dict) else None
+    situacao = v.get("estado") if isinstance(v, dict) else None
+    if situacao == "desligado":
+        print(SEM_CAPTURA)
+        return 0
+    if situacao not in ESTADOS_VISTOS:
+        _avisar(MSG_ILEGIVEL)
+        return 1
+    linhas = ["estado: " + situacao]
+    if situacao in ("ativo", "pausado_carga"):
+        programas = v["programas"]
+        conexoes = sum(p["conexoes"] for p in programas) + v["outros"]["conexoes"]
+        linhas += ["idade_s: %d" % _segundos(agora_s - v["gerado_em_epoch"]),
+                   "cpu_pct: " + _numero(v["cpu_pct"], "%.1f"),
+                   "eventos_s: " + _numero(v["eventos_s"], "%d"),
+                   "perdidos: %d" % v["perdidos"],
+                   "programas: %d" % len(programas),
+                   "conexoes: %d" % conexoes]
+    elif situacao == "parado":
+        linhas.append("sem_sinal_s: %d" % _segundos(agora_s - v["ultimo_sinal_epoch"]))
+    elif situacao == "erro_captura":
+        motivo = v.get("motivo")
+        linhas.append("motivo: " + (motivo if motivo in MOTIVOS_VISTOS else "outro"))
+    print("\n".join(linhas))
+    return 0
+
+
+def parar(c):
+    if c["plataforma"] != "nt":
+        _avisar(MSG_SO_WINDOWS)
+        return 1
+    if not c["elevado"]():
+        _avisar(MSG_ADMIN_PARAR)
+        return 1
+    sessao = c["sessao"] if c["sessao"] is not None else rede_captura.SessaoETW()
+    mutex = c["mutex"] if c["mutex"] is not None else rede_captura.MutexNomeado(rede_captura.NOME_MUTEX)
+    evento = (c["evento"] if c["evento"] is not None
+              else rede_captura.EventoNomeado(rede_captura.NOME_EVENTO_PARAR))
+    pediu = evento.pedir()
+    havia = mutex.existe()
+    existe = havia
+    inicio = c["relogio"]()
+    while existe and c["relogio"]() - inicio < ESPERA_PARAR_S:
+        c["dormir"](PASSO_PARAR_S)
+        existe = mutex.existe()
+    if existe:
+        _avisar(MSG_NAO_RESPONDEU)
+        return 1
+    if mutex.adquirir():
+        try:
+            sessao.limpar_orfa()
+        finally:
+            mutex.liberar()
+    _informar(MSG_ENCERRADA if pediu or havia else MSG_NENHUMA)
+    return 0
+
+
+def _executar(argv, c):
+    analisador = Analisador(prog="painel-rede", add_help=False)
+    analisador.add_argument("-h", "--help", "--ajuda", dest="ajuda", action="store_true")
+    acoes = analisador.add_subparsers(dest="acao")
+    for nome in ("capturar", "estado", "parar"):
+        acoes.add_parser(nome, add_help=False)
+    args = analisador.parse_args(argv)
+    if args.ajuda:
+        print(__doc__.strip())
+        return 0
+    if args.acao is None:
+        analisador.error("falta o subcomando: capturar, estado ou parar")
+    return {"capturar": capturar, "estado": estado, "parar": parar}[args.acao](c)
+
+
+def main(argv=None, *, elevado=None, sessao=None, mutex=None, evento=None, prender=None, listar=None,
+         relogio=None, cpu=None, dormir=None, agora=None, plataforma=None, ambiente=None):
+    """Devolve o código de saída. Os colaboradores existem para os testes; o padrão é o de verdade."""
+    c = {"elevado": _elevado if elevado is None else elevado,
+         "sessao": sessao, "mutex": mutex, "evento": evento,
+         "prender": rede_captura.prender_pasta if prender is None else prender,
+         "listar": presenca_processos.listar_windows if listar is None else listar,
+         "relogio": time.monotonic if relogio is None else relogio,
+         "cpu": time.process_time if cpu is None else cpu,
+         "dormir": time.sleep if dormir is None else dormir,
+         "agora": time.time if agora is None else agora,
+         "plataforma": os.name if plataforma is None else plataforma,
+         "ambiente": os.environ if ambiente is None else ambiente}
+    argv = sys.argv[1:] if argv is None else list(argv)
+    try:
+        return _executar(argv, c)
+    except comum.ErroDeEntrada as erro:
+        _avisar(str(erro))
+        return 2
+    except KeyboardInterrupt:
+        _avisar(MSG_INTERROMPIDO)
+        return 1
+    except OSError:
+        _avisar(MSG_ARQUIVO)
+        return 1
+    except Exception:
+        _avisar(MSG_INESPERADA)
+        return 1
+
+
+if __name__ == "__main__":
+    for _fluxo in (sys.stdout, sys.stderr):
+        try:
+            _fluxo.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+    sys.exit(main(sys.argv[1:]))

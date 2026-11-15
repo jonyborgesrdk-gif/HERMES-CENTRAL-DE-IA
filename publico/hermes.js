@@ -473,6 +473,61 @@ function outrosAgentesDe(dados) {
   }
   return { ativo: ativo, sessoes: sessoes, cursor: cursor };
 }
+/* Rede por programa (E22): só números, o produto e o rótulo validados e valores de lista fixa; nenhum outro texto do arquivo. */
+function fmtBytes(n) {
+  if (!numero(n) || n < 0) return "0 B";
+  if (n < 1000) return Math.round(n) + " B";
+  var unidades = ["kB", "MB", "GB", "TB"], v = n / 1000, i = 0;
+  while (v >= 1000 && i < unidades.length - 1) { v /= 1000; i += 1; }
+  return fmtNum(v, 0, 1) + " " + unidades[i];
+}
+function redeDe(dados) {
+  var estados = ["ativo", "pausado_carga", "parado", "encerrado", "erro_captura"], categorias = ["local", "privada", "tailnet", "internet"];
+  var familias = ["claude", "codex", "grok", "hermes", "cursor", "copilot", "maestri"], motivos = ["sessao", "provedor", "consumidor", "outro"];
+  var r = dados && dados.rede_uso;
+  if (!r || typeof r !== "object" || Array.isArray(r) || estados.indexOf(r.estado) < 0)
+    return { estado: null, itens: [], cpu: null, eventos: null, perdidos: 0, retoma: null, sinal: null, motivo: null, noTeto: false };
+  var inteiro = function (x) { return numero(x) && x >= 0 && Math.floor(x) === x; };
+  var natural = function (x) { return inteiro(x) ? x : 0; };
+  var positivo = function (x) { return numero(x) && x > 0 ? x : null; };
+  var somar = function (janela) {      // [enviados, recebidos] por categoria; par fora do formato conta 0
+    var j = objeto(janela), env = 0, rec = 0, destinos = [];
+    categorias.forEach(function (cat, ordem) {
+      var p = j[cat], e = 0, s = 0;
+      if (Array.isArray(p) && p.length === 2 && inteiro(p[0]) && inteiro(p[1])) { e = p[0]; s = p[1]; }
+      env += e; rec += s;
+      if (e + s > 0) destinos.push({ cat: cat, bytes: e + s, ordem: ordem });
+    });
+    destinos.sort(function (a, b) { return b.bytes - a.bytes || a.ordem - b.ordem; });
+    return { enviados: env, recebidos: rec, destinos: destinos.map(function (x) { return { cat: x.cat, bytes: x.bytes }; }) };
+  };
+  var saida = { estado: r.estado, itens: [], cpu: numero(r.cpu_pct) && r.cpu_pct >= 0 ? r.cpu_pct : null, eventos: numero(r.eventos_s) && r.eventos_s >= 0 ? r.eventos_s : null,
+                perdidos: natural(r.perdidos), retoma: positivo(r.retoma_em_epoch), sinal: positivo(r.ultimo_sinal_epoch),
+                motivo: r.estado === "erro_captura" ? (motivos.indexOf(r.motivo) >= 0 ? r.motivo : "outro") : null, noTeto: r.conexoes_no_teto === true };
+  if (r.estado !== "ativo" && r.estado !== "pausado_carga") return saida;
+  var vistos = Object.create(null), itens = [];
+  vistos.outros = true;      // "outros" é a chave da última linha: um programa com esse produto repetiria a chave
+  lista(r.programas).forEach(function (p) {
+    if (!p || typeof p !== "object" || Array.isArray(p)) return;
+    if (typeof p.produto !== "string" || !/^[a-z0-9_]{1,40}$/.test(p.produto) || vistos[p.produto] === true) return;
+    if (typeof p.rotulo !== "string" || !p.rotulo || p.rotulo.length > 60) return;
+    vistos[p.produto] = true;
+    var s = somar(p.janela);
+    itens.push({ id: p.produto, rotulo: p.rotulo, familia: familias.indexOf(p.familia) >= 0 ? p.familia : "outra", conexoes: natural(p.conexoes),
+                 enviados: s.enviados, recebidos: s.recebidos, destinos: s.destinos });
+  });
+  itens = itens.map(function (it, i) { return { it: it, i: i }; })
+    .sort(function (a, b) { return (b.it.enviados + b.it.recebidos) - (a.it.enviados + a.it.recebidos) || a.i - b.i; })
+    .slice(0, 40).map(function (x) { return x.it; });
+  var o = r.outros;
+  if (o && typeof o === "object" && !Array.isArray(o)) {
+    var so = somar(o.janela), co = natural(o.conexoes);
+    if (co > 0 || so.enviados + so.recebidos > 0)
+      itens.push({ id: "outros", rotulo: "Outros programas", familia: "outra", conexoes: co, enviados: so.enviados, recebidos: so.recebidos, destinos: so.destinos });
+  }
+  saida.itens = itens;
+  return saida;
+}
 function processosDe(dados) {
   var p = objeto(dados && dados.processos);
   return Object.keys(p).sort().map(function (n) { return n + " × " + texto(p[n]); });
@@ -822,6 +877,29 @@ function criarApp(doc, win, opcoes) {
     sincronizar($("extra-agents-rows"), x.sessoes, function (item) { return item.id; }, criarLinhaErro, atualizarLinhaExtra);
     setTxt($("extra-agents-cursor"), !x.ativo ? "" : c.estado === "ok" ? "cursor-agent: último chat há " + duracao(agoraS() - c.ultimo) + " · " + plural(c.chats, "chat local", "chats locais")
       : c.estado === "sem_dado" ? "cursor-agent: nenhum chat local" : "");
+  }
+  function atualizarLinhaRede(tr, item) {
+    var r = tr._r, nomes = { local: "local", privada: "rede privada", tailnet: "tailnet", internet: "internet" };
+    if (r.familia !== item.familia) { r.familia = item.familia; r.logo.replaceChildren(icone(doc, iconeDoAgente(item.familia))); }
+    setTxt(r.rotulo, m(item.rotulo));
+    setTxt(r.detalhe, plural(item.conexoes, "conexão", "conexões"));
+    var cls = item.enviados + item.recebidos > 0 ? "status good" : "status idle";
+    if (r.status.className !== cls) r.status.className = cls;
+    setTxt(r.estado, "↑ " + fmtBytes(item.enviados) + " · ↓ " + fmtBytes(item.recebidos));
+    setTxt(r.sub, item.destinos.length > 0 ? item.destinos.map(function (x) { return nomes[x.cat] + " " + fmtBytes(x.bytes); }).join(" · ") : "sem tráfego no último minuto");
+  }
+  function desenharRede(x) {      // bloco próprio: não mexe nas linhas de agente, nos blocos de presença, de erros e de outros agentes nem nos cartões do topo
+    var agora = agoraS(), nota = "", selos = { ativo: "ativa", pausado_carga: "pausada por carga", parado: "parada", encerrado: "encerrada", erro_captura: "erro" };
+    if (x.estado === "ativo") nota = ["Captura ativa", x.cpu !== null ? fmtNum(x.cpu, 0, 1) + "% de um núcleo" : "", x.eventos !== null ? fmtNum(x.eventos, 0, 0) + " eventos por segundo" : "",
+      x.perdidos > 0 ? plural(x.perdidos, "evento perdido", "eventos perdidos") : "", x.noTeto ? "contagem de conexões no teto" : ""].filter(Boolean).join(" · ");
+    else if (x.estado === "pausado_carga") nota = x.retoma !== null && x.retoma > agora ? "Captura pausada por carga; nova tentativa em " + duracao(x.retoma - agora) : "Captura pausada por carga";
+    else if (x.estado === "parado") nota = x.sinal !== null ? "Captura sem sinal há " + duracao(agora - x.sinal) : "Captura sem sinal";
+    else if (x.estado === "encerrado") nota = "Captura encerrada";
+    else if (x.estado === "erro_captura") nota = ["sessao", "provedor", "consumidor"].indexOf(x.motivo) >= 0 ? "Não foi possível abrir a sessão de captura" : "A captura parou com erro";
+    $("network").hidden = x.estado === null;
+    setTxt($("network-badge"), x.estado === null ? "" : selos[x.estado]);
+    sincronizar($("network-rows"), x.itens, function (item) { return item.id; }, criarLinhaErro, atualizarLinhaRede);
+    setTxt($("network-nota"), nota);
   }
 
   /* ---- limites de uso ---- */
@@ -1255,6 +1333,7 @@ function criarApp(doc, win, opcoes) {
     secao("presence-linux", "de presença no WSL", function () { desenharPresencaLinux(presencaLinuxDe(d)); });
     secao("errors", "de erros de ferramenta", function () { desenharErros(errosDe(d)); });
     secao("extra-agents", "de outros agentes", function () { desenharOutrosAgentes(outrosAgentesDe(d)); });
+    secao("network", "de rede", function () { desenharRede(redeDe(d)); });
     secao("limits", "de limites de uso", function () {
       var l; try { l = locais(); } catch (e) { l = []; }          // o erro da lista local é registrado pela seção dela
       desenharLimites(unificarCodex(contas(), l).contas);
@@ -1450,6 +1529,7 @@ var api = {
   agentesDe: agentesDe, contasDe: contasDe, consumoClaude5h: consumoClaude5h, gastosDe: gastosDe, servicosDe: servicosDe, pendenciasDe: pendenciasDe,
   errosDe: errosDe,
   outrosAgentesDe: outrosAgentesDe,
+  redeDe: redeDe, fmtBytes: fmtBytes,
   fontesComProblema: fontesComProblema, presencaDe: presencaDe, presencaLinuxDe: presencaLinuxDe, cotasLocaisDe: cotasLocaisDe, unificarCodex: unificarCodex, vigilanteDe: vigilanteDe, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;

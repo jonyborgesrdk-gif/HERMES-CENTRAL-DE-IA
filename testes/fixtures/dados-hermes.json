@@ -288,6 +288,13 @@
    "ultima_leitura_ok": 1793433709.0,
    "desatualizado": false
   },
+  "rede_uso": {
+   "ok": true,
+   "erro": null,
+   "hora": 1793433709.0,
+   "ultima_leitura_ok": 1793433709.0,
+   "desatualizado": false
+  },
   "erros_agentes": {
    "ok": true,
    "erro": null,
@@ -762,6 +769,18 @@
     "tokens": {"entrada": 50000, "saida": 2000, "cache_leitura": 0, "cache_escrita": 0, "raciocinio": 0, "total": null},
     "mensagens": 40, "chamadas": 1, "ultima_ferramenta": "web", "atividade_epoch": 1793433112.0, "inicio_epoch": 1793430112.0}]},
  "chat_cursor": {"estado": "ok", "ultimo_chat_epoch": 1793347312.0, "chats": 1},
+ "rede_uso": {"estado": "ativo", "gerado_em_epoch": 1793433717.0, "desde_epoch": 1793430112.0, "janela_s": 60, "cpu_pct": 0.4,
+  "eventos_s": 1236, "perdidos": 0, "retoma_em_epoch": null, "conexoes_no_teto": false,
+  "programas": [
+   {"produto": "claude_cli", "rotulo": "Claude Code CLI", "familia": "claude", "tipo": "cli", "conexoes": 3,
+    "janela": {"local": [0, 0], "privada": [0, 0], "tailnet": [0, 0], "internet": [1500000, 28000000]},
+    "total": {"local": [0, 0], "privada": [0, 0], "tailnet": [0, 0], "internet": [90000000, 2000000000]}},
+   {"produto": "grok_cli", "rotulo": "Grok CLI", "familia": "grok", "tipo": "cli", "conexoes": 1,
+    "janela": {"local": [2000, 500], "privada": [0, 0], "tailnet": [300000, 0], "internet": [0, 0]},
+    "total": {"local": [2000, 500], "privada": [0, 0], "tailnet": [300000, 0], "internet": [0, 0]}}],
+  "outros": {"conexoes": 42,
+   "janela": {"local": [1000000, 1000000], "privada": [5000, 0], "tailnet": [0, 0], "internet": [200000, 4000000]},
+   "total": {"local": [1000000, 1000000], "privada": [5000, 0], "tailnet": [0, 0], "internet": [200000, 4000000]}}},
  "erros_agentes": {
   "estado": "ok",
   "desde": 1793347312.0,
