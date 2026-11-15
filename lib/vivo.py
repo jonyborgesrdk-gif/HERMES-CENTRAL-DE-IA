@@ -25,7 +25,7 @@ def montar_agentes(leituras_das_fontes, agora, overrides):
     resultado = []
     nomes = set()
 
-    def adicionar(ferramenta, nome, pasta, session_id, fonte, **campos):
+    def adicionar(ferramenta, nome, pasta, session_id, fonte, publicar_pasta=True, **campos):
         override = next((v for v in (overrides or []) if pasta and
                          _pasta(v.get('pasta')) == _pasta(pasta) and
                          (not v.get('ferramenta') or v['ferramenta'] == ferramenta)), None)
@@ -39,7 +39,7 @@ def montar_agentes(leituras_das_fontes, agora, overrides):
             numero += 1
         nomes.add(nome)
         r = leitor.sem_leitura(ferramenta, None)
-        r.update(leitura='ok', estado='ocioso', nome=nome, pasta=pasta,
+        r.update(leitura='ok', estado='ocioso', nome=nome, pasta=pasta if publicar_pasta else None,
                  session_id=session_id, fonte=fonte,
                  ferramenta_nome={'claude': 'Claude Code', 'codex': 'Codex'}.get(ferramenta),
                  conta=None, grupo_cota=None, grupo_semanal=None, rotulo_semanal=None,
@@ -94,12 +94,10 @@ def montar_agentes(leituras_das_fontes, agora, overrides):
             estado = 'ocioso'
         else:
             estado = 'indeterminado'
-        preview = terminal.get('preview') or []
-        ultima = next((linha.strip() for linha in reversed(preview) if linha.strip()), 'sem tela')
         adicionar('maestri', '%s/%s' % (terminal.get('workspace') or 'Workspace', terminal.get('nome') or 'Terminal'),
-                  pasta, terminal.get('id'), 'maestri_wire',
+                  pasta, terminal.get('id'), 'maestri_wire', publicar_pasta=False,
                   ferramenta_nome='Maestri · ' + str(tipo or 'desconhecido'),
-                  estado=estado, atividade=ultima, ultima_fala=ultima, cotas={})
+                  estado=estado, atividade=None, ultima_fala=None, cotas={})
     return resultado
 
 

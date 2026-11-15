@@ -48,10 +48,11 @@ class WireTests(unittest.TestCase):
         self.assertEqual(r['tela'], 'sem tela')
         self.assertEqual(r['status'], 'running')
 
-    def test_terminal_direto_limite_e_mascara(self):
+    def test_terminal_direto_nao_devolve_linhas_da_tela(self):
         r = maestri_wire.interpretar({'preview': ['sk-' + 'a' * 40] * 12}, 'w')
-        self.assertEqual(len(r['preview']), 10)
-        self.assertNotIn('sk-' + 'a' * 40, str(r['preview']))
+        self.assertNotIn('preview', r)
+        self.assertEqual(r['tela'], 'ok')
+        self.assertNotIn('sk-' + 'a' * 40, str(r))
 
     def test_listas_e_item_direto(self):
         self.ativar()
@@ -124,7 +125,8 @@ class WireTests(unittest.TestCase):
         self.assertIs(t['rodando'], True)
         self.assertIs(t['atencao'], True)
         self.assertIs(t['descarregado'], False)
-        self.assertEqual(t['preview'], ['linha 1', 'linha 2'])
+        self.assertNotIn('preview', t)
+        self.assertNotIn('linha 1', str(t))
         self.assertEqual(t['tela'], 'ok')
         self.assertEqual(t['workspace'], 'Exemplo')
         self.assertEqual(t['pasta'], 'C:/exemplo')
@@ -164,3 +166,26 @@ class WireTests(unittest.TestCase):
         r = maestri_wire.ler(self.ctx)
         self.assertEqual(len(r['terminais']), 1)
         self.assertNotIn('sk-' + 'a' * 40, str(r))
+
+    def test_interpretar_nao_devolve_a_tela_em_nenhum_formato(self):
+        chaves = {'id', 'workspace', 'nome', 'tipo', 'status', 'atencao', 'rodando', 'descarregado', 'tela'}
+        base = {'id': 't', 'name': 'Agente', 'agentType': 'custom', 'status': 'running'}
+        lista = ['linha-sintetica-um', 'linha-sintetica-dois']
+        texto = 'linha-sintetica-um\nlinha-sintetica-dois'
+        casos = {
+            'lista': dict(base, preview=lista),
+            'texto': dict(base, preview=texto),
+            'formato novo': {'kind': 'terminal', 'terminal': dict(base, preview=lista)},
+            'formato antigo aninhado': {'type': 'terminal', 'terminal': dict(base, preview=lista)},
+            'plano': dict(base, type='terminal', preview=lista)}
+        for nome, item in casos.items():
+            with self.subTest(nome):
+                r = maestri_wire.interpretar(item, 'w')
+                self.assertNotIn('preview', r)
+                self.assertNotIn('linha-sintetica', str(r))
+                self.assertEqual(r['tela'], 'ok')
+                self.assertEqual(set(r), chaves)
+        for valor in ('ausente', None, [], ''):
+            with self.subTest('sem tela', valor=valor):
+                item = dict(base) if valor == 'ausente' else dict(base, preview=valor)
+                self.assertEqual(maestri_wire.interpretar(item, 'w')['tela'], 'sem tela')

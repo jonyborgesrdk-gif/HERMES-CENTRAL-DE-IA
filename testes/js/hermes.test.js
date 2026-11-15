@@ -947,3 +947,20 @@ test('presença no WSL que lança não impede o bloco da E16, os KPIs nem a list
   assert.doesNotMatch(txt('presence-linux'), /não foi possível desenhar/);
   assert.equal(doc.getElementById('presence-linux').hidden, false); assert.equal(txt('presence-linux-badge'), 'parada');
 });
+test('terminal do Maestri com pasta, atividade e última fala nulos desenha sem erro e a linha mostra o nome', () => {
+  const base = app();
+  silenciarErros(() => base.a.receber(clone(fixture)));
+  const antes = base.doc.getElementById('agent-rows').children.length;
+  const d = clone(fixture);
+  d.agentes.push({ nome: 'Time/Agente', ferramenta: 'maestri', ferramenta_nome: 'Maestri · custom', estado: 'trabalhando', leitura: 'ok', session_id: 't-1', fonte: 'maestri_wire', pasta: null, atividade: null, ultima_fala: null, missao: null, prs: [] });
+  const ag = Hermes.agentesDe(d).filter((x) => x.nome === 'Time/Agente')[0];
+  assert.equal(ag.atividade, ''); assert.equal(ag.ultimaFala, '');
+  const { a, doc } = app();
+  silenciarErros((erros) => {
+    assert.doesNotThrow(() => a.receber(d));
+    assert.equal(erros.length, 0);
+  });
+  const linhas = doc.getElementById('agent-rows').children;
+  assert.equal(linhas.length, antes + 1);
+  assert.ok(linhas.some((l) => nb(l.textContent).includes('Time/Agente')));
+});

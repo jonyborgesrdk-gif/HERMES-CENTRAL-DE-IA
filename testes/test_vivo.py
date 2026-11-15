@@ -167,7 +167,8 @@ class MontagemTests(unittest.TestCase):
     def test_wire_preview_e_prioridades(self):
         r = leituras()
         t = r['maestri_wire']['terminais'][0]
-        self.assertEqual(montar_agentes(r, 100000, [])[-1]['atividade'], 'atividade')
+        a = montar_agentes(r, 100000, [])[-1]
+        self.assertEqual((a['atividade'], a['ultima_fala'], a['pasta']), (None, None, None))
         t['atencao'] = True
         self.assertEqual(montar_agentes(r, 100000, [])[-1]['estado'], 'esperando')
         t['descarregado'] = True
@@ -177,7 +178,56 @@ class MontagemTests(unittest.TestCase):
         r = leituras()
         r['maestri_wire']['terminais'][0]['preview'] = []
         a = montar_agentes(r, 100000, [])[-1]
-        self.assertEqual((a['estado'], a['atividade']), ('trabalhando', 'sem tela'))
+        self.assertEqual((a['estado'], a['atividade']), ('trabalhando', None))
+
+    def _terminal_sintetico(self):
+        r = leituras()
+        r['maestri_wire']['terminais'][0].update(workingDirectory='C:/pasta-sintetica-xyz',
+            pasta='C:/pasta-sintetica-xyz', preview=['linha-sintetica-um', 'linha-sintetica-dois'])
+        return r
+
+    def test_maestri_publica_so_nome_tipo_e_estado(self):
+        a = montar_agentes(self._terminal_sintetico(), 100000, [])[-1]
+        self.assertEqual((a['nome'], a['ferramenta_nome'], a['estado'], a['fonte']),
+                         ('Time/Agente', 'Maestri · custom', 'trabalhando', 'maestri_wire'))
+        self.assertIsNone(a['pasta'])
+        self.assertIsNone(a['atividade'])
+        self.assertIsNone(a['ultima_fala'])
+        self.assertNotIn('sintetica', json.dumps(a))
+
+    def test_maestri_override_por_pasta_sem_publicar_a_pasta(self):
+        overrides = [{'pasta': 'C:/pasta-sintetica-xyz', 'ferramenta': 'maestri', 'esforco': 'alto'}]
+        a = montar_agentes(self._terminal_sintetico(), 100000, overrides)[-1]
+        self.assertEqual(a['esforco'], 'alto')
+        self.assertIsNone(a['pasta'])
+
+    def test_claude_e_codex_continuam_publicando_pasta(self):
+        r = leituras()
+        agentes = montar_agentes(r, 100000, [])
+        claude = next(a for a in agentes if a['fonte'] == 'eventos_hooks')
+        codex = next(a for a in agentes if a['fonte'] == 'sessoes_codex')
+        self.assertEqual(claude['pasta'], r['eventos_hooks']['sessoes'][0]['cwd'])
+        self.assertEqual(codex['pasta'], r['sessoes_codex']['sessoes'][0]['pasta'])
+
+    def test_fonte_wire_real_http_falso_nao_publica_pasta_nem_tela(self):
+        from lib.fontes import maestri_wire
+        with tempfile.TemporaryDirectory() as pasta:
+            (Path(pasta) / 'wire.conf').write_text('WIRE_TOKEN=token-sintetico', encoding='utf-8')
+            def http(url, **kwargs):
+                if url.endswith('/workspaces'):
+                    return {'workspaces': [{'id': 'w', 'name': 'Time'}]}
+                if url.endswith('/settings'):
+                    return {'workingDirectory': 'C:/pasta-sintetica-xyz'}
+                return {'items': [{'kind': 'terminal', 'terminal': {'id': 't', 'name': 'Agente',
+                    'agentType': 'custom', 'status': 'running', 'isRunning': True,
+                    'preview': ['linha-sintetica-um', 'linha-sintetica-dois']}}]}
+            r = leituras()
+            r['maestri_wire'] = maestri_wire.ler({'dir': pasta, 'agora': 100000, 'http_get': http})
+            self.assertEqual(r['maestri_wire']['terminais'][0]['pasta'], 'C:/pasta-sintetica-xyz')
+            self.assertNotIn('linha-sintetica', json.dumps(r['maestri_wire']))
+            montado = json.dumps(montar_agentes(r, 100000, []))
+            self.assertNotIn('linha-sintetica', montado)
+            self.assertNotIn('pasta-sintetica', montado)
 
     def test_ausencia_e_mascaramento(self):
         r = leituras()
@@ -230,6 +280,18 @@ class PassadaTests(unittest.TestCase):
         self.assertEqual(dados['processos'], {'codex.exe': 2})
         self.assertIsInstance(dados['servicos'], list)
         self.assertTrue(all(f['ok'] for f in dados['fontes'].values()))
+
+    def test_arquivos_gravados_nao_levam_pasta_nem_tela_do_maestri(self):
+        self.r['maestri_wire']['terminais'][0].update(workingDirectory='C:/pasta-sintetica-xyz',
+            pasta='C:/pasta-sintetica-xyz', preview=['linha-sintetica-um', 'linha-sintetica-dois'])
+        dados = self.passada()
+        for nome in ('dados.json', 'dados.js'):
+            texto = (self.pasta / nome).read_text(encoding='utf-8')
+            self.assertNotIn('pasta-sintetica', texto)
+            self.assertNotIn('linha-sintetica', texto)
+        a = next(x for x in dados['agentes'] if x['fonte'] == 'maestri_wire')
+        self.assertEqual((a['nome'], a['ferramenta_nome'], a['estado']),
+                         ('Time/Agente', 'Maestri · custom', 'trabalhando'))
 
     def test_html_chaves_em_escopos_reais(self):
         dados = self.passada()
