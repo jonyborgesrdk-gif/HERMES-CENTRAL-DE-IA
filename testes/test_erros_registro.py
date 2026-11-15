@@ -885,6 +885,55 @@ class ErrosRegistroTests(unittest.TestCase):
             reg.registrar_corrigido(self.dados, ida, None, T + 220)
         self.assertFalse(trava.exists())
 
+    def test_64_trava_acesso_negado_passageiro(self):
+        ida, idb, idc = self.tres_abertos()
+        trava = self.dados / reg.ARQ_TRAVA
+        abrir_real = os.open
+
+        def fazer(decidir):
+            chamadas = [0]
+
+            def substituto(caminho, *args, **kwargs):
+                if os.path.basename(os.fspath(caminho)) != reg.ARQ_TRAVA:
+                    return abrir_real(caminho, *args, **kwargs)
+                chamadas[0] += 1
+                erro = decidir(chamadas[0])
+                if erro is not None:
+                    raise erro
+                return abrir_real(caminho, *args, **kwargs)
+            return chamadas, substituto
+
+        negado = PermissionError(13, "Permission denied")
+        existe = FileExistsError(17, "File exists")
+
+        with self.subTest("passageiro"):
+            chamadas, subst = fazer(lambda n: negado if n <= 3 else None)
+            with patch.object(reg.os, "open", subst):
+                reg.registrar_corrigido(self.dados, ida, None, T + 200)
+            self.assertIn(ida, self.registro_disco()["registros"])
+            self.assertFalse(trava.exists())
+            self.assertEqual(chamadas[0], 4)
+
+        with self.subTest("permanente"):
+            chamadas, subst = fazer(lambda n: negado)
+            with patch.object(reg.os, "open", subst), patch.object(reg, "ESPERA_TRAVA_S", 0.2):
+                inicio = time.monotonic()
+                with self.assertRaises(reg.ErroEstado) as erro:
+                    reg.registrar_corrigido(self.dados, idb, None, T + 210)
+                self.assertLess(time.monotonic() - inicio, 3)
+            self.assertEqual(str(erro.exception), "não foi possível gravar o estado")
+            self.assertNotIn(idb, self.registro_disco()["registros"])
+            self.assertEqual(list(self.dados.glob("*.tmp")), [])
+            self.assertGreaterEqual(chamadas[0], 2)
+
+        with self.subTest("negado e depois ocupado"):
+            chamadas, subst = fazer(lambda n: negado if n == 1 else existe)
+            self.assertFalse(trava.exists())
+            with patch.object(reg.os, "open", subst), patch.object(reg, "ESPERA_TRAVA_S", 0.2):
+                with self.assertRaises(reg.ErroEstado) as erro:
+                    reg.registrar_corrigido(self.dados, idc, None, T + 220)
+            self.assertEqual(str(erro.exception), "registro ocupado; tente de novo")
+
     def test_38_registro_vencido_removido_com_evidencia(self):
         self.escrever(self.arq, {"type": "system"})
         self.marcar()
