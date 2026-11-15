@@ -340,7 +340,7 @@ test('contrato: a página só lê, na raiz do dados.json, campos que o coletor p
   a.abrirModal({ tipo: 'agente', chave: 'sess-1' }); a.abrirModal({ tipo: 'agente', chave: 'sess-2' }); a.abrirModal({ tipo: 'servico', chave: 'whatsapp' }); a.abrirModal({ tipo: 'conta', chave: 'claude:abc' });
   const fora = [...lidos].filter((k) => !(k in fixture) && k !== 'toJSON');
   assert.deepEqual(fora, []);
-  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'presenca_linux', 'vigilante2', 'erros_agentes', 'sessoes_grok', 'sessoes_hermes', 'chat_cursor', 'cota_codex_local', 'cota_grok_bot', 'cota_cursor', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
+  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'presenca_linux', 'vigilante2', 'erros_agentes', 'sessoes_grok', 'sessoes_hermes', 'chat_cursor', 'rede_uso', 'cota_codex_local', 'cota_grok_bot', 'cota_cursor', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
 });
 
 /* ---------- segurança e privacidade ---------- */
@@ -1714,4 +1714,158 @@ test('outros agentes que lançam não derrubam a lista de agentes nem o bloco de
   });
   silenciarErros(() => a.receber(clone(fixture)));
   assert.equal(linhasExtra(doc).length, 3);
+});
+
+/* ---------- E22: rede por programa ---------- */
+const semRede = () => { const d = clone(fixture); delete d.rede_uso; delete d.fontes.rede_uso; return d; };
+const comRede = (mudancas) => { const d = clone(fixture); Object.assign(d.rede_uso, mudancas); return d; };
+const linhasRede = (doc) => doc.getElementById('network-rows').children;
+const parRede = (p) => ({ local: [0, 0], privada: [0, 0], tailnet: [0, 0], internet: [0, 0], ...p });
+const progRede = (produto, extra = {}) => ({ produto, rotulo: 'Programa ' + produto, familia: 'claude', tipo: 'cli', conexoes: 1, janela: parRede({ internet: [10, 10] }), total: parRede({}), ...extra });
+const REDE_VAZIA = { estado: null, itens: [], cpu: null, eventos: null, perdidos: 0, retoma: null, sinal: null, motivo: null, noTeto: false };
+test('fmtBytes: zero, negativo, NaN e texto dão "0 B"; base 1.000 com uma casa e vírgula decimal até TB', () => {
+  [0, -1, NaN, '1500', undefined, null, Infinity, true].forEach((v) => assert.equal(Hermes.fmtBytes(v), '0 B', 'valor ' + String(v)));
+  assert.equal(Hermes.fmtBytes(999), '999 B'); assert.equal(Hermes.fmtBytes(1000), '1 kB'); assert.equal(Hermes.fmtBytes(1500), '1,5 kB');
+  assert.equal(Hermes.fmtBytes(28000000), '28 MB'); assert.equal(Hermes.fmtBytes(2000000000), '2 GB'); assert.equal(Hermes.fmtBytes(3500000000000), '3,5 TB');
+});
+test('redeDe: ausente, null, lista, desligado e estado desconhecido dão estado null sem itens; a fixture dá 3 itens na ordem de bytes, com outros por último', () => {
+  [semRede(), { rede_uso: null }, { rede_uso: [] }, { rede_uso: 'ativo' }, comRede({ estado: 'desligado' }), comRede({ estado: 'serrote' }), comRede({ estado: '__proto__' }), undefined, null]
+    .forEach((d, i) => assert.deepStrictEqual(Hermes.redeDe(d), REDE_VAZIA, 'caso ' + i));
+  const r = Hermes.redeDe(clone(fixture));
+  assert.deepStrictEqual({ ...r, itens: null }, { estado: 'ativo', itens: null, cpu: 0.4, eventos: 1236, perdidos: 0, retoma: null, sinal: null, motivo: null, noTeto: false });
+  assert.deepStrictEqual(r.itens, [
+    { id: 'claude_cli', rotulo: 'Claude Code CLI', familia: 'claude', conexoes: 3, enviados: 1500000, recebidos: 28000000, destinos: [{ cat: 'internet', bytes: 29500000 }] },
+    { id: 'grok_cli', rotulo: 'Grok CLI', familia: 'grok', conexoes: 1, enviados: 302000, recebidos: 500, destinos: [{ cat: 'tailnet', bytes: 300000 }, { cat: 'local', bytes: 2500 }] },
+    { id: 'outros', rotulo: 'Outros programas', familia: 'outra', conexoes: 42, enviados: 1205000, recebidos: 5000000,
+      destinos: [{ cat: 'internet', bytes: 4200000 }, { cat: 'local', bytes: 2000000 }, { cat: 'privada', bytes: 5000 }] }
+  ]);
+});
+test('redeDe: produto, rótulo, família, par, conexões e motivo fora do formato; 40 programas no máximo; outros zerado não entra; ordem por bytes com empate pelo arquivo', () => {
+  const de = (programas, extra = {}) => Hermes.redeDe(comRede({ programas, outros: { conexoes: 0, janela: parRede({}) }, ...extra }));
+  const ids = (r) => r.itens.map((x) => x.id);
+  const r1 = de([null, [], 'texto', progRede('a b'), progRede('<img>'), progRede('Maiusculo'), progRede(''), progRede('x'.repeat(41)), progRede(7), progRede('outros'),
+                 progRede('ok_1'), progRede('ok_1', { rotulo: 'repetido' }), progRede('__proto__'), progRede('__proto__', { rotulo: 'repetido' }), progRede('y'.repeat(40))]);
+  assert.deepEqual(ids(r1), ['ok_1', '__proto__', 'y'.repeat(40)]);
+  assert.deepEqual(r1.itens.map((x) => x.rotulo), ['Programa ok_1', 'Programa __proto__', 'Programa ' + 'y'.repeat(40)]);
+  assert.deepEqual(ids(de([progRede('r0', { rotulo: '' }), progRede('r1', { rotulo: 'x'.repeat(61) }), progRede('r2', { rotulo: 42 }), progRede('r3', { rotulo: 'x'.repeat(60) })])), ['r3']);
+  ['serrote', '__proto__', null, 3, 'Claude'].forEach((f) => assert.equal(de([progRede('p', { familia: f })]).itens[0].familia, 'outra', 'familia ' + String(f)));
+  assert.equal(de([progRede('p', { familia: 'maestri' })]).itens[0].familia, 'maestri');
+  const ruins = de([progRede('p', { janela: { local: [1, 2, 3], privada: [-1, 5], tailnet: ['7', 7], internet: [1.5, 2] } }),
+                    progRede('q', { janela: { local: [true, 1], privada: [NaN, 1], tailnet: { 0: 1, 1: 2 }, internet: [100, 0] } }), progRede('z', { janela: [[1, 1]] })]).itens;
+  assert.deepEqual(ruins.map((x) => [x.id, x.enviados, x.recebidos, x.destinos]), [['q', 100, 0, [{ cat: 'internet', bytes: 100 }]], ['p', 0, 0, []], ['z', 0, 0, []]]);
+  [-1, 1.5, '3', true, null].forEach((c) => assert.equal(de([progRede('p', { conexoes: c })]).itens[0].conexoes, 0, 'conexoes ' + String(c)));
+  assert.equal(de([progRede('p', { conexoes: 5 })]).itens[0].conexoes, 5);
+  const iguais = de([progRede('p', { janela: { local: [1, 0], privada: [0, 1], tailnet: [1, 0], internet: [0, 1] } })]).itens[0];
+  assert.deepEqual(iguais.destinos.map((x) => x.cat), ['local', 'privada', 'tailnet', 'internet']);
+  ['sem_elevacao', '__proto__', 42, null].forEach((mo) => assert.equal(de([], { estado: 'erro_captura', motivo: mo }).motivo, 'outro', 'motivo ' + String(mo)));
+  assert.equal(de([], { estado: 'erro_captura' }).motivo, 'outro');
+  ['sessao', 'provedor', 'consumidor', 'outro'].forEach((mo) => assert.equal(de([], { estado: 'erro_captura', motivo: mo }).motivo, mo));
+  const p45 = Array.from({ length: 45 }, (_, i) => progRede('p' + i, { janela: parRede({ internet: [i, 0] }) }));
+  assert.deepEqual(ids(de(p45)), Array.from({ length: 40 }, (_, i) => 'p' + (44 - i)));
+  assert.deepEqual(ids(de([progRede('a')])), ['a']);
+  assert.deepEqual(ids(de([progRede('a')], { outros: { conexoes: 2, janela: parRede({}) } })), ['a', 'outros']);
+  assert.deepEqual(ids(de([progRede('a')], { outros: { conexoes: 0, janela: parRede({ local: [0, 1] }) } })), ['a', 'outros']);
+  [null, [], 'x', { conexoes: -3, janela: parRede({ local: [-1, 1] }) }].forEach((o) => assert.deepEqual(ids(de([progRede('a')], { outros: o })), ['a'], 'outros ' + JSON.stringify(o)));
+  assert.deepEqual(ids(de([progRede('b1', { janela: parRede({ local: [5, 0] }) }), progRede('a2', { janela: parRede({ internet: [0, 9] }) }),
+                           progRede('c3', { janela: parRede({ tailnet: [2, 3] }) }), progRede('d4', { janela: parRede({ privada: [9, 0] }) })])), ['a2', 'd4', 'b1', 'c3']);
+});
+test('rede: com a fixture o bloco aparece logo depois do de outros agentes, com selo, 3 linhas e a nota, e o resto da seção de agentes não muda', () => {
+  assert.ok(html.includes('<div class="presence" id="network" role="group" aria-label="Uso de rede por programa" hidden>'));
+  const sem = app(); sem.a.receber(semRede());
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  const bloco = doc.getElementById('network'), agentes = doc.getElementById('agents');
+  assert.equal(bloco.parentNode, agentes);
+  assert.equal(agentes.children[agentes.children.indexOf(bloco) - 1], doc.getElementById('extra-agents'));
+  assert.equal(bloco.hidden, false);
+  assert.equal(txt('network-badge'), 'ativa');
+  assert.deepEqual(linhasRede(doc).map(lerLinhaErro), [
+    { rotulo: 'Claude Code CLI', detalhe: '3 conexões', cls: 'status good', estado: '↑ ' + Hermes.fmtBytes(1500000) + ' · ↓ ' + Hermes.fmtBytes(28000000), sub: 'internet ' + Hermes.fmtBytes(29500000) },
+    { rotulo: 'Grok CLI', detalhe: '1 conexão', cls: 'status good', estado: '↑ ' + Hermes.fmtBytes(302000) + ' · ↓ ' + Hermes.fmtBytes(500), sub: 'tailnet ' + Hermes.fmtBytes(300000) + ' · local ' + Hermes.fmtBytes(2500) },
+    { rotulo: 'Outros programas', detalhe: '42 conexões', cls: 'status good', estado: '↑ ' + Hermes.fmtBytes(1205000) + ' · ↓ ' + Hermes.fmtBytes(5000000),
+      sub: 'internet ' + Hermes.fmtBytes(4200000) + ' · local ' + Hermes.fmtBytes(2000000) + ' · rede privada ' + Hermes.fmtBytes(5000) }
+  ]);
+  assert.equal(txt('network-nota'), nb('Captura ativa · 0,4% de um núcleo · ' + (1236).toLocaleString('pt-BR') + ' eventos por segundo'));
+  ['agent-rows', 'presence', 'presence-linux', 'errors', 'errors-rows', 'extra-agents', 'extra-agents-rows', 'k-trab', 'k-total', 'k-online-texto', 'nav-agentes'].forEach((id) => {
+    assert.equal(txt(id), sem.txt(id), 'texto mudou: ' + id);
+    assert.equal(doc.getElementById(id).hidden, sem.doc.getElementById(id).hidden, 'visibilidade mudou: ' + id);
+  });
+});
+test('rede: pausado por carga, parado, encerrado e erro de captura mostram selo e nota próprios; só a pausa mantém as linhas', () => {
+  const ver = (mud, selo, nota, linhas, caso) => {
+    const { a, doc, txt } = app(); a.receber(comRede(mud));
+    assert.equal(doc.getElementById('network').hidden, false, 'oculto: ' + caso);
+    assert.equal(txt('network-badge'), selo, 'selo: ' + caso); assert.equal(txt('network-nota'), nb(nota), 'nota: ' + caso);
+    assert.equal(linhasRede(doc).length, linhas, 'linhas: ' + caso);
+  };
+  ver({ estado: 'pausado_carga', retoma_em_epoch: T0 + 70 }, 'pausada por carga', 'Captura pausada por carga; nova tentativa em ' + Hermes.duracao(60), 3, 'pausa');
+  ver({ estado: 'pausado_carga', retoma_em_epoch: T0 + 5 }, 'pausada por carga', 'Captura pausada por carga', 3, 'pausa vencida');
+  ver({ estado: 'pausado_carga', retoma_em_epoch: 'amanhã' }, 'pausada por carga', 'Captura pausada por carga', 3, 'pausa sem retoma válido');
+  ver({ estado: 'parado', ultimo_sinal_epoch: T0 - 110 }, 'parada', 'Captura sem sinal há ' + Hermes.duracao(120), 0, 'parado');
+  ver({ estado: 'encerrado' }, 'encerrada', 'Captura encerrada', 0, 'encerrado');
+  ['sessao', 'provedor', 'consumidor'].forEach((mo) => ver({ estado: 'erro_captura', motivo: mo }, 'erro', 'Não foi possível abrir a sessão de captura', 0, mo));
+  [{ motivo: 'sem_elevacao' }, { motivo: 'outro' }, { motivo: '__proto__' }, {}, { motivo: 42 }, { motivo: null }]
+    .forEach((mo) => ver({ estado: 'erro_captura', ...mo }, 'erro', 'A captura parou com erro', 0, 'motivo ' + JSON.stringify(mo)));
+});
+test('rede: sem a chave, desligado e a chave como lista deixam o bloco oculto, sem linhas, selo e nota, num app novo e depois da fixture', () => {
+  const ver = ({ doc, txt }, caso) => {
+    assert.equal(doc.getElementById('network').hidden, true, 'visível: ' + caso); assert.equal(linhasRede(doc).length, 0, 'linhas: ' + caso);
+    assert.equal(txt('network-badge'), '', 'selo: ' + caso); assert.equal(txt('network-nota'), '', 'nota: ' + caso);
+  };
+  [semRede(), Object.assign(clone(fixture), { rede_uso: { estado: 'desligado' } }), Object.assign(clone(fixture), { rede_uso: [clone(fixture.rede_uso)] })].forEach((d, i) => {
+    const novo = app(); novo.a.receber(clone(d)); ver(novo, 'app novo, caso ' + i);
+    const depois = app(); depois.a.receber(clone(fixture)); depois.a.receber(clone(d)); ver(depois, 'depois da fixture, caso ' + i);
+  });
+});
+test('rede: programa sem tráfego fica ocioso; rótulo hostil vira texto literal sem criar elemento; eventos perdidos e teto entram na nota', () => {
+  const H = '<img src=x onerror=alert(1)>';
+  const d = clone(fixture);
+  d.rede_uso.programas = [progRede('quieto', { rotulo: 'Programa quieto', conexoes: 0, janela: parRede({}) }), progRede('hostil', { rotulo: H, familia: H, janela: parRede({ internet: [10, 0] }) })];
+  d.rede_uso.perdidos = 7; d.rede_uso.conexoes_no_teto = true;
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => { a.receber(d); assert.equal(erros.length, 0, 'alguma seção falhou com o valor hostil'); });
+  const bloco = doc.getElementById('network'), linhas = linhasRede(doc).map(lerLinhaErro);
+  assert.equal(linhas.length, 3);
+  assert.deepEqual(linhas[0], { rotulo: H, detalhe: '1 conexão', cls: 'status good', estado: '↑ 10 B · ↓ 0 B', sub: 'internet 10 B' });
+  assert.deepEqual(linhas[1], { rotulo: 'Programa quieto', detalhe: '0 conexões', cls: 'status idle', estado: '↑ 0 B · ↓ 0 B', sub: 'sem tráfego no último minuto' });
+  assert.equal(linhas[2].rotulo, 'Outros programas');
+  assert.equal(bloco.descendentes().filter((e) => e.tag === 'img').length, 0);
+  bloco.descendentes().forEach((e) => Object.values(e.attrs).forEach((v) => assert.ok(!/onerror|<img|alert/.test(v), 'texto hostil em atributo')));
+  assert.ok(txt('network-nota').endsWith(' · 7 eventos perdidos · contagem de conexões no teto'), txt('network-nota'));
+  [1, 'true', 'sim', {}, []].forEach((valor) => {
+    const dv = clone(fixture); dv.rede_uso.conexoes_no_teto = valor;
+    assert.equal(Hermes.redeDe(dv).noTeto, false, 'noTeto aceitou ' + JSON.stringify(valor));
+    const ap = app(); ap.a.receber(dv);
+    assert.ok(!ap.txt('network-nota').includes('teto'), 'nota com teto para ' + JSON.stringify(valor));
+  });
+});
+test('rede: atualização ao vivo tira a linha que saiu e reaproveita o mesmo elemento do programa que mudou', () => {
+  const { a, doc } = app(); a.receber(clone(fixture));
+  const antes = linhasRede(doc)[0], estadoAntes = lerLinhaErro(antes).estado;
+  assert.equal(lerLinhaErro(antes).rotulo, 'Claude Code CLI');
+  const d = clone(fixture);
+  d.rede_uso.programas = d.rede_uso.programas.filter((p) => p.produto !== 'grok_cli');
+  d.rede_uso.programas[0].janela.internet = [4000, 9000000];
+  a.receber(d);
+  const linhas = linhasRede(doc);
+  assert.equal(linhas.length, 2);
+  assert.equal(linhas[0], antes);
+  assert.deepEqual(linhas.map((tr) => lerLinhaErro(tr).rotulo), ['Claude Code CLI', 'Outros programas']);
+  assert.notEqual(lerLinhaErro(antes).estado, estadoAntes);
+  assert.equal(lerLinhaErro(antes).estado, '↑ ' + Hermes.fmtBytes(4000) + ' · ↓ ' + Hermes.fmtBytes(9000000));
+});
+test('rede que lança não derruba a lista de agentes, o bloco de erros nem o de outros agentes; a leitura boa seguinte desenha as 3 linhas', () => {
+  const base = app(); base.a.receber(clone(fixture));
+  const d = clone(fixture);
+  Object.defineProperty(d.rede_uso, 'programas', { enumerable: true, get() { throw new Error('boom rede'); } });
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => {
+    assert.doesNotThrow(() => a.receber(d));
+    assert.equal(erros.length, 1); assert.match(String(erros[0][0]), /de rede/); assert.match(String(erros[0][1]), /boom rede/);
+  });
+  ['agent-rows', 'errors', 'extra-agents'].forEach((id) => {
+    assert.equal(txt(id), base.txt(id), 'texto mudou: ' + id);
+    assert.equal(doc.getElementById(id).hidden, base.doc.getElementById(id).hidden, 'visibilidade mudou: ' + id);
+  });
+  silenciarErros(() => a.receber(clone(fixture)));
+  assert.equal(linhasRede(doc).length, 3);
 });

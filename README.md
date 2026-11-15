@@ -135,6 +135,7 @@ inventa número.
 | `PAINEL_VIGILANTE` | `1` liga o bloco do Vigilante 2 (opt-in, desligado por padrão): o painel lê só `%LOCALAPPDATA%\vigilante2\ultimo.json` e mostra, na seção Saúde dos serviços, contagens, alertas ativos por tipo e se o Vigilante 2 está parado (sem atualização há mais de 3 min). Qualquer outro valor mantém a saída antiga. |
 | `PAINEL_ERROS` | `1` liga a captura de erros de ferramenta dos agentes (opt-in, desligada por padrão): o painel lê só os transcripts do Claude Code (`~/.claude/projects`) e as sessões do Codex (`~/.codex/sessions`), sem rede e sem subprocesso, e publica só categoria, ferramenta, estado, código de saída e contagens; nenhum texto de erro sai da máquina nem é copiado. A primeira passada só marca a posição de cada arquivo: nada anterior a ela é capturado. Qualquer outro valor mantém a saída antiga. Para ver, corrigir e verificar cada erro, veja a seção "Erros de ferramenta: ver, corrigir e verificar". |
 | `PAINEL_AGENTES_EXTRA` | `1` liga as sessões de outros agentes (opt-in, desligada por padrão): sessões vivas do Grok CLI (`~/.grok`), sessões do Hermes abertas com atividade nos últimos 15 minutos (`state.db`, só leitura) e a data do último chat do cursor-agent (`~/.cursor/chats`). Publica só estado, modelo, contagens de tokens, categoria da última ferramenta e horários; nenhum título, resumo, pasta, prompt ou identificador de sessão. Sem rede e sem subprocesso. Qualquer outro valor mantém a saída de antes. |
+| `PAINEL_REDE` | `1` liga a leitura do resumo de rede (opt-in, desligada por padrão). O coletor só lê `rede-resumo.json`; quem captura é o comando `painel-rede capturar`, iniciado à parte num terminal de administrador (veja "Uso de rede por programa"). Saem só bytes e conexões por programa da tabela fixa e por categoria de destino (local, rede privada, tailnet, internet); nenhum endereço, porta, PID ou nome de processo é gravado. Qualquer outro valor mantém a saída de antes. |
 
 O GitHub é consultado pelo `gh` já logado na sua máquina; o painel não guarda token nenhum.
 
@@ -167,6 +168,21 @@ Com `PAINEL_ERROS=1` no coletor, cada erro de ferramenta do Claude Code e do Cod
 ```
 
 `ver` mostra o texto só no terminal de quem roda (se for outro agente, o texto passa para o transcript dele); `listar` e `ver` não gravam nada. Os arquivos ficam no diretório de dados do painel (`PAINEL_IAS_DIR`, ou `%LOCALAPPDATA%\painel-ias`), que o servidor não serve: `erros-ocorrencias.json` (gravado só pelo coletor; guarda, de cada erro, a classe, a ferramenta, o código, a hora e o ponteiro para o transcript (caminho do arquivo, posição e chave da chamada); nenhum texto do erro nem do comando (o caminho do transcript do Claude Code traz o nome da pasta do projeto)), `erros-registro.json` e a pasta `erros-evidencias/` (gravados só pelo `painel-erro`). Para zerar, pare o coletor e apague esses três; a passada seguinte recomeça só marcando a posição atual, sem capturar o que veio antes.
+
+## Uso de rede por programa
+
+Com `PAINEL_REDE=1` a seção de agentes ganha o bloco "Rede · por programa · último minuto": bytes enviados e recebidos e conexões de cada programa da tabela fixa, por categoria de destino (local, rede privada, tailnet, internet). O coletor só lê o arquivo `rede-resumo.json`; quem captura é o comando `painel-rede`, num processo à parte.
+
+- **Iniciar:** num terminal de administrador, na pasta do painel, `py -3.14 -I -B painel-rede capturar`. De preferência chame o `python.exe` do Python 3.14 pelo caminho completo, com os mesmos argumentos (`-I -B painel-rede capturar`), porque o lançador `py` consulta configuração gravável sem privilégio. Sem elevação o comando recusa, não grava nada e não tenta se elevar.
+- **Parar:** Ctrl+C no terminal da captura, ou `painel-rede parar` em outro terminal de administrador.
+- **Ver o estado:** `painel-rede estado` (mostra só o que a fonte do painel validou).
+- **Teto de carga:** a captura mede a própria CPU a cada 2 s; se a média passar de 5% de um núcleo, ela fecha a sessão e pausa, com esperas de 60, 120, 300 e 600 s (fica em 600) antes de tentar de novo.
+- **O que fica onde:** PID, endereço e porta ficam só na memória do processo de captura. O arquivo `rede-resumo.json` (no diretório de dados, até 16 KiB, regravado a cada 4 s) tem só números, o produto da tabela fixa e valores de lista fixa; o que não está na tabela é somado em "Outros programas", sem nome.
+- **Sessão ETW:** a captura usa a sessão `painel-ias-rede`. Uma sessão órfã (de uma captura encerrada à força) é limpa na próxima captura, pelo `painel-rede parar` ou no reinício do Windows.
+- **Diretório de dados:** precisa existir antes (o coletor ou o servidor o criam) e não pode ser junção nem link; a captura não cria pasta.
+- **Outra conta:** num terminal de administrador de OUTRA conta, aponte `PAINEL_IAS_DIR` para a pasta que o coletor lê; nesse caso os programas instalados no perfil do dono aparecem em "Outros programas".
+
+O painel não cria tarefa agendada nem serviço; iniciar a captura junto com o Windows é uma mudança permanente no sistema e fica por conta do dono.
 
 ## Solução de problemas
 
