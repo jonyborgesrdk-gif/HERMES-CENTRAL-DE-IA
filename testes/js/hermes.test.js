@@ -252,7 +252,7 @@ test('render: KPIs, tabela, limites, gastos, pendências e serviços mostram os 
   assert.equal(txt('tab-todos'), '3'); assert.equal(txt('tab-ativos'), '2'); assert.equal(txt('tab-ociosos'), '1');
   const lim = txt('providers');
   assert.match(lim, /Claude.*Code.*Pro/); assert.match(lim, /Janela de 5 horas.*40%.*reinicia (hoje|amanhã) às \d\dh\d\d \(em 3 h 09 min\)/);
-  assert.match(lim, /Limite semanal.*70%.*reinicia 31\/10 às 20h00/); assert.match(lim, /Codex.*SEM DADOS.*Conta ainda não identificada/);
+  assert.match(lim, /Limite semanal.*70%.*reinicia 31\/10 às 20h00/); assert.doesNotMatch(lim, /Codex/); assert.match(txt('limits-local-cards'), /Codex.*observado localmente.*OBSERVADO/);
   assert.equal(txt('cost-total'), 'R$101,75'); assert.match(txt('cost-tokens'), /US\$ 18,50 · 55,8 mil tokens/);
   assert.equal(doc.getElementById('chart').children.length, 3);
   assert.equal(doc.getElementById('chart').children[1].children.length, 7);
@@ -340,7 +340,7 @@ test('contrato: a página só lê, na raiz do dados.json, campos que o coletor p
   a.abrirModal({ tipo: 'agente', chave: 'sess-1' }); a.abrirModal({ tipo: 'agente', chave: 'sess-2' }); a.abrirModal({ tipo: 'servico', chave: 'whatsapp' }); a.abrirModal({ tipo: 'conta', chave: 'claude:abc' });
   const fora = [...lidos].filter((k) => !(k in fixture) && k !== 'toJSON');
   assert.deepEqual(fora, []);
-  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'presenca_linux', 'cota_codex_local', 'cota_grok_bot', 'cota_cursor', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
+  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'presenca_linux', 'vigilante2', 'cota_codex_local', 'cota_grok_bot', 'cota_cursor', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
 });
 
 /* ---------- segurança e privacidade ---------- */
@@ -1061,7 +1061,7 @@ test('terminal do Maestri com pasta, atividade e última fala nulos desenha sem 
   assert.ok(linhas.some((l) => nb(l.textContent).includes('Time/Agente')));
 });
 
-/* ---------- E19: uso observado em arquivos locais (bloco próprio na seção Limites de uso; #providers não muda) ---------- */
+/* ---------- E19: uso observado em arquivos locais (bloco próprio na seção Limites de uso; #providers não muda; desde a E19b, com o Codex num cartão só) ---------- */
 const CHAVES_LOCAIS = ['cota_codex_local', 'cota_grok_bot', 'cota_cursor'];
 const semCotasLocais = () => { const d = clone(fixture); CHAVES_LOCAIS.forEach((k) => { delete d[k]; delete d.fontes[k]; }); return d; };
 const erroNasTres = () => Object.assign(semCotasLocais(), { cota_codex_local: { estado: 'erro' }, cota_grok_bot: { estado: 'erro' }, cota_cursor: { estado: 'erro' } });
@@ -1103,7 +1103,7 @@ test('cotasLocaisDe: sem as chaves = []; erro fica fora; ordem fixa; barras vali
   assert.equal(limite.plano, 'p'.repeat(24)); assert.equal(limite.assinatura, 'outra');
   assert.equal(Hermes.cotasLocaisDe({ cota_codex_local: { estado: 'ok', plano: 'pro', barras: [] } })[0].plano, '');
 });
-test('limites locais: render com a fixture mostra o bloco depois de #providers com 3 cartões, selos, barras e rodapés; #providers igual a sem as chaves', () => {
+test('limites locais: render com a fixture mostra o bloco depois de #providers com 3 cartões, selos, barras e rodapés; em #providers só sai a conta do Codex sem dados', () => {
   assert.match(html, /<div class="providers" id="providers"><\/div>\s*<div class="presence" id="limits-local" role="group" aria-label="Uso observado em arquivos locais" hidden><div class="presence-head"><span>Observado em arquivos locais<\/span><span class="badge" id="limits-local-badge"><\/span><\/div><div class="providers" id="limits-local-cards"><\/div><\/div>\s*<\/section>/);
   const antes = app(); antes.a.receber(semCotasLocais());
   const { a, doc, txt } = app(); a.receber(clone(fixture));
@@ -1134,8 +1134,9 @@ test('limites locais: render com a fixture mostra o bloco depois de #providers c
   assert.deepEqual(textosDe(cursor, 'missing'), ['Sem dados de cota: o Cursor não guarda a cota em arquivo local.']);
   assert.deepEqual(textosDe(cursor, 'usage-sub'), ['assinatura: ativa']);
   assert.equal(porClasse(cursor, 'usage-row').length, 0);
-  assert.equal(txt('providers'), antes.txt('providers'));
-  assert.equal(prov.children.length, antes.doc.getElementById('providers').children.length);
+  assert.equal(prov.children.length, antes.doc.getElementById('providers').children.length - 1);
+  assert.doesNotMatch(txt('providers'), /Codex/); assert.match(antes.txt('providers'), /Codex.*SEM DADOS.*Conta ainda não identificada/);
+  assert.match(txt('providers'), /Claude.*Code.*Pro/);
   assert.equal(antes.doc.getElementById('limits-local').hidden, true); assert.equal(cartoesLocais(antes.doc).length, 0);
 });
 test('limites locais: sem as chaves, com erro nas três ou sem leitura, o bloco fica oculto e sem cartões', () => {
@@ -1150,8 +1151,9 @@ test('limites locais: sem as chaves, com erro nas três ou sem leitura, o bloco 
   a.receber(Object.assign(clone(fixture), { cota_codex_local: { estado: 'erro' }, cota_grok_bot: { estado: 'erro' }, cota_cursor: { estado: 'erro' } }));
   assert.equal(doc.getElementById('limits-local').hidden, true); assert.equal(cartoesLocais(doc).length, 0);
 });
-test('limites locais: sem_dado no Codex mostra selo "SEM DADOS" e o aviso, nada mais; selo do bloco "1 fonte"', () => {
+test('limites locais: sem_dado no Codex mostra selo "SEM DADOS" e o aviso, nada mais; selo do bloco "1 fonte" (sem conta do Codex)', () => {
   const d = Object.assign(semCotasLocais(), { cota_codex_local: { estado: 'sem_dado', observado_epoch: null, barras: [] } });
+  d.contas.lista = d.contas.lista.filter((c) => c.ferramenta !== 'codex');   // sem conta do Codex, o cartão local sem dados é o único
   const { a, doc, txt } = app(); a.receber(d);
   assert.equal(doc.getElementById('limits-local').hidden, false);
   assert.equal(txt('limits-local-badge'), '1 fonte');
@@ -1203,7 +1205,9 @@ test('limites locais que lançam não impedem #providers, os KPIs nem a lista de
     assert.doesNotThrow(() => a.receber(d));
     assert.equal(erros.length, 1); assert.match(String(erros[0][0]), /uso observado em arquivos locais/); assert.match(String(erros[0][1]), /boom cotas locais/);
   });
-  ['k-trab', 'k-total', 'nav-agentes', 'providers'].forEach((id) => assert.equal(txt(id), base.txt(id), 'mudou ' + id));
+  ['k-trab', 'k-total', 'nav-agentes'].forEach((id) => assert.equal(txt(id), base.txt(id), 'mudou ' + id));
+  const semLocais = app(); semLocais.a.receber(semCotasLocais());
+  assert.equal(txt('providers'), semLocais.txt('providers'), 'com a lista local falhando, #providers é o de sem as chaves');
   assert.match(txt('providers'), /\S/); assert.doesNotMatch(txt('providers'), /não foi possível desenhar/);
   assert.equal(doc.getElementById('agent-rows').children.length, d.agentes.length);
   ['stats', 'agents', 'limits', 'presence', 'presence-linux'].forEach((id) => assert.equal(doc.getElementById(id)._avisoSecao, undefined, 'aviso em ' + id));
@@ -1212,4 +1216,206 @@ test('limites locais que lançam não impedem #providers, os KPIs nem a lista de
   silenciarErros(() => a.receber(clone(fixture)));                       // na próxima leitura boa o aviso some
   assert.doesNotMatch(txt('limits-local'), /não foi possível desenhar/);
   assert.equal(doc.getElementById('limits-local').hidden, false); assert.equal(cartoesLocais(doc).length, 3);
+});
+
+/* ---------- E23: bloco "Vigilante 2" na seção Saúde dos serviços ---------- */
+const semVig = () => { const d = clone(fixture); delete d.vigilante2; return d; };
+const comVig = (extra) => { const d = clone(fixture); Object.assign(d.vigilante2, extra); return d; };
+const cartoesVig = (doc) => doc.getElementById('vigilante-grid').children;
+test('vigilanteDe: sem a chave, "erro" e "desligado" ficam inativos; "ok" normaliza campos, tipos, contagens e limite de alertas', () => {
+  [undefined, { estado: 'erro' }, { estado: 'desligado' }, null, 'x', []].forEach((v) => {
+    const d = semVig(); if (v !== undefined) d.vigilante2 = v;
+    const r = Hermes.vigilanteDe(d); assert.equal(r.ativo, false); assert.deepEqual(r.alertas, []);
+  });
+  assert.equal(Hermes.vigilanteDe(null).ativo, false);
+  const r = Hermes.vigilanteDe(fixture);
+  assert.equal(r.ativo, true); assert.equal(r.estado, 'ok'); assert.equal(r.geradoEm, T0 - 40); assert.equal(r.wireOk, true); assert.equal(r.painelOk, true);
+  assert.equal(r.online, 8); assert.equal(r.terminais, 21); assert.equal(r.falhas, 0);
+  assert.deepEqual(r.porTipo, { claude_code: 9, codex: 4, custom: 5, generic_shell: 3, outra: 0 });
+  assert.deepEqual(r.alertas, [{ tipo: 'login', desde: T0 - 600 }, { tipo: 'cota_baixa', desde: T0 - 7200 }]);
+  const x = Hermes.vigilanteDe(comVig({ alertas: [{ tipo: 'inventado', desde_epoch: 'x' }], online: -3, trabalhando: 'dois', atencao: NaN, workspaces: 2.7, wire_ok: 1 }));
+  assert.deepEqual(x.alertas, [{ tipo: 'outro', desde: null }]);
+  assert.equal(x.online, 0); assert.equal(x.trabalhando, 0); assert.equal(x.atencao, 0); assert.equal(x.workspaces, 2); assert.equal(x.wireOk, false);
+  const muitos = Array.from({ length: 20 }, () => ({ tipo: 'login', desde_epoch: T0 }));
+  assert.equal(Hermes.vigilanteDe(comVig({ alertas: muitos })).alertas.length, 11);
+});
+test('vigilante: render da fixture mostra o bloco ATIVO com quatro cartões sem botão e não mexe na grade de serviços nem nos KPIs', () => {
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  const base = app(); base.a.receber(semVig());
+  assert.equal(doc.getElementById('vigilante').hidden, false);
+  assert.equal(txt('vigilante-badge'), 'ATIVO'); assert.equal(doc.getElementById('vigilante-badge').classList.contains('bad'), false);
+  const cs = cartoesVig(doc); assert.equal(cs.length, 4);
+  cs.forEach((c) => { assert.notEqual(c.tag, 'button'); assert.equal(c.getAttribute('data-service'), null); });
+  const t = (c) => nb(c.textContent);
+  assert.match(t(cs[0]), /Ativo/); assert.match(t(cs[0]), /8 online · 2 trabalhando · 1 em atenção/); assert.match(t(cs[0]), /atualizado há menos de 1 min/);
+  assert.match(t(cs[1]), /2 alertas/); assert.match(t(cs[1]), /login · cota baixa/); assert.match(t(cs[1]), /o mais antigo há 2 h/);
+  assert.match(t(cs[2]), /Em ordem/); assert.match(t(cs[2]), /Wire ok · Painel ok/); assert.match(t(cs[2]), /sem falhas seguidas/);
+  assert.match(t(cs[3]), /21 terminais/); assert.match(t(cs[3]), /Claude Code 9 · Codex 4 · Personalizado 5 · Shell 3 · Outros 0/); assert.match(t(cs[3]), /5 workspaces/);
+  assert.equal(doc.getElementById('services-grid').children.length, 5);
+  ['k-serv', 'k-serv-total', 'nav-servicos'].forEach((id) => assert.equal(txt(id), base.txt(id), 'mudou ' + id));
+  assert.equal(base.doc.getElementById('vigilante').hidden, true);
+});
+test('vigilante: estado "parado" mostra um cartão e nenhum número do retrato velho', () => {
+  const { a, doc, txt } = app(); a.receber(comVig({ estado: 'parado' }));
+  assert.equal(doc.getElementById('vigilante').hidden, false);
+  assert.equal(txt('vigilante-badge'), 'PARADO'); assert.equal(doc.getElementById('vigilante-badge').classList.contains('bad'), true);
+  const cs = cartoesVig(doc); assert.equal(cs.length, 1);
+  const t = nb(cs[0].textContent);
+  assert.match(t, /Parado/); assert.match(t, /Vigilante 2 parado/); assert.match(t, /último sinal há \S+/);
+  ['online', 'trabalhando', 'em atenção', 'terminais', 'workspaces', 'Claude Code', 'alerta', 'Wire'].forEach((x) => assert.ok(!t.includes(x), 'apareceu ' + x));
+});
+test('vigilante: sem a chave, "erro" e "desligado" deixam o bloco oculto e sem cartões', () => {
+  [undefined, { estado: 'erro' }, { estado: 'desligado' }].forEach((v) => {
+    const d = semVig(); if (v !== undefined) d.vigilante2 = v;
+    const { a, doc } = app(); a.receber(d);
+    assert.equal(doc.getElementById('vigilante').hidden, true); assert.equal(cartoesVig(doc).length, 0);
+  });
+});
+test('vigilante: variações do estado ok (sem alertas, Wire fora, falhas seguidas, alerta sem horário)', () => {
+  const ver = (extra) => { const { a, doc } = app(); a.receber(comVig(extra)); return Array.from(cartoesVig(doc)).map((c) => nb(c.textContent)); };
+  let cs = ver({ alertas: [] });
+  assert.match(cs[1], /Nenhum alerta/); assert.match(cs[1], /Nada pendente/); assert.match(cs[1], /sem alertas/);
+  cs = ver({ wire_ok: false });
+  assert.match(cs[2], /Com falha/); assert.match(cs[2], /Wire fora · Painel ok/);
+  cs = ver({ falhas_seguidas: 3 });
+  assert.match(cs[2], /Com falha/); assert.match(cs[2], /3 falhas seguidas/);
+  cs = ver({ alertas: [{ tipo: 'login', desde_epoch: null }] });
+  assert.match(cs[1], /1 alerta/); assert.match(cs[1], /início não informado/);
+});
+test('vigilante: tipo de alerta hostil vira "outro" e não cria elemento', () => {
+  const { a, doc } = app(); a.receber(comVig({ alertas: [{ tipo: '<img src=x onerror=alert(1)>', desde_epoch: T0 - 60 }] }));
+  const bloco = doc.getElementById('vigilante');
+  assert.match(nb(cartoesVig(doc)[1].textContent), /outro/);
+  assert.equal(bloco.descendentes().filter((e) => e.tag === 'img').length, 0);
+  assert.ok(!nb(bloco.textContent).includes('onerror'));
+  bloco.descendentes().forEach((e) => Object.values(e.attrs).forEach((v) => assert.ok(!v.includes('onerror'), 'texto hostil em atributo')));
+});
+test('vigilante que lança não impede a grade de serviços, os KPIs nem a lista de sessões; o aviso fica só no bloco', () => {
+  const base = app(); silenciarErros(() => base.a.receber(clone(fixture)));
+  const d = clone(fixture);
+  Object.defineProperty(d.vigilante2, 'alertas', { enumerable: true, get() { throw new Error('boom vigilante'); } });
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => {
+    assert.doesNotThrow(() => a.receber(d));
+    assert.equal(erros.length, 1); assert.match(String(erros[0][0]), /Vigilante 2/); assert.match(String(erros[0][1]), /boom vigilante/);
+  });
+  ['k-serv', 'k-serv-total', 'nav-servicos', 'services-grid', 'k-trab', 'nav-agentes'].forEach((id) => assert.equal(txt(id), base.txt(id), 'mudou ' + id));
+  assert.equal(doc.getElementById('agent-rows').children.length, d.agentes.length);
+  assert.equal(doc.getElementById('services')._avisoSecao, undefined);
+  assert.match(txt('vigilante'), /não foi possível desenhar esta seção/);
+});
+
+/* ---------- E19b: o Codex num cartão só ---------- */
+const contaCodexComNumeros = (d) => { const c = d.contas.lista.filter((x) => x.ferramenta === 'codex')[0]; c.situacao = 'ok'; c.barras[0].usado_pct = 33; c.barras[1].usado_pct = 70; return d; };
+const codexEm = (doc, id) => doc.getElementById(id).children.filter((c) => /Codex/.test(c.textContent)).length;
+const contaCodexComErro = (d) => { const c = d.contas.lista.filter((x) => x.ferramenta === 'codex')[0]; c.erro = true; c.erro_detalhe = 'fonte de sessões indisponível'; return d; };
+test('unificarCodex: regras (a), (b) e (c), conta com erro, sem item local, entradas inválidas e listas recebidas intactas', () => {
+  const C = (dados) => Hermes.contasDe(dados), L = (dados) => Hermes.cotasLocaisDe(dados);
+  const chaves = (r) => r.locais.map((x) => x.chave);
+  const semLocalDoCodex = (dados) => L(dados).filter((x) => x.chave !== 'cota_codex_local');
+  const semDadoLocal = () => Object.assign(clone(fixture), { cota_codex_local: { estado: 'sem_dado', observado_epoch: null, barras: [] } });
+  // (b) conta do Codex sem números e COM erro, local com dados: a conta fica
+  let d = contaCodexComErro(clone(fixture)), r = Hermes.unificarCodex(C(d), L(d));
+  assert.deepEqual(r.contas, C(d)); assert.equal(r.contas.length, 2);
+  assert.deepEqual(chaves(r), ['cota_codex_local', 'cota_grok_bot', 'cota_cursor']);
+  // sem item local do Codex
+  d = semCotasLocais(); r = Hermes.unificarCodex(C(d), L(d));
+  assert.deepEqual(r.contas, C(d)); assert.deepEqual(r.locais, L(d));
+  d = clone(fixture); delete d.cota_codex_local; delete d.fontes.cota_codex_local; r = Hermes.unificarCodex(C(d), L(d));
+  assert.deepEqual(r.contas, C(d)); assert.deepEqual(r.locais, L(d));
+  // (a) conta com números e local com dados
+  d = contaCodexComNumeros(clone(fixture)); r = Hermes.unificarCodex(C(d), L(d));
+  assert.deepEqual(chaves(r), ['cota_grok_bot', 'cota_cursor']); assert.deepEqual(r.locais, semLocalDoCodex(d)); assert.deepEqual(r.contas, C(d)); assert.equal(r.contas.length, 2);
+  // (a) conta com números e local sem_dado
+  d = contaCodexComNumeros(semDadoLocal()); r = Hermes.unificarCodex(C(d), L(d));
+  assert.deepEqual(r.locais, semLocalDoCodex(d)); assert.deepEqual(r.contas, C(d)); assert.equal(r.contas.length, 2);
+  // (b) fixture como está
+  d = clone(fixture); r = Hermes.unificarCodex(C(d), L(d));
+  assert.deepEqual(r.contas, C(d).filter((c) => c.ferramenta !== 'codex')); assert.equal(r.contas.length, 1);
+  assert.deepEqual(chaves(r), ['cota_codex_local', 'cota_grok_bot', 'cota_cursor']);
+  // (c) conta sem números e local sem_dado
+  d = semDadoLocal(); r = Hermes.unificarCodex(C(d), L(d));
+  assert.deepEqual(r.locais, semLocalDoCodex(d)); assert.deepEqual(r.contas, C(d)); assert.equal(r.contas.length, 2);
+  // (c) nenhuma conta do Codex e local sem_dado
+  d = semDadoLocal(); d.contas.lista = d.contas.lista.filter((c) => c.ferramenta !== 'codex'); r = Hermes.unificarCodex(C(d), L(d));
+  assert.deepEqual(r.contas, C(d)); assert.deepEqual(r.locais, L(d));
+  // a regra (b) exige as DUAS condições no item local: estado "ok" E barras; faltando uma, vale a (c)
+  const localDireto = (estado, barras) => [{ chave: 'cota_codex_local', estado: estado, barras: barras }, { chave: 'cota_grok_bot', estado: 'ok', barras: [] }];
+  const umaBarra = [{ tipo: '5h', pct: 10 }];
+  d = clone(fixture);
+  r = Hermes.unificarCodex(C(d), localDireto('ok', []));             // "ok" sem barras: regra (c)
+  assert.deepEqual(r.contas, C(d)); assert.equal(r.contas.length, 2); assert.deepEqual(chaves(r), ['cota_grok_bot']);
+  r = Hermes.unificarCodex(C(d), localDireto('sem_dado', umaBarra)); // barras sem "ok": regra (c)
+  assert.deepEqual(r.contas, C(d)); assert.equal(r.contas.length, 2); assert.deepEqual(chaves(r), ['cota_grok_bot']);
+  r = Hermes.unificarCodex(C(d), localDireto('ok', umaBarra));       // as duas: regra (b)
+  assert.equal(r.contas.length, 1); assert.deepEqual(chaves(r), ['cota_codex_local', 'cota_grok_bot']);
+  // duas contas do Codex, uma com números: regra (a)
+  d = contaCodexComNumeros(clone(fixture));
+  const outra = clone(d.contas.lista.filter((x) => x.ferramenta === 'codex')[0]); outra.id = 'codex:ghi'; outra.situacao = 'sem dado'; outra.barras.forEach((b) => { b.usado_pct = null; });
+  d.contas.lista.push(outra); r = Hermes.unificarCodex(C(d), L(d));
+  assert.deepEqual(r.contas, C(d)); assert.equal(r.contas.length, 3); assert.deepEqual(r.locais, semLocalDoCodex(d));
+  // entradas que não são lista
+  [null, undefined, 'x'].forEach((v) => assert.deepEqual(Hermes.unificarCodex(v, v), { contas: [], locais: [] }));
+  // listas recebidas não são alteradas
+  d = clone(fixture); const cs = C(d), ls = L(d), csClone = clone(cs), lsClone = clone(ls);
+  Hermes.unificarCodex(cs, ls); assert.deepEqual(cs, csClone); assert.deepEqual(ls, lsClone);
+  d = contaCodexComNumeros(clone(fixture)); const cs2 = C(d), ls2 = L(d), cs2Clone = clone(cs2), ls2Clone = clone(ls2);
+  Hermes.unificarCodex(cs2, ls2); assert.deepEqual(cs2, cs2Clone); assert.deepEqual(ls2, ls2Clone);
+});
+test('Codex num cartão só: com sessão aberta (conta com números) o cartão é o da conta e o observado some', () => {
+  const { a, doc, txt } = app(); a.receber(contaCodexComNumeros(clone(fixture)));
+  assert.equal(codexEm(doc, 'providers'), 1);
+  assert.match(nb(doc.getElementById('providers').children.filter((c) => /Codex/.test(c.textContent))[0].textContent), /33%/);
+  assert.equal(codexEm(doc, 'limits-local-cards'), 0);
+  assert.equal(txt('limits-local-badge'), '2 fontes');
+  assert.deepEqual(cartoesLocais(doc).map((c) => nb(porClasse(c, 'provider-name')[0].childNodes[0].textContent)), ['Grok Bot', 'Cursor']);
+});
+test('Codex num cartão só: sem sessão (fixture como está) só o observado aparece e o Claude continua em #providers', () => {
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  assert.equal(codexEm(doc, 'providers'), 0);
+  assert.equal(codexEm(doc, 'limits-local-cards'), 1);
+  assert.equal(txt('limits-local-badge'), '3 fontes');
+  assert.match(txt('providers'), /Claude/);
+});
+test('Codex num cartão só: sem a variável nada muda em #providers', () => {
+  const sem = app(); sem.a.receber(semCotasLocais());
+  assert.equal(codexEm(sem.doc, 'providers'), 1); assert.match(sem.txt('providers'), /SEM DADOS/);
+  assert.equal(sem.doc.getElementById('limits-local').hidden, true);
+  const d = clone(fixture); delete d.cota_codex_local; delete d.fontes.cota_codex_local;
+  const { a, doc, txt } = app(); a.receber(d);
+  assert.equal(codexEm(doc, 'providers'), 1);
+  assert.equal(txt('limits-local-badge'), '2 fontes');
+  assert.equal(txt('providers'), sem.txt('providers'));
+});
+test('Codex num cartão só: fonte local com erro deixa #providers como sem a variável e não desenha o observado', () => {
+  const sem = app(); sem.a.receber(semCotasLocais());
+  const { a, doc, txt } = app(); a.receber(Object.assign(clone(fixture), { cota_codex_local: { estado: 'erro' } }));
+  assert.equal(codexEm(doc, 'providers'), 1); assert.match(txt('providers'), /Codex.*SEM DADOS/);
+  assert.equal(txt('providers'), sem.txt('providers'));
+  assert.equal(codexEm(doc, 'limits-local-cards'), 0);
+});
+test('Codex num cartão só: nenhum dos dois com dados mantém a conta (SEM DADOS) e esconde o observado vazio', () => {
+  const { a, doc, txt } = app(); a.receber(Object.assign(semCotasLocais(), { cota_codex_local: { estado: 'sem_dado', observado_epoch: null, barras: [] } }));
+  assert.equal(codexEm(doc, 'providers'), 1); assert.match(txt('providers'), /SEM DADOS/);
+  assert.equal(doc.getElementById('limits-local').hidden, true); assert.equal(cartoesLocais(doc).length, 0);
+});
+test('Codex num cartão só: atualização ao vivo troca de lugar, e KPIs e modal usam a conta escondida', () => {
+  const { a, doc, txt } = app();
+  const soUm = () => assert.equal(codexEm(doc, 'providers') + codexEm(doc, 'limits-local-cards'), 1);
+  a.receber(clone(fixture)); soUm(); assert.equal(codexEm(doc, 'limits-local-cards'), 1);
+  assert.equal(txt('k-sessao'), '40');
+  a.abrirModal({ tipo: 'conta', chave: 'codex:def' }); assert.match(txt('modal-title'), /Codex/);
+  a.receber(contaCodexComNumeros(clone(fixture))); soUm(); assert.equal(codexEm(doc, 'providers'), 1);
+  assert.equal(txt('k-sessao'), '40');
+  a.abrirModal({ tipo: 'conta', chave: 'codex:def' }); assert.match(txt('modal-title'), /Codex/);
+  a.receber(clone(fixture)); soUm(); assert.equal(codexEm(doc, 'limits-local-cards'), 1);
+  assert.equal(txt('k-sessao'), '40');
+  a.abrirModal({ tipo: 'conta', chave: 'codex:def' }); assert.match(txt('modal-title'), /Codex/);
+});
+test('Codex num cartão só: conta do Codex com erro nunca é escondida (exceção declarada), e com números vale a regra (a)', () => {
+  const { a, doc, txt } = app(); a.receber(contaCodexComErro(clone(fixture)));
+  assert.equal(codexEm(doc, 'providers'), 1); assert.match(txt('providers'), /Codex.*ERRO.*fonte de sessões indisponível/);
+  assert.equal(codexEm(doc, 'limits-local-cards'), 1); assert.equal(txt('limits-local-badge'), '3 fontes');
+  const outra = app(); outra.a.receber(contaCodexComNumeros(contaCodexComErro(clone(fixture))));
+  assert.equal(codexEm(outra.doc, 'providers'), 1); assert.equal(codexEm(outra.doc, 'limits-local-cards'), 0);
 });

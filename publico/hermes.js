@@ -372,6 +372,36 @@ function cotasLocaisDe(dados) {
   });
   return saida;
 }
+/* E19b: o Codex aparece num cartão só. Com números na conta, sai o observado; sem números na conta e com uso observado, saem as contas do Codex sem erro (conta com erro nunca é escondida). */
+function unificarCodex(contas, locais) {
+  contas = lista(contas); locais = lista(locais);
+  var local = locais.filter(function (x) { return x && x.chave === "cota_codex_local"; })[0];
+  if (!local) return { contas: contas.slice(), locais: locais.slice() };
+  var doCodex = function (c) { return !!c && c.ferramenta === "codex"; };
+  var semOLocal = function () { return locais.filter(function (x) { return x !== local; }); };
+  if (contas.some(function (c) { return doCodex(c) && c.semDados === false; })) return { contas: contas.slice(), locais: semOLocal() };
+  if (local.estado === "ok" && lista(local.barras).length > 0) return { contas: contas.filter(function (c) { return !doCodex(c) || !!c.erro; }), locais: locais.slice() };
+  if (contas.some(doCodex)) return { contas: contas.slice(), locais: semOLocal() };
+  return { contas: contas.slice(), locais: locais.slice() };
+}
+/* Vigilante 2 (E23): bloco próprio na seção Saúde dos serviços; não entra em servicosDe nem em pendenciasDe. */
+var TIPOS_VIGILANTE = ["fim_etapa", "aguarda_decisao", "confianca_pasta", "login", "cota_baixa", "terminal_caiu", "servico_fora", "painel_fora", "wire_fora", "falhas_repetidas", "outro"];
+var ROTULOS_VIGILANTE = { fim_etapa: "fim de etapa", aguarda_decisao: "aguarda decisão", confianca_pasta: "confiança de pasta", login: "login", cota_baixa: "cota baixa",
+  terminal_caiu: "terminal caiu", servico_fora: "serviço fora", painel_fora: "painel fora", wire_fora: "Wire fora", falhas_repetidas: "falhas repetidas", outro: "outro" };
+function vigilanteDe(dados) {
+  var v = dados && dados.vigilante2;
+  var vazio = { ativo: false, estado: "", geradoEm: null, wireOk: false, painelOk: false, online: 0, trabalhando: 0, atencao: 0, workspaces: 0, terminais: 0, falhas: 0,
+                porTipo: { claude_code: 0, codex: 0, custom: 0, generic_shell: 0, outra: 0 }, alertas: [] };
+  if (!v || typeof v !== "object" || Array.isArray(v) || (v.estado !== "ok" && v.estado !== "parado")) return vazio;
+  var conta = function (x) { return numero(x) && x >= 0 ? Math.floor(x) : 0; };
+  var pt = objeto(v.por_tipo);
+  return { ativo: true, estado: v.estado, geradoEm: numero(v.gerado_em_epoch) ? v.gerado_em_epoch : null, wireOk: v.wire_ok === true, painelOk: v.painel_ok === true,
+           online: conta(v.online), trabalhando: conta(v.trabalhando), atencao: conta(v.atencao), workspaces: conta(v.workspaces), terminais: conta(v.terminais), falhas: conta(v.falhas_seguidas),
+           porTipo: { claude_code: conta(pt.claude_code), codex: conta(pt.codex), custom: conta(pt.custom), generic_shell: conta(pt.generic_shell), outra: conta(pt.outra) },
+           alertas: lista(v.alertas).filter(function (a) { return a && typeof a === "object" && !Array.isArray(a); }).slice(0, 11).map(function (a) {
+             return { tipo: TIPOS_VIGILANTE.indexOf(a.tipo) >= 0 ? a.tipo : "outro", desde: numero(a.desde_epoch) ? a.desde_epoch : null };
+           }) };
+}
 function processosDe(dados) {
   var p = objeto(dados && dados.processos);
   return Object.keys(p).sort().map(function (n) { return n + " × " + texto(p[n]); });
@@ -943,6 +973,54 @@ function criarApp(doc, win, opcoes) {
     setTxt($("attention-foot-text"), atencao === 1 ? "1 serviço precisa de atenção" : atencao + " serviços precisam de atenção");
   }
 
+  /* ---- Vigilante 2 (E23): cartões só de leitura, sem clique e sem modal ---- */
+  function desenharVigilante(v) {
+    var agora = agoraS(), parado = v.estado === "parado";
+    $("vigilante").hidden = !v.ativo;
+    setTxt($("vigilante-badge"), parado ? "PARADO" : "ATIVO");
+    setCls($("vigilante-badge"), "bad", parado);
+    var desdeHa = function (t) { return t === null ? "sem horário" : duracao(agora - t); };
+    var cartoes = [];
+    if (v.ativo && parado) {
+      cartoes.push({ icone: "shield", cls: "bad", rotulo: "Parado", titulo: "Vigilante 2", texto: "Vigilante 2 parado",
+                     tempo: v.geradoEm === null ? "sem horário" : "último sinal há " + desdeHa(v.geradoEm) });
+    } else if (v.ativo) {
+      cartoes.push({ icone: "shield", cls: "good", rotulo: "Ativo", titulo: "Vigilante 2",
+                     texto: v.online + " online · " + v.trabalhando + " trabalhando · " + v.atencao + " em atenção",
+                     tempo: v.geradoEm === null ? "sem horário" : "atualizado há " + desdeHa(v.geradoEm) });
+      if (!v.alertas.length) {
+        cartoes.push({ icone: "warning", cls: "good", rotulo: "Nenhum alerta", titulo: "Alertas ativos", texto: "Nada pendente", tempo: "sem alertas" });
+      } else {
+        var desdes = v.alertas.filter(function (a) { return a.desde !== null; }).map(function (a) { return a.desde; });
+        cartoes.push({ icone: "warning", cls: "bad", rotulo: plural(v.alertas.length, "alerta", "alertas"), titulo: "Alertas ativos",
+                       texto: v.alertas.map(function (a) { return ROTULOS_VIGILANTE[a.tipo]; }).join(" · "),
+                       tempo: desdes.length ? "o mais antigo há " + duracao(agora - Math.min.apply(null, desdes)) : "início não informado" });
+      }
+      var emOrdem = v.wireOk && v.painelOk && v.falhas === 0;
+      cartoes.push({ icone: "activity", cls: emOrdem ? "good" : "bad", rotulo: emOrdem ? "Em ordem" : "Com falha", titulo: "Fontes do Vigilante",
+                     texto: "Wire " + (v.wireOk ? "ok" : "fora") + " · Painel " + (v.painelOk ? "ok" : "fora"),
+                     tempo: v.falhas > 0 ? plural(v.falhas, "falha seguida", "falhas seguidas") : "sem falhas seguidas" });
+      var pt = v.porTipo;
+      cartoes.push({ icone: "monitor", cls: "idle", rotulo: plural(v.terminais, "terminal", "terminais"), titulo: "Terminais por tipo",
+                     texto: "Claude Code " + pt.claude_code + " · Codex " + pt.codex + " · Personalizado " + pt.custom + " · Shell " + pt.generic_shell + " · Outros " + pt.outra,
+                     tempo: plural(v.workspaces, "workspace", "workspaces") });
+    }
+    desenharRegiao(doc, $("vigilante-grid"), { cartoes: cartoes }, function () {
+      return cartoes.map(function (c) {
+        var card = el(doc, "div", "service"), topo = el(doc, "div", "service-top"), ic = el(doc, "span", "service-icon");
+        ic.appendChild(icone(doc, c.icone));
+        var st = el(doc, "span", "status " + c.cls);
+        st.appendChild(el(doc, "span", "dot")); st.appendChild(el(doc, "span", null, c.rotulo));
+        topo.appendChild(ic); topo.appendChild(st); card.appendChild(topo);
+        card.appendChild(el(doc, "h3", null, c.titulo));
+        var p = el(doc, "p", null, c.texto); p.setAttribute("title", c.texto); card.appendChild(p);
+        var tempo = el(doc, "div", "service-time"); tempo.appendChild(icone(doc, "clock")); tempo.appendChild(el(doc, "span", null, c.tempo));
+        card.appendChild(tempo);
+        return card;
+      });
+    });
+  }
+
   /* ---- janela de detalhes (agente, serviço ou conta); atualiza no lugar quando os dados mudam ---- */
   function modeloDoModal() {
     var sel = estado.modal, d = estado.dados, agora = agoraS();
@@ -1038,16 +1116,24 @@ function criarApp(doc, win, opcoes) {
     var agentes = modeloUmaVez(function () { return agentesDe(d); }), contas = modeloUmaVez(function () { return contasDe(d); });
     var servicos = modeloUmaVez(function () { return servicosDe(d, agora); });
     var gastos = modeloUmaVez(function () { return gastosDe(d, estado.janela, estado.agrupamento); });
+    var locais = modeloUmaVez(function () { return cotasLocaisDe(d); });
     try { desenharChip(); } catch (e) { registrarErro("o indicador do topo", e); }
     secao("stats", "de resumo", function () { desenharKpis(agentes(), contas(), servicos(), gastos()); });
     secao("agents", "de agentes", function () { desenharAgentes(agentes()); });
     secao("presence", "de presença por processo", function () { desenharPresenca(presencaDe(d)); });
     secao("presence-linux", "de presença no WSL", function () { desenharPresencaLinux(presencaLinuxDe(d)); });
-    secao("limits", "de limites de uso", function () { desenharLimites(contas()); });
-    secao("limits-local", "de uso observado em arquivos locais", function () { desenharCotasLocais(cotasLocaisDe(d)); });
+    secao("limits", "de limites de uso", function () {
+      var l; try { l = locais(); } catch (e) { l = []; }          // o erro da lista local é registrado pela seção dela
+      desenharLimites(unificarCodex(contas(), l).contas);
+    });
+    secao("limits-local", "de uso observado em arquivos locais", function () {
+      var l = locais(), c; try { c = contas(); } catch (e) { c = []; }   // o erro das contas é registrado pela seção delas
+      desenharCotasLocais(unificarCodex(c, l).locais);
+    });
     secao("usage", "de gastos", function () { desenharGastos(gastos()); });
     secao("attention", "Precisa de você", function () { desenharPendencias(pendenciasDe(d)); });
     secao("services", "de serviços", function () { desenharServicos(servicos()); });
+    secao("vigilante", "do Vigilante 2", function () { desenharVigilante(vigilanteDe(d)); });
     if (estado.modal) secao("modal-dialog", "da janela de detalhes", desenharModal);
   }
   function receber(d) {
@@ -1229,7 +1315,7 @@ var api = {
   numero: numero, mascararEmails: mascararEmails, snapshotParaExportar: snapshotParaExportar, haSegundos: haSegundos, duracao: duracao, quando: quando,
   resetEmPtBr: resetEmPtBr, textoReset: textoReset, dinheiro: dinheiro, fmtUsd: fmtUsd, fmtBrl: fmtBrl, fmtTokens: fmtTokens, maxBonito: maxBonito,
   agentesDe: agentesDe, contasDe: contasDe, consumoClaude5h: consumoClaude5h, gastosDe: gastosDe, servicosDe: servicosDe, pendenciasDe: pendenciasDe,
-  fontesComProblema: fontesComProblema, presencaDe: presencaDe, presencaLinuxDe: presencaLinuxDe, cotasLocaisDe: cotasLocaisDe, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
+  fontesComProblema: fontesComProblema, presencaDe: presencaDe, presencaLinuxDe: presencaLinuxDe, cotasLocaisDe: cotasLocaisDe, unificarCodex: unificarCodex, vigilanteDe: vigilanteDe, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 else {
