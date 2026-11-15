@@ -402,6 +402,132 @@ function vigilanteDe(dados) {
              return { tipo: TIPOS_VIGILANTE.indexOf(a.tipo) >= 0 ? a.tipo : "outro", desde: numero(a.desde_epoch) ? a.desde_epoch : null };
            }) };
 }
+/* Erros de ferramenta (E20): bloco próprio na seção de agentes. Só listas fixas, números e o id curto; nenhum texto do transcript. */
+var AGENTES_ERRO = { claude: "Claude Code", codex: "Codex" };
+var FERRAMENTAS_ERRO = { bash: "Bash", powershell: "PowerShell", read: "Read", edit: "Edit", write: "Write", grep: "Grep", glob: "Glob", agent: "Agent", web: "Web", mcp: "MCP",
+  comando: "comando", arquivo: "alteração de arquivo", nenhuma: "", outra: "outra ferramenta" };
+var CLASSES_ERRO = { permissao_negada: "permissão negada", interrompido: "interrompido", codigo_saida: "código de saída", edicao: "edição não aplicada", arquivo: "arquivo",
+  tempo_esgotado: "tempo esgotado", validacao: "validação da ferramenta", api: "erro de API", outra: "outro erro" };
+var ESTADOS_ERRO = { aberto: "wait", corrigido: "idle", verificado: "good" };
+function errosDe(dados) {
+  var e = dados && dados.erros_agentes;
+  var vazio = { ativo: false, contagens: { aberto: 0, corrigido: 0, verificado: 0, sem_tratamento: 0, contado: 0 }, itens: [] };
+  if (!e || typeof e !== "object" || Array.isArray(e) || e.estado !== "ok") return vazio;
+  var tem = function (mapa, k) { return typeof k === "string" && Object.prototype.hasOwnProperty.call(mapa, k); };
+  var conta = function (x) { return numero(x) && x >= 0 ? Math.floor(x) : 0; };
+  var inteiro = function (x) { return numero(x) && Math.floor(x) === x; };
+  var c = objeto(e.contagens), vistos = {}, itens = [];
+  lista(e.itens).forEach(function (i) {
+    if (itens.length >= 30 || !i || typeof i !== "object" || Array.isArray(i)) return;
+    if (typeof i.id !== "string" || !/^[0-9a-f]{10}$/.test(i.id) || vistos[i.id] === true) return;
+    if (!tem(AGENTES_ERRO, i.agente) || !tem(ESTADOS_ERRO, i.estado)) return;
+    vistos[i.id] = true;
+    var ev = i.estado === "verificado" ? objeto(i.evidencia) : {};
+    itens.push({ id: i.id, agente: i.agente, estado: i.estado,
+                 ferramenta: tem(FERRAMENTAS_ERRO, i.ferramenta) ? i.ferramenta : "outra",
+                 classe: tem(CLASSES_ERRO, i.classe) ? i.classe : "outra",
+                 codigo: inteiro(i.codigo) ? i.codigo : null,
+                 hora: numero(i.hora) && i.hora > 0 ? i.hora : null,
+                 evidencia: (ev.tipo === "teste" || ev.tipo === "comando") && inteiro(ev.codigo) ? { tipo: ev.tipo, codigo: ev.codigo } : null });
+  });
+  return { ativo: true, itens: itens,
+           contagens: { aberto: conta(c.aberto), corrigido: conta(c.corrigido), verificado: conta(c.verificado), sem_tratamento: conta(c.sem_tratamento), contado: conta(c.contado) } };
+}
+/* Outros agentes (E21): sessões do Grok e do Hermes e último chat do cursor-agent. Só listas fixas, números, modelo filtrado e a chave curta. */
+var ESTADOS_EXTRA = { grok: { trabalhando: "work", esperando: "wait", ocioso: "idle", indeterminado: "stop" }, hermes: { ativa: "good" } };
+var ROTULOS_ESTADO_EXTRA = { trabalhando: "trabalhando", esperando: "esperando permissão", ocioso: "ocioso", indeterminado: "indeterminado", ativa: "ativa" };
+var ORIGENS_HERMES = { local: "local", subagent: "subagente", cli: "CLI", oneshot: "execução única", webhook: "webhook", desktop: "aplicativo", tool: "ferramenta", whatsapp: "WhatsApp", outra: "outra origem" };
+var CATEGORIAS_EXTRA = { leitura: "leitura", busca: "busca", terminal: "terminal", edicao: "edição", subagente: "subagente", computador: "computador", web: "web", outra: "outra ferramenta" };
+var MAX_SESSOES_EXTRA = { grok: 20, hermes: 50 };
+function outrosAgentesDe(dados) {
+  var tem = function (mapa, k) { return typeof k === "string" && Object.prototype.hasOwnProperty.call(mapa, k); };
+  var natural = function (x) { return numero(x) && x >= 0 && Math.floor(x) === x ? x : null; };
+  var modelo = function (x) { return x === "outro modelo" || (typeof x === "string" && /^[a-z0-9][a-z0-9.:_-]{0,63}$/.test(x)) ? x : null; };
+  var blocos = { grok: dados && dados.sessoes_grok, hermes: dados && dados.sessoes_hermes };
+  var sessoes = [], ativo = false;
+  ["grok", "hermes"].forEach(function (f) {
+    var b = blocos[f];
+    if (!b || typeof b !== "object" || Array.isArray(b) || b.estado !== "ok") return;
+    ativo = true;
+    var vistos = {}, n = 0;
+    lista(b.sessoes).forEach(function (s) {
+      if (n >= MAX_SESSOES_EXTRA[f] || !s || typeof s !== "object" || Array.isArray(s)) return;
+      if (typeof s.chave !== "string" || !/^[0-9a-f]{10}$/.test(s.chave) || vistos[s.chave] === true) return;
+      if (!tem(ESTADOS_EXTRA[f], s.estado)) return;
+      vistos[s.chave] = true; n += 1;
+      var t = objeto(s.tokens), ent = natural(t.entrada), sai = natural(t.saida);
+      sessoes.push({ id: f + ":" + s.chave, ferramenta: f, estado: s.estado,
+                     origem: f === "hermes" ? (tem(ORIGENS_HERMES, s.origem) ? s.origem : "outra") : null,
+                     modelo: modelo(s.modelo),
+                     contexto: numero(s.contexto_pct) && s.contexto_pct >= 0 && s.contexto_pct <= 100 ? s.contexto_pct : null,
+                     tokens: ent !== null && sai !== null ? ent + sai : null,
+                     chamadas: natural(s.chamadas),
+                     ultima: tem(CATEGORIAS_EXTRA, s.ultima_ferramenta) ? s.ultima_ferramenta : null,
+                     atividade: numero(s.atividade_epoch) && s.atividade_epoch > 0 ? s.atividade_epoch : null });
+    });
+  });
+  var c = dados && dados.chat_cursor, cursor = { estado: null, ultimo: null, chats: 0 };
+  if (c && typeof c === "object" && !Array.isArray(c)) {
+    if (c.estado === "ok" && numero(c.ultimo_chat_epoch) && c.ultimo_chat_epoch > 0) { cursor = { estado: "ok", ultimo: c.ultimo_chat_epoch, chats: natural(c.chats) || 0 }; ativo = true; }
+    else if (c.estado === "sem_dado") cursor.estado = "sem_dado";
+  }
+  return { ativo: ativo, sessoes: sessoes, cursor: cursor };
+}
+/* Rede por programa (E22): só números, o produto e o rótulo validados e valores de lista fixa; nenhum outro texto do arquivo. */
+function fmtBytes(n) {
+  if (!numero(n) || n < 0) return "0 B";
+  if (n < 1000) return Math.round(n) + " B";
+  var unidades = ["kB", "MB", "GB", "TB"], v = n / 1000, i = 0;
+  while (v >= 1000 && i < unidades.length - 1) { v /= 1000; i += 1; }
+  return fmtNum(v, 0, 1) + " " + unidades[i];
+}
+function redeDe(dados) {
+  var estados = ["ativo", "pausado_carga", "parado", "encerrado", "erro_captura"], categorias = ["local", "privada", "tailnet", "internet"];
+  var familias = ["claude", "codex", "grok", "hermes", "cursor", "copilot", "maestri"], motivos = ["sessao", "provedor", "consumidor", "outro"];
+  var r = dados && dados.rede_uso;
+  if (!r || typeof r !== "object" || Array.isArray(r) || estados.indexOf(r.estado) < 0)
+    return { estado: null, itens: [], cpu: null, eventos: null, perdidos: 0, retoma: null, sinal: null, motivo: null, noTeto: false };
+  var inteiro = function (x) { return numero(x) && x >= 0 && Math.floor(x) === x; };
+  var natural = function (x) { return inteiro(x) ? x : 0; };
+  var positivo = function (x) { return numero(x) && x > 0 ? x : null; };
+  var somar = function (janela) {      // [enviados, recebidos] por categoria; par fora do formato conta 0
+    var j = objeto(janela), env = 0, rec = 0, destinos = [];
+    categorias.forEach(function (cat, ordem) {
+      var p = j[cat], e = 0, s = 0;
+      if (Array.isArray(p) && p.length === 2 && inteiro(p[0]) && inteiro(p[1])) { e = p[0]; s = p[1]; }
+      env += e; rec += s;
+      if (e + s > 0) destinos.push({ cat: cat, bytes: e + s, ordem: ordem });
+    });
+    destinos.sort(function (a, b) { return b.bytes - a.bytes || a.ordem - b.ordem; });
+    return { enviados: env, recebidos: rec, destinos: destinos.map(function (x) { return { cat: x.cat, bytes: x.bytes }; }) };
+  };
+  var saida = { estado: r.estado, itens: [], cpu: numero(r.cpu_pct) && r.cpu_pct >= 0 ? r.cpu_pct : null, eventos: numero(r.eventos_s) && r.eventos_s >= 0 ? r.eventos_s : null,
+                perdidos: natural(r.perdidos), retoma: positivo(r.retoma_em_epoch), sinal: positivo(r.ultimo_sinal_epoch),
+                motivo: r.estado === "erro_captura" ? (motivos.indexOf(r.motivo) >= 0 ? r.motivo : "outro") : null, noTeto: r.conexoes_no_teto === true };
+  if (r.estado !== "ativo" && r.estado !== "pausado_carga") return saida;
+  var vistos = Object.create(null), itens = [];
+  vistos.outros = true;      // "outros" é a chave da última linha: um programa com esse produto repetiria a chave
+  lista(r.programas).forEach(function (p) {
+    if (!p || typeof p !== "object" || Array.isArray(p)) return;
+    if (typeof p.produto !== "string" || !/^[a-z0-9_]{1,40}$/.test(p.produto) || vistos[p.produto] === true) return;
+    if (typeof p.rotulo !== "string" || !p.rotulo || p.rotulo.length > 60) return;
+    vistos[p.produto] = true;
+    var s = somar(p.janela);
+    itens.push({ id: p.produto, rotulo: p.rotulo, familia: familias.indexOf(p.familia) >= 0 ? p.familia : "outra", conexoes: natural(p.conexoes),
+                 enviados: s.enviados, recebidos: s.recebidos, destinos: s.destinos });
+  });
+  itens = itens.map(function (it, i) { return { it: it, i: i }; })
+    .sort(function (a, b) { return (b.it.enviados + b.it.recebidos) - (a.it.enviados + a.it.recebidos) || a.i - b.i; })
+    .slice(0, 40).map(function (x) { return x.it; });
+  var o = r.outros;
+  if (o && typeof o === "object" && !Array.isArray(o)) {
+    var so = somar(o.janela), co = natural(o.conexoes);
+    if (co > 0 || so.enviados + so.recebidos > 0)
+      itens.push({ id: "outros", rotulo: "Outros programas", familia: "outra", conexoes: co, enviados: so.enviados, recebidos: so.recebidos, destinos: so.destinos });
+  }
+  saida.itens = itens;
+  return saida;
+}
 function processosDe(dados) {
   var p = objeto(dados && dados.processos);
   return Object.keys(p).sort().map(function (n) { return n + " × " + texto(p[n]); });
@@ -691,6 +817,89 @@ function criarApp(doc, win, opcoes) {
     setTxt($("presence-linux-titulo"), l.host ? "WSL · " + m(l.host) : "WSL");
     setTxt($("presence-linux-badge"), l.estado === "parada" ? "parada" : l.total > 0 ? "ligada · " + plural(l.total, "processo", "processos") : "ligada · nenhum processo");
     sincronizar($("presence-linux-rows"), l.itens, function (item) { return item.produto; }, criarLinhaPresenca, atualizarLinhaPresenca);
+  }
+  function criarLinhaErro(chave) {
+    var tr = el(doc, "tr", "presence-row"), r = tr._r = {};
+    var td1 = el(doc, "td"), nome = el(doc, "span", "agent-name");
+    r.logo = el(doc, "span", "agent-logo");
+    var quem = el(doc, "span");
+    r.rotulo = el(doc, "strong"); r.detalhe = el(doc, "small");
+    quem.appendChild(r.rotulo); quem.appendChild(r.detalhe);
+    nome.appendChild(r.logo); nome.appendChild(quem); td1.appendChild(nome);
+    var td2 = el(doc, "td");
+    r.status = el(doc, "span", "status");
+    r.estado = el(doc, "span");
+    r.status.appendChild(el(doc, "span", "dot")); r.status.appendChild(r.estado);
+    r.sub = el(doc, "small", "status-sub");
+    td2.appendChild(r.status); td2.appendChild(r.sub);
+    tr.appendChild(td1); tr.appendChild(td2);
+    return tr;
+  }
+  function atualizarLinhaErro(tr, item) {
+    var r = tr._r, agora = agoraS();
+    if (r.agente !== item.agente) { r.agente = item.agente; r.logo.replaceChildren(icone(doc, iconeDoAgente(item.agente))); }
+    setTxt(r.rotulo, [FERRAMENTAS_ERRO[item.ferramenta], CLASSES_ERRO[item.classe] + (item.codigo !== null ? " " + item.codigo : "")].filter(Boolean).join(" · "));
+    setTxt(r.detalhe, AGENTES_ERRO[item.agente] + " · id " + item.id);
+    var cls = "status " + ESTADOS_ERRO[item.estado];
+    if (r.status.className !== cls) r.status.className = cls;
+    setTxt(r.estado, item.estado);
+    setTxt(r.sub, [item.evidencia ? item.evidencia.tipo + " · código " + item.evidencia.codigo : "",
+                   item.hora === null ? "sem horário" : "há " + duracao(agora - item.hora)].filter(Boolean).join(" · "));
+  }
+  function desenharErros(e) {      // bloco próprio: não mexe nas linhas de agente, nos blocos de presença nem nos cartões do topo
+    var c = e.contagens;
+    $("errors").hidden = !e.ativo;
+    setTxt($("errors-badge"), c.aberto > 0 ? plural(c.aberto, "aberto", "abertos") : "nenhum aberto");
+    setCls($("errors-badge"), "warn", c.aberto > 0);
+    sincronizar($("errors-rows"), e.itens, function (item) { return item.id; }, criarLinhaErro, atualizarLinhaErro);
+    setTxt($("errors-resumo"), !e.ativo ? "" : "Em 30 dias: " + [plural(c.aberto, "aberto", "abertos"), plural(c.corrigido, "corrigido", "corrigidos"),
+      plural(c.verificado, "verificado", "verificados"), c.sem_tratamento + " sem tratamento",
+      c.contado + " só contados (permissão negada, interrupção, erro de API)"].join(" · "));
+    setTxt($("errors-nota"), !e.ativo ? "" : "\"Verificado\" quer dizer evidência anexada pelo agente; o painel não confere a evidência. O texto do erro fica só na máquina: painel-erro ver <id>.");
+  }
+  function atualizarLinhaExtra(tr, item) {
+    var r = tr._r, agora = agoraS();
+    if (r.agente !== item.ferramenta) { r.agente = item.ferramenta; r.logo.replaceChildren(icone(doc, iconeDoAgente(item.ferramenta))); }
+    setTxt(r.rotulo, item.ferramenta === "grok" ? "Grok CLI" : "Hermes · " + ORIGENS_HERMES[item.origem]);
+    setTxt(r.detalhe, [item.modelo, item.tokens !== null ? fmtTokens(item.tokens) : ""].filter(Boolean).join(" · "));
+    var cls = "status " + ESTADOS_EXTRA[item.ferramenta][item.estado];
+    if (r.status.className !== cls) r.status.className = cls;
+    setTxt(r.estado, ROTULOS_ESTADO_EXTRA[item.estado]);
+    setTxt(r.sub, [item.chamadas !== null ? plural(item.chamadas, "chamada", "chamadas") : "",
+                   item.ultima ? "última: " + CATEGORIAS_EXTRA[item.ultima] : "",
+                   item.contexto !== null ? "contexto " + Math.round(item.contexto) + "%" : "",
+                   item.atividade === null ? "sem horário" : "atividade há " + duracao(agora - item.atividade)].filter(Boolean).join(" · "));
+  }
+  function desenharOutrosAgentes(x) {      // bloco próprio: não mexe nas linhas de agente, nos blocos de presença, no de erros nem nos cartões do topo
+    var c = x.cursor, n = x.sessoes.length;
+    $("extra-agents").hidden = !x.ativo;
+    setTxt($("extra-agents-badge"), n > 0 ? plural(n, "sessão", "sessões") : "nenhuma sessão");
+    sincronizar($("extra-agents-rows"), x.sessoes, function (item) { return item.id; }, criarLinhaErro, atualizarLinhaExtra);
+    setTxt($("extra-agents-cursor"), !x.ativo ? "" : c.estado === "ok" ? "cursor-agent: último chat há " + duracao(agoraS() - c.ultimo) + " · " + plural(c.chats, "chat local", "chats locais")
+      : c.estado === "sem_dado" ? "cursor-agent: nenhum chat local" : "");
+  }
+  function atualizarLinhaRede(tr, item) {
+    var r = tr._r, nomes = { local: "local", privada: "rede privada", tailnet: "tailnet", internet: "internet" };
+    if (r.familia !== item.familia) { r.familia = item.familia; r.logo.replaceChildren(icone(doc, iconeDoAgente(item.familia))); }
+    setTxt(r.rotulo, m(item.rotulo));
+    setTxt(r.detalhe, plural(item.conexoes, "conexão", "conexões"));
+    var cls = item.enviados + item.recebidos > 0 ? "status good" : "status idle";
+    if (r.status.className !== cls) r.status.className = cls;
+    setTxt(r.estado, "↑ " + fmtBytes(item.enviados) + " · ↓ " + fmtBytes(item.recebidos));
+    setTxt(r.sub, item.destinos.length > 0 ? item.destinos.map(function (x) { return nomes[x.cat] + " " + fmtBytes(x.bytes); }).join(" · ") : "sem tráfego no último minuto");
+  }
+  function desenharRede(x) {      // bloco próprio: não mexe nas linhas de agente, nos blocos de presença, de erros e de outros agentes nem nos cartões do topo
+    var agora = agoraS(), nota = "", selos = { ativo: "ativa", pausado_carga: "pausada por carga", parado: "parada", encerrado: "encerrada", erro_captura: "erro" };
+    if (x.estado === "ativo") nota = ["Captura ativa", x.cpu !== null ? fmtNum(x.cpu, 0, 1) + "% de um núcleo" : "", x.eventos !== null ? fmtNum(x.eventos, 0, 0) + " eventos por segundo" : "",
+      x.perdidos > 0 ? plural(x.perdidos, "evento perdido", "eventos perdidos") : "", x.noTeto ? "contagem de conexões no teto" : ""].filter(Boolean).join(" · ");
+    else if (x.estado === "pausado_carga") nota = x.retoma !== null && x.retoma > agora ? "Captura pausada por carga; nova tentativa em " + duracao(x.retoma - agora) : "Captura pausada por carga";
+    else if (x.estado === "parado") nota = x.sinal !== null ? "Captura sem sinal há " + duracao(agora - x.sinal) : "Captura sem sinal";
+    else if (x.estado === "encerrado") nota = "Captura encerrada";
+    else if (x.estado === "erro_captura") nota = ["sessao", "provedor", "consumidor"].indexOf(x.motivo) >= 0 ? "Não foi possível abrir a sessão de captura" : "A captura parou com erro";
+    $("network").hidden = x.estado === null;
+    setTxt($("network-badge"), x.estado === null ? "" : selos[x.estado]);
+    sincronizar($("network-rows"), x.itens, function (item) { return item.id; }, criarLinhaErro, atualizarLinhaRede);
+    setTxt($("network-nota"), nota);
   }
 
   /* ---- limites de uso ---- */
@@ -1122,6 +1331,9 @@ function criarApp(doc, win, opcoes) {
     secao("agents", "de agentes", function () { desenharAgentes(agentes()); });
     secao("presence", "de presença por processo", function () { desenharPresenca(presencaDe(d)); });
     secao("presence-linux", "de presença no WSL", function () { desenharPresencaLinux(presencaLinuxDe(d)); });
+    secao("errors", "de erros de ferramenta", function () { desenharErros(errosDe(d)); });
+    secao("extra-agents", "de outros agentes", function () { desenharOutrosAgentes(outrosAgentesDe(d)); });
+    secao("network", "de rede", function () { desenharRede(redeDe(d)); });
     secao("limits", "de limites de uso", function () {
       var l; try { l = locais(); } catch (e) { l = []; }          // o erro da lista local é registrado pela seção dela
       desenharLimites(unificarCodex(contas(), l).contas);
@@ -1315,6 +1527,9 @@ var api = {
   numero: numero, mascararEmails: mascararEmails, snapshotParaExportar: snapshotParaExportar, haSegundos: haSegundos, duracao: duracao, quando: quando,
   resetEmPtBr: resetEmPtBr, textoReset: textoReset, dinheiro: dinheiro, fmtUsd: fmtUsd, fmtBrl: fmtBrl, fmtTokens: fmtTokens, maxBonito: maxBonito,
   agentesDe: agentesDe, contasDe: contasDe, consumoClaude5h: consumoClaude5h, gastosDe: gastosDe, servicosDe: servicosDe, pendenciasDe: pendenciasDe,
+  errosDe: errosDe,
+  outrosAgentesDe: outrosAgentesDe,
+  redeDe: redeDe, fmtBytes: fmtBytes,
   fontesComProblema: fontesComProblema, presencaDe: presencaDe, presencaLinuxDe: presencaLinuxDe, cotasLocaisDe: cotasLocaisDe, unificarCodex: unificarCodex, vigilanteDe: vigilanteDe, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;

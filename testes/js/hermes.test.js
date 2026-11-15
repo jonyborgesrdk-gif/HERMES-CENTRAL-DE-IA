@@ -340,7 +340,7 @@ test('contrato: a página só lê, na raiz do dados.json, campos que o coletor p
   a.abrirModal({ tipo: 'agente', chave: 'sess-1' }); a.abrirModal({ tipo: 'agente', chave: 'sess-2' }); a.abrirModal({ tipo: 'servico', chave: 'whatsapp' }); a.abrirModal({ tipo: 'conta', chave: 'claude:abc' });
   const fora = [...lidos].filter((k) => !(k in fixture) && k !== 'toJSON');
   assert.deepEqual(fora, []);
-  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'presenca_linux', 'vigilante2', 'cota_codex_local', 'cota_grok_bot', 'cota_cursor', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
+  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'presenca_linux', 'vigilante2', 'erros_agentes', 'sessoes_grok', 'sessoes_hermes', 'chat_cursor', 'rede_uso', 'cota_codex_local', 'cota_grok_bot', 'cota_cursor', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
 });
 
 /* ---------- segurança e privacidade ---------- */
@@ -1418,4 +1418,454 @@ test('Codex num cartão só: conta do Codex com erro nunca é escondida (exceç�
   assert.equal(codexEm(doc, 'limits-local-cards'), 1); assert.equal(txt('limits-local-badge'), '3 fontes');
   const outra = app(); outra.a.receber(contaCodexComNumeros(contaCodexComErro(clone(fixture))));
   assert.equal(codexEm(outra.doc, 'providers'), 1); assert.equal(codexEm(outra.doc, 'limits-local-cards'), 0);
+});
+
+/* ---------- E20: erros de ferramenta dos agentes (bloco próprio na seção de agentes; só listas fixas, números e o id curto) ---------- */
+const semErros = () => { const d = clone(fixture); delete d.erros_agentes; delete d.fontes.erros_agentes; return d; };
+const comErros = (mudancas) => { const d = clone(fixture); Object.assign(d.erros_agentes, mudancas); return d; };
+const linhasErro = (doc) => doc.getElementById('errors-rows').children;
+const lerLinhaErro = (tr) => {          // lê a linha pelo DOM: rótulo, detalhe, classe e texto do estado, e a linha de baixo (evidência e tempo)
+  const ds = tr.descendentes(), st = ds.find((e) => e.classList.contains('status'));
+  return { rotulo: nb(ds.find((e) => e.tag === 'strong').textContent), detalhe: nb(ds.find((e) => e.tag === 'small' && !e.classList.contains('status-sub')).textContent),
+           cls: st.className, estado: nb(st.textContent), sub: nb(ds.find((e) => e.classList.contains('status-sub')).textContent) };
+};
+test('errosDe: ausente, null, lista, estado "erro" e sem estado ficam inativos e zerados; a fixture dá 4 itens normalizados e as contagens', () => {
+  const vazio = { ativo: false, contagens: { aberto: 0, corrigido: 0, verificado: 0, sem_tratamento: 0, contado: 0 }, itens: [] };
+  const semEstado = clone(fixture); delete semEstado.erros_agentes.estado;
+  [semErros(), { erros_agentes: null }, { erros_agentes: [] }, comErros({ estado: 'erro' }), semEstado, undefined, null]
+    .forEach((d, i) => assert.deepEqual(Hermes.errosDe(d), vazio, 'caso ' + i));
+  const r = Hermes.errosDe(clone(fixture));
+  assert.equal(r.ativo, true);
+  assert.deepEqual(r.contagens, { aberto: 2, corrigido: 1, verificado: 1, sem_tratamento: 3, contado: 5 });
+  assert.deepEqual(r.itens, [
+    { id: '0a1b2c3d4e', agente: 'claude', estado: 'aberto', ferramenta: 'bash', classe: 'codigo_saida', codigo: 2, hora: T0 - 300, evidencia: null },
+    { id: '1b2c3d4e5f', agente: 'codex', estado: 'aberto', ferramenta: 'comando', classe: 'codigo_saida', codigo: 1, hora: T0 - 7200, evidencia: null },
+    { id: '2c3d4e5f6a', agente: 'claude', estado: 'corrigido', ferramenta: 'edit', classe: 'edicao', codigo: null, hora: T0 - 3600, evidencia: null },
+    { id: '3d4e5f6a7b', agente: 'claude', estado: 'verificado', ferramenta: 'write', classe: 'arquivo', codigo: null, hora: T0 - 600, evidencia: { tipo: 'teste', codigo: 0 } }
+  ]);
+});
+test('errosDe: id, agente e estado ruins descartam o item; ferramenta, classe, código, hora, evidência e contagens ruins viram valor neutro; no máximo 30 itens', () => {
+  const item = (extra) => Object.assign({ id: 'aaaaaaaaaa', agente: 'claude', ferramenta: 'bash', classe: 'codigo_saida', codigo: 2, hora: T0 - 60, estado: 'aberto', evidencia: null }, extra);
+  const de = (itens, contagens) => Hermes.errosDe({ erros_agentes: { estado: 'ok', contagens: contagens || {}, itens: itens } });
+  const um = (extra) => { const r = de([item(extra)]).itens; assert.equal(r.length, 1, JSON.stringify(extra)); return r[0]; };
+  assert.deepEqual(um({}), { id: 'aaaaaaaaaa', agente: 'claude', estado: 'aberto', ferramenta: 'bash', classe: 'codigo_saida', codigo: 2, hora: T0 - 60, evidencia: null });   // controle: o item-base passa
+  [{ id: '0A1B2C3D4E' }, { id: '0a1b2c3d4' }, { id: '0a1b2c3d4<' }, { agente: 'grok' }, { estado: 'contado' }, { estado: 'sem_tratamento' }, { estado: 'pendente' }]
+    .forEach((extra) => assert.deepEqual(de([item(extra)]).itens, [], 'não descartou ' + JSON.stringify(extra)));
+  const repetido = de([item({ codigo: 1 }), item({ codigo: 2 })]).itens;
+  assert.equal(repetido.length, 1); assert.equal(repetido[0].codigo, 1);
+  ['serrote', 'constructor'].forEach((v) => { assert.equal(um({ ferramenta: v }).ferramenta, 'outra'); assert.equal(um({ classe: v }).classe, 'outra'); });
+  [2.5, '2', true].forEach((v) => assert.equal(um({ codigo: v }).codigo, null, 'codigo ' + JSON.stringify(v)));
+  ['123', 0, -5].forEach((v) => assert.equal(um({ hora: v }).hora, null, 'hora ' + JSON.stringify(v)));
+  assert.equal(um({ evidencia: { tipo: 'teste', codigo: 0 } }).evidencia, null);              // evidência só vale em item verificado
+  [{ tipo: 'olhei', codigo: 0 }, { tipo: 'teste', codigo: 0.5 }, { tipo: 'comando', codigo: '0' }]
+    .forEach((ev) => assert.equal(um({ estado: 'verificado', evidencia: ev }).evidencia, null, 'evidencia ' + JSON.stringify(ev)));
+  assert.deepEqual(um({ estado: 'verificado', evidencia: { tipo: 'comando', codigo: 1 } }).evidencia, { tipo: 'comando', codigo: 1 });   // controle
+  assert.deepEqual(de([], { aberto: -1, corrigido: NaN, verificado: '3', sem_tratamento: -2, contado: 'muitos' }).contagens,
+    { aberto: 0, corrigido: 0, verificado: 0, sem_tratamento: 0, contado: 0 });
+  const muitos = Array.from({ length: 40 }, (_, i) => item({ id: i.toString(16).padStart(10, '0') }));
+  const r = de(muitos).itens;
+  assert.equal(r.length, 30); assert.deepEqual(r.map((x) => x.id), muitos.slice(0, 30).map((x) => x.id));
+});
+test('erros de ferramenta: com a fixture o bloco aparece logo depois do WSL, com 4 linhas de texto fixo, e o resto da seção de agentes não muda', () => {
+  assert.match(html, /<div class="presence" id="errors" role="group" aria-label="Erros de ferramenta dos agentes" hidden><div class="presence-head"><span>Erros de ferramenta<\/span><span class="badge" id="errors-badge"><\/span>/);
+  const sem = app(); sem.a.receber(semErros());
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  const bloco = doc.getElementById('errors'), agentes = doc.getElementById('agents');
+  assert.equal(bloco.parentNode, agentes);
+  assert.equal(agentes.children[agentes.children.indexOf(bloco) - 1], doc.getElementById('presence-linux'));
+  assert.equal(bloco.hidden, false);
+  assert.equal(txt('errors-badge'), '2 abertos'); assert.equal(doc.getElementById('errors-badge').classList.contains('warn'), true);
+  assert.deepEqual(linhasErro(doc).map(lerLinhaErro), [
+    { rotulo: 'Bash · código de saída 2', detalhe: 'Claude Code · id 0a1b2c3d4e', cls: 'status wait', estado: 'aberto', sub: 'há ' + Hermes.duracao(310) },
+    { rotulo: 'comando · código de saída 1', detalhe: 'Codex · id 1b2c3d4e5f', cls: 'status wait', estado: 'aberto', sub: 'há ' + Hermes.duracao(7210) },
+    { rotulo: 'Edit · edição não aplicada', detalhe: 'Claude Code · id 2c3d4e5f6a', cls: 'status idle', estado: 'corrigido', sub: 'há ' + Hermes.duracao(3610) },
+    { rotulo: 'Write · arquivo', detalhe: 'Claude Code · id 3d4e5f6a7b', cls: 'status good', estado: 'verificado', sub: 'teste · código 0 · há ' + Hermes.duracao(610) }
+  ]);
+  assert.equal(txt('errors-resumo'), 'Em 30 dias: 2 abertos · 1 corrigido · 1 verificado · 3 sem tratamento · 5 só contados (permissão negada, interrupção, erro de API)');
+  assert.match(txt('errors-nota'), /evidência anexada/); assert.match(txt('errors-nota'), /painel-erro ver/);
+  ['agent-rows', 'agent-empty', 'presence', 'presence-rows', 'presence-linux', 'presence-linux-rows', 'k-trab', 'k-total', 'k-online-texto', 'nav-agentes'].forEach((id) => {
+    assert.equal(txt(id), sem.txt(id), 'texto mudou: ' + id);
+    assert.equal(doc.getElementById(id).hidden, sem.doc.getElementById(id).hidden, 'visibilidade mudou: ' + id);
+  });
+});
+test('erros de ferramenta: sem a chave, com estado "erro" ou sem estado o bloco fica oculto, sem linhas e sem textos', () => {
+  const semEstado = clone(fixture); delete semEstado.erros_agentes.estado;
+  const ver = ({ doc, txt }, caso) => {
+    assert.equal(doc.getElementById('errors').hidden, true, 'visível: ' + caso); assert.equal(linhasErro(doc).length, 0, 'linhas: ' + caso);
+    assert.equal(txt('errors-resumo'), '', 'resumo: ' + caso); assert.equal(txt('errors-nota'), '', 'nota: ' + caso);
+  };
+  [semErros(), comErros({ estado: 'erro' }), semEstado].forEach((d, i) => {
+    const novo = app(); novo.a.receber(clone(d)); ver(novo, 'app novo, caso ' + i);
+    const depois = app(); depois.a.receber(clone(fixture)); depois.a.receber(clone(d)); ver(depois, 'depois da fixture, caso ' + i);
+  });
+});
+test('erros de ferramenta: ativo sem itens mostra "nenhum aberto" sem destaque, nenhuma linha e o resumo com as contagens', () => {
+  const d = comErros({ itens: [], contagens: { aberto: 0, corrigido: 0, verificado: 0, sem_tratamento: 2, contado: 7 } });
+  const novo = app(); novo.a.receber(clone(d));
+  const depois = app(); depois.a.receber(clone(fixture)); depois.a.receber(clone(d));
+  [novo, depois].forEach(({ doc, txt }) => {
+    assert.equal(doc.getElementById('errors').hidden, false);
+    assert.equal(txt('errors-badge'), 'nenhum aberto'); assert.equal(doc.getElementById('errors-badge').classList.contains('warn'), false);
+    assert.equal(linhasErro(doc).length, 0);
+    assert.equal(txt('errors-resumo'), 'Em 30 dias: 0 abertos · 0 corrigidos · 0 verificados · 2 sem tratamento · 7 só contados (permissão negada, interrupção, erro de API)');
+  });
+});
+test('erros de ferramenta: valor hostil vira texto fixo e não cria elemento; id hostil não cria linha', () => {
+  const hostil = { id: 'abcdef0123', agente: 'claude', ferramenta: '<b>x</b>', classe: '<img src=x onerror=alert(1)>', codigo: null, hora: T0 - 60, estado: 'aberto', evidencia: null };
+  const idHostil = Object.assign({}, hostil, { id: '<script>', ferramenta: 'bash', classe: 'codigo_saida' });
+  const { a, doc } = app(); a.receber(comErros({ itens: [hostil, idHostil] }));
+  const bloco = doc.getElementById('errors');
+  assert.equal(linhasErro(doc).length, 1);
+  const l = lerLinhaErro(linhasErro(doc)[0]);
+  assert.equal(l.rotulo, 'outra ferramenta · outro erro'); assert.equal(l.detalhe, 'Claude Code · id abcdef0123');
+  assert.equal(bloco.descendentes().filter((e) => ['img', 'b', 'script'].includes(e.tag)).length, 0);
+  assert.ok(!/onerror|<b>|script/.test(nb(bloco.textContent)), 'texto hostil no bloco');
+  bloco.descendentes().forEach((e) => Object.values(e.attrs).forEach((v) => assert.ok(!/onerror|<b>|script/.test(v), 'texto hostil em atributo')));
+});
+test('erros de ferramenta: atualização ao vivo tira a linha que saiu e reaproveita o mesmo elemento da que mudou de estado', () => {
+  const { a, doc } = app(); a.receber(clone(fixture));
+  const antes = linhasErro(doc)[0];
+  assert.equal(lerLinhaErro(antes).detalhe, 'Claude Code · id 0a1b2c3d4e'); assert.equal(lerLinhaErro(antes).cls, 'status wait');
+  const d = clone(fixture);
+  d.erros_agentes.itens = d.erros_agentes.itens.filter((i) => i.id !== '1b2c3d4e5f');
+  Object.assign(d.erros_agentes.itens.find((i) => i.id === '0a1b2c3d4e'), { estado: 'verificado', evidencia: { tipo: 'comando', codigo: 1 } });
+  a.receber(d);
+  const linhas = linhasErro(doc);
+  assert.equal(linhas.length, 3);
+  assert.deepEqual(linhas.map((tr) => lerLinhaErro(tr).detalhe), ['Claude Code · id 0a1b2c3d4e', 'Claude Code · id 2c3d4e5f6a', 'Claude Code · id 3d4e5f6a7b']);
+  assert.equal(linhas[0], antes);
+  const agora = lerLinhaErro(antes);
+  assert.equal(agora.cls, 'status good'); assert.equal(agora.estado, 'verificado');
+  assert.equal(agora.sub, 'comando · código 1 · há ' + Hermes.duracao(310));
+});
+test('erros de ferramenta que lançam não derrubam a lista de agentes nem o bloco do WSL; a leitura boa seguinte desenha as 4 linhas', () => {
+  const base = app(); silenciarErros(() => base.a.receber(semErros()));
+  const d = clone(fixture);
+  Object.defineProperty(d.erros_agentes, 'itens', { enumerable: true, get() { throw new Error('boom erros'); } });
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => {
+    assert.doesNotThrow(() => a.receber(d));
+    assert.equal(erros.length, 1); assert.match(String(erros[0][0]), /erros de ferramenta/); assert.match(String(erros[0][1]), /boom erros/);
+  });
+  ['agent-rows', 'presence-linux'].forEach((id) => {
+    assert.equal(txt(id), base.txt(id), 'texto mudou: ' + id);
+    assert.equal(doc.getElementById(id).hidden, base.doc.getElementById(id).hidden, 'visibilidade mudou: ' + id);
+  });
+  silenciarErros(() => a.receber(clone(fixture)));
+  assert.equal(linhasErro(doc).length, 4);
+});
+
+/* ---------- E21: outros agentes por sessão (bloco próprio na seção de agentes; só listas fixas, números, modelo filtrado e a chave curta) ---------- */
+const CHAVES_EXTRA = ['sessoes_grok', 'sessoes_hermes', 'chat_cursor'];
+const semExtras = () => { const d = clone(fixture); CHAVES_EXTRA.forEach((k) => { delete d[k]; delete d.fontes[k]; }); return d; };
+const linhasExtra = (doc) => doc.getElementById('extra-agents-rows').children;
+test('outrosAgentesDe: ausente, null, {}, as três como lista, como null e com estado "erro" ficam inativos; só sem_dado fica inativo com o cursor sem_dado; a fixture dá 3 sessões e o último chat', () => {
+  const vazio = { ativo: false, sessoes: [], cursor: { estado: null, ultimo: null, chats: 0 } };
+  const as3 = (f) => Object.fromEntries(CHAVES_EXTRA.map((k) => [k, f(k)]));
+  const comEstado = (estado) => { const d = clone(fixture); CHAVES_EXTRA.forEach((k) => { d[k].estado = estado; }); return d; };
+  [undefined, null, {}, semExtras(), as3(() => []), as3(() => null), as3(() => ({ estado: 'erro' })), comEstado('erro')]
+    .forEach((d, i) => assert.deepEqual(Hermes.outrosAgentesDe(d), vazio, 'caso ' + i));
+  const soSemDado = { ativo: false, sessoes: [], cursor: { estado: 'sem_dado', ultimo: null, chats: 0 } };
+  assert.deepEqual(Hermes.outrosAgentesDe(as3(() => ({ estado: 'sem_dado' }))), soSemDado);
+  assert.deepEqual(Hermes.outrosAgentesDe(comEstado('sem_dado')), soSemDado);       // sem_dado com sessões e data no bloco: nada passa
+  assert.deepEqual(Hermes.outrosAgentesDe(clone(fixture)), {
+    ativo: true,
+    sessoes: [
+      { id: 'grok:a1b2c3d4e5', ferramenta: 'grok', estado: 'trabalhando', origem: null, modelo: 'grok-4.7', contexto: 25, tokens: 2000000, chamadas: 34, ultima: 'terminal', atividade: 1793433692 },
+      { id: 'grok:b2c3d4e5f6', ferramenta: 'grok', estado: 'ocioso', origem: null, modelo: null, contexto: null, tokens: null, chamadas: null, ultima: null, atividade: 1793426512 },
+      { id: 'hermes:c3d4e5f6a7', ferramenta: 'hermes', estado: 'ativa', origem: 'whatsapp', modelo: 'claude-opus-5-5', contexto: null, tokens: 52000, chamadas: 1, ultima: 'web', atividade: 1793433112 }
+    ],
+    cursor: { estado: 'ok', ultimo: 1793347312, chats: 1 }
+  });
+});
+test('outrosAgentesDe: chave, estado e item ruins descartam a sessão; origem, modelo, tokens, chamadas, contexto, horário e última ferramenta ruins viram valor neutro; no máximo 20 do Grok e 50 do Hermes', () => {
+  const sG = (extra) => Object.assign({ chave: 'aaaaaaaaaa', ferramenta: 'grok', estado: 'trabalhando', modelo: 'grok-4.7', contexto_pct: 50, tokens: { entrada: 100, saida: 20 }, chamadas: 3, ultima_ferramenta: 'busca', atividade_epoch: T0 - 60 }, extra);
+  const sH = (extra) => Object.assign({ chave: 'aaaaaaaaaa', ferramenta: 'hermes', estado: 'ativa', origem: 'cli', modelo: 'claude-opus-5-5', tokens: { entrada: 100, saida: 20 }, chamadas: 3, ultima_ferramenta: 'busca', atividade_epoch: T0 - 60 }, extra);
+  const de = (grok, hermes) => Hermes.outrosAgentesDe({ sessoes_grok: { estado: 'ok', sessoes: grok || [] }, sessoes_hermes: { estado: 'ok', sessoes: hermes || [] } }).sessoes;
+  const umG = (extra) => { const r = de([sG(extra)]); assert.equal(r.length, 1, 'grok ' + JSON.stringify(extra)); return r[0]; };
+  const umH = (extra) => { const r = de([], [sH(extra)]); assert.equal(r.length, 1, 'hermes ' + JSON.stringify(extra)); return r[0]; };
+  assert.deepEqual(umG({}), { id: 'grok:aaaaaaaaaa', ferramenta: 'grok', estado: 'trabalhando', origem: null, modelo: 'grok-4.7', contexto: 50, tokens: 120, chamadas: 3, ultima: 'busca', atividade: T0 - 60 });   // controle
+  assert.deepEqual(umH({}), { id: 'hermes:aaaaaaaaaa', ferramenta: 'hermes', estado: 'ativa', origem: 'cli', modelo: 'claude-opus-5-5', contexto: null, tokens: 120, chamadas: 3, ultima: 'busca', atividade: T0 - 60 });   // controle
+  [{ chave: 'AAAAAAAAAA' }, { chave: 'aaaaaaaaa' }, { chave: 'aaaaaaaaaaa' }, { chave: 'aaaaaaaaa<' }, { chave: 1234567890 }, { chave: null },
+   { estado: 'ativa' }, { estado: '__proto__' }, { estado: 'constructor' }, { estado: null }]
+    .forEach((extra) => assert.deepEqual(de([sG(extra)]), [], 'grok não descartou ' + JSON.stringify(extra)));
+  [{ chave: 'AAAAAAAAAA' }, { chave: 'aaaaaaaaa<' }, { estado: 'trabalhando' }, { estado: 'esperando' }, { estado: '__proto__' }, { estado: 'constructor' }]
+    .forEach((extra) => assert.deepEqual(de([], [sH(extra)]), [], 'hermes não descartou ' + JSON.stringify(extra)));
+  const repG = de([sG({ chamadas: 1 }), sG({ chamadas: 2 })]), repH = de([], [sH({ chamadas: 1 }), sH({ chamadas: 2 })]);
+  assert.equal(repG.length, 1); assert.equal(repG[0].chamadas, 1); assert.equal(repH.length, 1); assert.equal(repH[0].chamadas, 1);
+  assert.deepEqual(de([null, 'aaaaaaaaaa', 7, [sG({})], sG({ chave: 'bbbbbbbbbb' })]).map((s) => s.id), ['grok:bbbbbbbbbb']);   // item que não é objeto: sem linha
+  assert.deepEqual(de([sG({})], [sH({})]).map((s) => s.id), ['grok:aaaaaaaaaa', 'hermes:aaaaaaaaaa']);                           // mesma chave nas duas ferramentas: duas linhas
+  ['telegram', '__proto__', 'constructor', null, 5].forEach((v) => assert.equal(umH({ origem: v }).origem, 'outra', 'origem ' + JSON.stringify(v)));
+  ['Grok-4', 'grok 4', 42, '-grok', 'a'.repeat(65)].forEach((v) => {
+    assert.equal(umG({ modelo: v }).modelo, null, 'modelo grok ' + JSON.stringify(v)); assert.equal(umH({ modelo: v }).modelo, null, 'modelo hermes ' + JSON.stringify(v));
+  });
+  assert.equal(umG({ modelo: 'outro modelo' }).modelo, 'outro modelo'); assert.equal(umH({ modelo: 'outro modelo' }).modelo, 'outro modelo');
+  [{ entrada: -1, saida: 20 }, { entrada: 1.5, saida: 20 }, { entrada: '100', saida: 20 }].forEach((t) => {
+    assert.equal(umG({ tokens: t }).tokens, null, 'tokens grok ' + JSON.stringify(t)); assert.equal(umH({ tokens: t }).tokens, null, 'tokens hermes ' + JSON.stringify(t));
+  });
+  [-1, 2.5, '3', true].forEach((v) => assert.equal(umG({ chamadas: v }).chamadas, null, 'chamadas ' + JSON.stringify(v)));
+  [-0.5, 100.5, '50', true].forEach((v) => assert.equal(umG({ contexto_pct: v }).contexto, null, 'contexto ' + JSON.stringify(v)));
+  assert.equal(umG({ contexto_pct: 0 }).contexto, 0); assert.equal(umG({ contexto_pct: 100 }).contexto, 100);   // controle: as pontas valem
+  [0, -5, '1793433652', true].forEach((v) => assert.equal(umG({ atividade_epoch: v }).atividade, null, 'atividade ' + JSON.stringify(v)));
+  ['serrote', '__proto__', 'constructor', null].forEach((v) => assert.equal(umG({ ultima_ferramenta: v }).ultima, null, 'ultima ' + JSON.stringify(v)));
+  const hex = (i) => i.toString(16).padStart(10, '0');
+  const g25 = Array.from({ length: 25 }, (_, i) => sG({ chave: hex(i) })), h55 = Array.from({ length: 55 }, (_, i) => sH({ chave: hex(i) }));
+  const lim = de(g25, h55);
+  assert.deepEqual(lim.filter((s) => s.ferramenta === 'grok').map((s) => s.id), g25.slice(0, 20).map((s) => 'grok:' + s.chave));
+  assert.deepEqual(lim.filter((s) => s.ferramenta === 'hermes').map((s) => s.id), h55.slice(0, 50).map((s) => 'hermes:' + s.chave));
+  assert.deepEqual(Hermes.outrosAgentesDe({ sessoes_grok: { estado: 'ok', sessoes: [] } }), { ativo: true, sessoes: [], cursor: { estado: null, ultimo: null, chats: 0 } });
+  assert.deepEqual(Hermes.outrosAgentesDe({ chat_cursor: { estado: 'ok', ultimo_chat_epoch: '1793347312', chats: 1 } }), { ativo: false, sessoes: [], cursor: { estado: null, ultimo: null, chats: 0 } });
+  const semCursor = Hermes.outrosAgentesDe({});
+  assert.deepStrictEqual(Hermes.outrosAgentesDe({ chat_cursor: { estado: 'ok', ultimo_chat_epoch: 0, chats: 3 } }), semCursor);
+  assert.deepStrictEqual(Hermes.outrosAgentesDe({ chat_cursor: { estado: 'ok', ultimo_chat_epoch: -5, chats: 3 } }), semCursor);
+});
+test('outros agentes: com a fixture o bloco aparece logo depois do de erros, com 3 linhas de texto fixo e o rodapé do cursor-agent, e o resto da seção de agentes não muda', () => {
+  assert.ok(html.includes('<div class="presence" id="extra-agents" role="group" aria-label="Sessões de outros agentes" hidden>'));
+  const sem = app(); sem.a.receber(semExtras());
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  const bloco = doc.getElementById('extra-agents'), agentes = doc.getElementById('agents');
+  assert.equal(bloco.parentNode, agentes);
+  assert.equal(agentes.children[agentes.children.indexOf(bloco) - 1], doc.getElementById('errors'));
+  assert.equal(bloco.hidden, false);
+  assert.equal(txt('extra-agents-badge'), '3 sessões');
+  assert.deepEqual(linhasExtra(doc).map(lerLinhaErro), [
+    { rotulo: 'Grok CLI', detalhe: 'grok-4.7 · ' + Hermes.fmtTokens(2000000), cls: 'status work', estado: 'trabalhando', sub: '34 chamadas · última: terminal · contexto 25% · atividade há ' + Hermes.duracao(30) },
+    { rotulo: 'Grok CLI', detalhe: '', cls: 'status idle', estado: 'ocioso', sub: 'atividade há ' + Hermes.duracao(7210) },
+    { rotulo: 'Hermes · WhatsApp', detalhe: 'claude-opus-5-5 · ' + Hermes.fmtTokens(52000), cls: 'status good', estado: 'ativa', sub: '1 chamada · última: web · atividade há ' + Hermes.duracao(610) }
+  ]);
+  linhasExtra(doc).map(lerLinhaErro).forEach((l, i) => assert.ok(l.detalhe.length <= 40, 'detalhe com mais de 40 caracteres na linha ' + i));
+  assert.equal(txt('extra-agents-cursor'), 'cursor-agent: último chat há ' + Hermes.duracao(86410) + ' · 1 chat local');
+  ['agent-rows', 'agent-empty', 'presence', 'presence-rows', 'presence-linux', 'presence-linux-rows', 'errors', 'errors-rows', 'errors-badge', 'errors-resumo', 'k-trab', 'k-total', 'k-online-texto', 'nav-agentes'].forEach((id) => {
+    assert.equal(txt(id), sem.txt(id), 'texto mudou: ' + id);
+    assert.equal(doc.getElementById(id).hidden, sem.doc.getElementById(id).hidden, 'visibilidade mudou: ' + id);
+  });
+});
+test('outros agentes: sem as três chaves, com as três em "erro" e com as três em sem_dado o bloco fica oculto, sem linhas e sem rodapé', () => {
+  const comEstado = (estado) => { const d = clone(fixture); CHAVES_EXTRA.forEach((k) => { d[k].estado = estado; }); return d; };
+  const ver = ({ doc, txt }, caso) => {
+    assert.equal(doc.getElementById('extra-agents').hidden, true, 'visível: ' + caso); assert.equal(linhasExtra(doc).length, 0, 'linhas: ' + caso);
+    assert.equal(txt('extra-agents-cursor'), '', 'rodapé: ' + caso);
+  };
+  [semExtras(), comEstado('erro'), comEstado('sem_dado')].forEach((d, i) => {
+    const novo = app(); novo.a.receber(clone(d)); ver(novo, 'app novo, caso ' + i);
+    const depois = app(); depois.a.receber(clone(fixture)); depois.a.receber(clone(d)); ver(depois, 'depois da fixture, caso ' + i);
+  });
+});
+test('outros agentes: ativo sem sessões mostra "nenhuma sessão", nenhuma linha e o rodapé conforme o estado do cursor-agent', () => {
+  const d = clone(fixture);
+  d.sessoes_grok = { estado: 'ok', sessoes: [] }; d.sessoes_hermes = { estado: 'erro' }; d.chat_cursor = { estado: 'sem_dado' };
+  const novo = app(); novo.a.receber(clone(d));
+  const depois = app(); depois.a.receber(clone(fixture)); depois.a.receber(clone(d));
+  [novo, depois].forEach(({ a, doc, txt }, i) => {
+    assert.equal(doc.getElementById('extra-agents').hidden, false, 'oculto: caso ' + i);
+    assert.equal(txt('extra-agents-badge'), 'nenhuma sessão'); assert.equal(linhasExtra(doc).length, 0);
+    assert.equal(txt('extra-agents-cursor'), 'cursor-agent: nenhum chat local');
+    const e = clone(d); e.chat_cursor = { estado: 'erro' }; a.receber(e);
+    assert.equal(txt('extra-agents-cursor'), '', 'rodapé com o cursor-agent em erro: caso ' + i);
+    assert.equal(doc.getElementById('extra-agents').hidden, false, 'oculto com o cursor-agent em erro: caso ' + i);
+  });
+});
+test('outros agentes: valor hostil vira texto fixo e não cria elemento; chave e estado hostis não criam linha', () => {
+  const H = '<img src=x onerror=alert(1)>';
+  const d = clone(fixture);
+  d.sessoes_grok.sessoes = [{ chave: H, ferramenta: 'grok', estado: 'trabalhando', atividade_epoch: T0 - 60 }, { chave: 'ddddeeeeff', ferramenta: 'grok', estado: H, atividade_epoch: T0 - 60 }];
+  d.sessoes_hermes.sessoes = [
+    { chave: 'deadbeef01', ferramenta: 'hermes', estado: 'ativa', origem: H, modelo: H, contexto_pct: '50', tokens: [1, 2], chamadas: 2, ultima_ferramenta: H, atividade_epoch: T0 - 60 },
+    { chave: H, ferramenta: 'hermes', estado: 'ativa', origem: 'cli', atividade_epoch: T0 - 60 },
+    { chave: 'deadbeef02', ferramenta: 'hermes', estado: H, origem: 'cli', atividade_epoch: T0 - 60 }
+  ];
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => { a.receber(d); assert.equal(erros.length, 0, 'alguma seção falhou com o valor hostil'); });
+  const bloco = doc.getElementById('extra-agents');
+  assert.equal(bloco.hidden, false); assert.equal(linhasExtra(doc).length, 1); assert.equal(txt('extra-agents-badge'), '1 sessão');
+  assert.deepEqual(lerLinhaErro(linhasExtra(doc)[0]), { rotulo: 'Hermes · outra origem', detalhe: '', cls: 'status good', estado: 'ativa', sub: '2 chamadas · atividade há ' + Hermes.duracao(70) });
+  assert.equal(bloco.descendentes().filter((e) => e.tag === 'img').length, 0);
+  assert.ok(!/onerror|<img|alert/.test(nb(bloco.textContent)), 'texto hostil no bloco');
+  bloco.descendentes().forEach((e) => Object.values(e.attrs).forEach((v) => assert.ok(!/onerror|<img|alert/.test(v), 'texto hostil em atributo')));
+});
+test('outros agentes: atualização ao vivo tira a linha que saiu e reaproveita o mesmo elemento da que mudou de estado', () => {
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  const antes = linhasExtra(doc)[0];
+  assert.equal(lerLinhaErro(antes).cls, 'status work'); assert.equal(lerLinhaErro(antes).estado, 'trabalhando');
+  const d = clone(fixture);
+  d.sessoes_grok.sessoes = d.sessoes_grok.sessoes.filter((s) => s.chave !== 'b2c3d4e5f6');
+  d.sessoes_grok.sessoes.find((s) => s.chave === 'a1b2c3d4e5').estado = 'esperando';
+  a.receber(d);
+  const linhas = linhasExtra(doc);
+  assert.equal(linhas.length, 2);
+  assert.equal(linhas[0], antes);
+  assert.deepEqual(linhas.map((tr) => lerLinhaErro(tr).rotulo), ['Grok CLI', 'Hermes · WhatsApp']);
+  const agora = lerLinhaErro(antes);
+  assert.equal(agora.cls, 'status wait'); assert.equal(agora.estado, 'esperando permissão');
+  assert.equal(txt('extra-agents-badge'), '2 sessões');
+});
+test('outros agentes que lançam não derrubam a lista de agentes nem o bloco de erros; a leitura boa seguinte desenha as 3 linhas', () => {
+  const base = app(); base.a.receber(clone(fixture));
+  const d = clone(fixture);
+  Object.defineProperty(d.sessoes_grok, 'sessoes', { enumerable: true, get() { throw new Error('boom extras'); } });
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => {
+    assert.doesNotThrow(() => a.receber(d));
+    assert.equal(erros.length, 1); assert.match(String(erros[0][0]), /outros agentes/); assert.match(String(erros[0][1]), /boom extras/);
+  });
+  ['agent-rows', 'errors'].forEach((id) => {
+    assert.equal(txt(id), base.txt(id), 'texto mudou: ' + id);
+    assert.equal(doc.getElementById(id).hidden, base.doc.getElementById(id).hidden, 'visibilidade mudou: ' + id);
+  });
+  silenciarErros(() => a.receber(clone(fixture)));
+  assert.equal(linhasExtra(doc).length, 3);
+});
+
+/* ---------- E22: rede por programa ---------- */
+const semRede = () => { const d = clone(fixture); delete d.rede_uso; delete d.fontes.rede_uso; return d; };
+const comRede = (mudancas) => { const d = clone(fixture); Object.assign(d.rede_uso, mudancas); return d; };
+const linhasRede = (doc) => doc.getElementById('network-rows').children;
+const parRede = (p) => ({ local: [0, 0], privada: [0, 0], tailnet: [0, 0], internet: [0, 0], ...p });
+const progRede = (produto, extra = {}) => ({ produto, rotulo: 'Programa ' + produto, familia: 'claude', tipo: 'cli', conexoes: 1, janela: parRede({ internet: [10, 10] }), total: parRede({}), ...extra });
+const REDE_VAZIA = { estado: null, itens: [], cpu: null, eventos: null, perdidos: 0, retoma: null, sinal: null, motivo: null, noTeto: false };
+test('fmtBytes: zero, negativo, NaN e texto dão "0 B"; base 1.000 com uma casa e vírgula decimal até TB', () => {
+  [0, -1, NaN, '1500', undefined, null, Infinity, true].forEach((v) => assert.equal(Hermes.fmtBytes(v), '0 B', 'valor ' + String(v)));
+  assert.equal(Hermes.fmtBytes(999), '999 B'); assert.equal(Hermes.fmtBytes(1000), '1 kB'); assert.equal(Hermes.fmtBytes(1500), '1,5 kB');
+  assert.equal(Hermes.fmtBytes(28000000), '28 MB'); assert.equal(Hermes.fmtBytes(2000000000), '2 GB'); assert.equal(Hermes.fmtBytes(3500000000000), '3,5 TB');
+});
+test('redeDe: ausente, null, lista, desligado e estado desconhecido dão estado null sem itens; a fixture dá 3 itens na ordem de bytes, com outros por último', () => {
+  [semRede(), { rede_uso: null }, { rede_uso: [] }, { rede_uso: 'ativo' }, comRede({ estado: 'desligado' }), comRede({ estado: 'serrote' }), comRede({ estado: '__proto__' }), undefined, null]
+    .forEach((d, i) => assert.deepStrictEqual(Hermes.redeDe(d), REDE_VAZIA, 'caso ' + i));
+  const r = Hermes.redeDe(clone(fixture));
+  assert.deepStrictEqual({ ...r, itens: null }, { estado: 'ativo', itens: null, cpu: 0.4, eventos: 1236, perdidos: 0, retoma: null, sinal: null, motivo: null, noTeto: false });
+  assert.deepStrictEqual(r.itens, [
+    { id: 'claude_cli', rotulo: 'Claude Code CLI', familia: 'claude', conexoes: 3, enviados: 1500000, recebidos: 28000000, destinos: [{ cat: 'internet', bytes: 29500000 }] },
+    { id: 'grok_cli', rotulo: 'Grok CLI', familia: 'grok', conexoes: 1, enviados: 302000, recebidos: 500, destinos: [{ cat: 'tailnet', bytes: 300000 }, { cat: 'local', bytes: 2500 }] },
+    { id: 'outros', rotulo: 'Outros programas', familia: 'outra', conexoes: 42, enviados: 1205000, recebidos: 5000000,
+      destinos: [{ cat: 'internet', bytes: 4200000 }, { cat: 'local', bytes: 2000000 }, { cat: 'privada', bytes: 5000 }] }
+  ]);
+});
+test('redeDe: produto, rótulo, família, par, conexões e motivo fora do formato; 40 programas no máximo; outros zerado não entra; ordem por bytes com empate pelo arquivo', () => {
+  const de = (programas, extra = {}) => Hermes.redeDe(comRede({ programas, outros: { conexoes: 0, janela: parRede({}) }, ...extra }));
+  const ids = (r) => r.itens.map((x) => x.id);
+  const r1 = de([null, [], 'texto', progRede('a b'), progRede('<img>'), progRede('Maiusculo'), progRede(''), progRede('x'.repeat(41)), progRede(7), progRede('outros'),
+                 progRede('ok_1'), progRede('ok_1', { rotulo: 'repetido' }), progRede('__proto__'), progRede('__proto__', { rotulo: 'repetido' }), progRede('y'.repeat(40))]);
+  assert.deepEqual(ids(r1), ['ok_1', '__proto__', 'y'.repeat(40)]);
+  assert.deepEqual(r1.itens.map((x) => x.rotulo), ['Programa ok_1', 'Programa __proto__', 'Programa ' + 'y'.repeat(40)]);
+  assert.deepEqual(ids(de([progRede('r0', { rotulo: '' }), progRede('r1', { rotulo: 'x'.repeat(61) }), progRede('r2', { rotulo: 42 }), progRede('r3', { rotulo: 'x'.repeat(60) })])), ['r3']);
+  ['serrote', '__proto__', null, 3, 'Claude'].forEach((f) => assert.equal(de([progRede('p', { familia: f })]).itens[0].familia, 'outra', 'familia ' + String(f)));
+  assert.equal(de([progRede('p', { familia: 'maestri' })]).itens[0].familia, 'maestri');
+  const ruins = de([progRede('p', { janela: { local: [1, 2, 3], privada: [-1, 5], tailnet: ['7', 7], internet: [1.5, 2] } }),
+                    progRede('q', { janela: { local: [true, 1], privada: [NaN, 1], tailnet: { 0: 1, 1: 2 }, internet: [100, 0] } }), progRede('z', { janela: [[1, 1]] })]).itens;
+  assert.deepEqual(ruins.map((x) => [x.id, x.enviados, x.recebidos, x.destinos]), [['q', 100, 0, [{ cat: 'internet', bytes: 100 }]], ['p', 0, 0, []], ['z', 0, 0, []]]);
+  [-1, 1.5, '3', true, null].forEach((c) => assert.equal(de([progRede('p', { conexoes: c })]).itens[0].conexoes, 0, 'conexoes ' + String(c)));
+  assert.equal(de([progRede('p', { conexoes: 5 })]).itens[0].conexoes, 5);
+  const iguais = de([progRede('p', { janela: { local: [1, 0], privada: [0, 1], tailnet: [1, 0], internet: [0, 1] } })]).itens[0];
+  assert.deepEqual(iguais.destinos.map((x) => x.cat), ['local', 'privada', 'tailnet', 'internet']);
+  ['sem_elevacao', '__proto__', 42, null].forEach((mo) => assert.equal(de([], { estado: 'erro_captura', motivo: mo }).motivo, 'outro', 'motivo ' + String(mo)));
+  assert.equal(de([], { estado: 'erro_captura' }).motivo, 'outro');
+  ['sessao', 'provedor', 'consumidor', 'outro'].forEach((mo) => assert.equal(de([], { estado: 'erro_captura', motivo: mo }).motivo, mo));
+  const p45 = Array.from({ length: 45 }, (_, i) => progRede('p' + i, { janela: parRede({ internet: [i, 0] }) }));
+  assert.deepEqual(ids(de(p45)), Array.from({ length: 40 }, (_, i) => 'p' + (44 - i)));
+  assert.deepEqual(ids(de([progRede('a')])), ['a']);
+  assert.deepEqual(ids(de([progRede('a')], { outros: { conexoes: 2, janela: parRede({}) } })), ['a', 'outros']);
+  assert.deepEqual(ids(de([progRede('a')], { outros: { conexoes: 0, janela: parRede({ local: [0, 1] }) } })), ['a', 'outros']);
+  [null, [], 'x', { conexoes: -3, janela: parRede({ local: [-1, 1] }) }].forEach((o) => assert.deepEqual(ids(de([progRede('a')], { outros: o })), ['a'], 'outros ' + JSON.stringify(o)));
+  assert.deepEqual(ids(de([progRede('b1', { janela: parRede({ local: [5, 0] }) }), progRede('a2', { janela: parRede({ internet: [0, 9] }) }),
+                           progRede('c3', { janela: parRede({ tailnet: [2, 3] }) }), progRede('d4', { janela: parRede({ privada: [9, 0] }) })])), ['a2', 'd4', 'b1', 'c3']);
+});
+test('rede: com a fixture o bloco aparece logo depois do de outros agentes, com selo, 3 linhas e a nota, e o resto da seção de agentes não muda', () => {
+  assert.ok(html.includes('<div class="presence" id="network" role="group" aria-label="Uso de rede por programa" hidden>'));
+  const sem = app(); sem.a.receber(semRede());
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  const bloco = doc.getElementById('network'), agentes = doc.getElementById('agents');
+  assert.equal(bloco.parentNode, agentes);
+  assert.equal(agentes.children[agentes.children.indexOf(bloco) - 1], doc.getElementById('extra-agents'));
+  assert.equal(bloco.hidden, false);
+  assert.equal(txt('network-badge'), 'ativa');
+  assert.deepEqual(linhasRede(doc).map(lerLinhaErro), [
+    { rotulo: 'Claude Code CLI', detalhe: '3 conexões', cls: 'status good', estado: '↑ ' + Hermes.fmtBytes(1500000) + ' · ↓ ' + Hermes.fmtBytes(28000000), sub: 'internet ' + Hermes.fmtBytes(29500000) },
+    { rotulo: 'Grok CLI', detalhe: '1 conexão', cls: 'status good', estado: '↑ ' + Hermes.fmtBytes(302000) + ' · ↓ ' + Hermes.fmtBytes(500), sub: 'tailnet ' + Hermes.fmtBytes(300000) + ' · local ' + Hermes.fmtBytes(2500) },
+    { rotulo: 'Outros programas', detalhe: '42 conexões', cls: 'status good', estado: '↑ ' + Hermes.fmtBytes(1205000) + ' · ↓ ' + Hermes.fmtBytes(5000000),
+      sub: 'internet ' + Hermes.fmtBytes(4200000) + ' · local ' + Hermes.fmtBytes(2000000) + ' · rede privada ' + Hermes.fmtBytes(5000) }
+  ]);
+  assert.equal(txt('network-nota'), nb('Captura ativa · 0,4% de um núcleo · ' + (1236).toLocaleString('pt-BR') + ' eventos por segundo'));
+  ['agent-rows', 'presence', 'presence-linux', 'errors', 'errors-rows', 'extra-agents', 'extra-agents-rows', 'k-trab', 'k-total', 'k-online-texto', 'nav-agentes'].forEach((id) => {
+    assert.equal(txt(id), sem.txt(id), 'texto mudou: ' + id);
+    assert.equal(doc.getElementById(id).hidden, sem.doc.getElementById(id).hidden, 'visibilidade mudou: ' + id);
+  });
+});
+test('rede: pausado por carga, parado, encerrado e erro de captura mostram selo e nota próprios; só a pausa mantém as linhas', () => {
+  const ver = (mud, selo, nota, linhas, caso) => {
+    const { a, doc, txt } = app(); a.receber(comRede(mud));
+    assert.equal(doc.getElementById('network').hidden, false, 'oculto: ' + caso);
+    assert.equal(txt('network-badge'), selo, 'selo: ' + caso); assert.equal(txt('network-nota'), nb(nota), 'nota: ' + caso);
+    assert.equal(linhasRede(doc).length, linhas, 'linhas: ' + caso);
+  };
+  ver({ estado: 'pausado_carga', retoma_em_epoch: T0 + 70 }, 'pausada por carga', 'Captura pausada por carga; nova tentativa em ' + Hermes.duracao(60), 3, 'pausa');
+  ver({ estado: 'pausado_carga', retoma_em_epoch: T0 + 5 }, 'pausada por carga', 'Captura pausada por carga', 3, 'pausa vencida');
+  ver({ estado: 'pausado_carga', retoma_em_epoch: 'amanhã' }, 'pausada por carga', 'Captura pausada por carga', 3, 'pausa sem retoma válido');
+  ver({ estado: 'parado', ultimo_sinal_epoch: T0 - 110 }, 'parada', 'Captura sem sinal há ' + Hermes.duracao(120), 0, 'parado');
+  ver({ estado: 'encerrado' }, 'encerrada', 'Captura encerrada', 0, 'encerrado');
+  ['sessao', 'provedor', 'consumidor'].forEach((mo) => ver({ estado: 'erro_captura', motivo: mo }, 'erro', 'Não foi possível abrir a sessão de captura', 0, mo));
+  [{ motivo: 'sem_elevacao' }, { motivo: 'outro' }, { motivo: '__proto__' }, {}, { motivo: 42 }, { motivo: null }]
+    .forEach((mo) => ver({ estado: 'erro_captura', ...mo }, 'erro', 'A captura parou com erro', 0, 'motivo ' + JSON.stringify(mo)));
+});
+test('rede: sem a chave, desligado e a chave como lista deixam o bloco oculto, sem linhas, selo e nota, num app novo e depois da fixture', () => {
+  const ver = ({ doc, txt }, caso) => {
+    assert.equal(doc.getElementById('network').hidden, true, 'visível: ' + caso); assert.equal(linhasRede(doc).length, 0, 'linhas: ' + caso);
+    assert.equal(txt('network-badge'), '', 'selo: ' + caso); assert.equal(txt('network-nota'), '', 'nota: ' + caso);
+  };
+  [semRede(), Object.assign(clone(fixture), { rede_uso: { estado: 'desligado' } }), Object.assign(clone(fixture), { rede_uso: [clone(fixture.rede_uso)] })].forEach((d, i) => {
+    const novo = app(); novo.a.receber(clone(d)); ver(novo, 'app novo, caso ' + i);
+    const depois = app(); depois.a.receber(clone(fixture)); depois.a.receber(clone(d)); ver(depois, 'depois da fixture, caso ' + i);
+  });
+});
+test('rede: programa sem tráfego fica ocioso; rótulo hostil vira texto literal sem criar elemento; eventos perdidos e teto entram na nota', () => {
+  const H = '<img src=x onerror=alert(1)>';
+  const d = clone(fixture);
+  d.rede_uso.programas = [progRede('quieto', { rotulo: 'Programa quieto', conexoes: 0, janela: parRede({}) }), progRede('hostil', { rotulo: H, familia: H, janela: parRede({ internet: [10, 0] }) })];
+  d.rede_uso.perdidos = 7; d.rede_uso.conexoes_no_teto = true;
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => { a.receber(d); assert.equal(erros.length, 0, 'alguma seção falhou com o valor hostil'); });
+  const bloco = doc.getElementById('network'), linhas = linhasRede(doc).map(lerLinhaErro);
+  assert.equal(linhas.length, 3);
+  assert.deepEqual(linhas[0], { rotulo: H, detalhe: '1 conexão', cls: 'status good', estado: '↑ 10 B · ↓ 0 B', sub: 'internet 10 B' });
+  assert.deepEqual(linhas[1], { rotulo: 'Programa quieto', detalhe: '0 conexões', cls: 'status idle', estado: '↑ 0 B · ↓ 0 B', sub: 'sem tráfego no último minuto' });
+  assert.equal(linhas[2].rotulo, 'Outros programas');
+  assert.equal(bloco.descendentes().filter((e) => e.tag === 'img').length, 0);
+  bloco.descendentes().forEach((e) => Object.values(e.attrs).forEach((v) => assert.ok(!/onerror|<img|alert/.test(v), 'texto hostil em atributo')));
+  assert.ok(txt('network-nota').endsWith(' · 7 eventos perdidos · contagem de conexões no teto'), txt('network-nota'));
+  [1, 'true', 'sim', {}, []].forEach((valor) => {
+    const dv = clone(fixture); dv.rede_uso.conexoes_no_teto = valor;
+    assert.equal(Hermes.redeDe(dv).noTeto, false, 'noTeto aceitou ' + JSON.stringify(valor));
+    const ap = app(); ap.a.receber(dv);
+    assert.ok(!ap.txt('network-nota').includes('teto'), 'nota com teto para ' + JSON.stringify(valor));
+  });
+});
+test('rede: atualização ao vivo tira a linha que saiu e reaproveita o mesmo elemento do programa que mudou', () => {
+  const { a, doc } = app(); a.receber(clone(fixture));
+  const antes = linhasRede(doc)[0], estadoAntes = lerLinhaErro(antes).estado;
+  assert.equal(lerLinhaErro(antes).rotulo, 'Claude Code CLI');
+  const d = clone(fixture);
+  d.rede_uso.programas = d.rede_uso.programas.filter((p) => p.produto !== 'grok_cli');
+  d.rede_uso.programas[0].janela.internet = [4000, 9000000];
+  a.receber(d);
+  const linhas = linhasRede(doc);
+  assert.equal(linhas.length, 2);
+  assert.equal(linhas[0], antes);
+  assert.deepEqual(linhas.map((tr) => lerLinhaErro(tr).rotulo), ['Claude Code CLI', 'Outros programas']);
+  assert.notEqual(lerLinhaErro(antes).estado, estadoAntes);
+  assert.equal(lerLinhaErro(antes).estado, '↑ ' + Hermes.fmtBytes(4000) + ' · ↓ ' + Hermes.fmtBytes(9000000));
+});
+test('rede que lança não derruba a lista de agentes, o bloco de erros nem o de outros agentes; a leitura boa seguinte desenha as 3 linhas', () => {
+  const base = app(); base.a.receber(clone(fixture));
+  const d = clone(fixture);
+  Object.defineProperty(d.rede_uso, 'programas', { enumerable: true, get() { throw new Error('boom rede'); } });
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => {
+    assert.doesNotThrow(() => a.receber(d));
+    assert.equal(erros.length, 1); assert.match(String(erros[0][0]), /de rede/); assert.match(String(erros[0][1]), /boom rede/);
+  });
+  ['agent-rows', 'errors', 'extra-agents'].forEach((id) => {
+    assert.equal(txt(id), base.txt(id), 'texto mudou: ' + id);
+    assert.equal(doc.getElementById(id).hidden, base.doc.getElementById(id).hidden, 'visibilidade mudou: ' + id);
+  });
+  silenciarErros(() => a.receber(clone(fixture)));
+  assert.equal(linhasRede(doc).length, 3);
 });

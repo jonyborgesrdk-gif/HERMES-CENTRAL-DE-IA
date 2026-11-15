@@ -50,7 +50,7 @@ class VigiaAuditoria(unittest.TestCase):
         with tempfile.TemporaryDirectory() as pasta:
             raiz = Path(pasta)
             for nome in ('servidor.py', 'sentinela.py', 'coletor', 'refresh-completo',
-                         'painel-missao', 'painel-pendencia', 'hooks/ao-parar'):
+                         'painel-missao', 'painel-pendencia', 'painel-erro', 'painel-rede', 'hooks/ao-parar'):
                 alvo = raiz / nome
                 alvo.parent.mkdir(exist_ok=True)
                 alvo.write_text('#!/usr/bin/env python3\nsubprocess.run([])\n', encoding='utf-8')
@@ -58,7 +58,7 @@ class VigiaAuditoria(unittest.TestCase):
                 caso = vigia.ProtecaoEstatica('test_producao_sem_subprocessos_desprotegidos')
                 with self.assertRaises(AssertionError) as erro:
                     caso.test_producao_sem_subprocessos_desprotegidos()
-            for nome in ('painel-missao:2', 'painel-pendencia:2', 'hooks/ao-parar:2'):
+            for nome in ('painel-missao:2', 'painel-pendencia:2', 'painel-erro:2', 'painel-rede:2', 'hooks/ao-parar:2'):
                 self.assertIn(nome, str(erro.exception))
 
 
