@@ -340,7 +340,7 @@ test('contrato: a página só lê, na raiz do dados.json, campos que o coletor p
   a.abrirModal({ tipo: 'agente', chave: 'sess-1' }); a.abrirModal({ tipo: 'agente', chave: 'sess-2' }); a.abrirModal({ tipo: 'servico', chave: 'whatsapp' }); a.abrirModal({ tipo: 'conta', chave: 'claude:abc' });
   const fora = [...lidos].filter((k) => !(k in fixture) && k !== 'toJSON');
   assert.deepEqual(fora, []);
-  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'presenca_linux', 'vigilante2', 'erros_agentes', 'cota_codex_local', 'cota_grok_bot', 'cota_cursor', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
+  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'presenca_linux', 'vigilante2', 'erros_agentes', 'sessoes_grok', 'sessoes_hermes', 'chat_cursor', 'cota_codex_local', 'cota_grok_bot', 'cota_cursor', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
 });
 
 /* ---------- segurança e privacidade ---------- */
@@ -1553,4 +1553,165 @@ test('erros de ferramenta que lançam não derrubam a lista de agentes nem o blo
   });
   silenciarErros(() => a.receber(clone(fixture)));
   assert.equal(linhasErro(doc).length, 4);
+});
+
+/* ---------- E21: outros agentes por sessão (bloco próprio na seção de agentes; só listas fixas, números, modelo filtrado e a chave curta) ---------- */
+const CHAVES_EXTRA = ['sessoes_grok', 'sessoes_hermes', 'chat_cursor'];
+const semExtras = () => { const d = clone(fixture); CHAVES_EXTRA.forEach((k) => { delete d[k]; delete d.fontes[k]; }); return d; };
+const linhasExtra = (doc) => doc.getElementById('extra-agents-rows').children;
+test('outrosAgentesDe: ausente, null, {}, as três como lista, como null e com estado "erro" ficam inativos; só sem_dado fica inativo com o cursor sem_dado; a fixture dá 3 sessões e o último chat', () => {
+  const vazio = { ativo: false, sessoes: [], cursor: { estado: null, ultimo: null, chats: 0 } };
+  const as3 = (f) => Object.fromEntries(CHAVES_EXTRA.map((k) => [k, f(k)]));
+  const comEstado = (estado) => { const d = clone(fixture); CHAVES_EXTRA.forEach((k) => { d[k].estado = estado; }); return d; };
+  [undefined, null, {}, semExtras(), as3(() => []), as3(() => null), as3(() => ({ estado: 'erro' })), comEstado('erro')]
+    .forEach((d, i) => assert.deepEqual(Hermes.outrosAgentesDe(d), vazio, 'caso ' + i));
+  const soSemDado = { ativo: false, sessoes: [], cursor: { estado: 'sem_dado', ultimo: null, chats: 0 } };
+  assert.deepEqual(Hermes.outrosAgentesDe(as3(() => ({ estado: 'sem_dado' }))), soSemDado);
+  assert.deepEqual(Hermes.outrosAgentesDe(comEstado('sem_dado')), soSemDado);       // sem_dado com sessões e data no bloco: nada passa
+  assert.deepEqual(Hermes.outrosAgentesDe(clone(fixture)), {
+    ativo: true,
+    sessoes: [
+      { id: 'grok:a1b2c3d4e5', ferramenta: 'grok', estado: 'trabalhando', origem: null, modelo: 'grok-4.7', contexto: 25, tokens: 2000000, chamadas: 34, ultima: 'terminal', atividade: 1793433692 },
+      { id: 'grok:b2c3d4e5f6', ferramenta: 'grok', estado: 'ocioso', origem: null, modelo: null, contexto: null, tokens: null, chamadas: null, ultima: null, atividade: 1793426512 },
+      { id: 'hermes:c3d4e5f6a7', ferramenta: 'hermes', estado: 'ativa', origem: 'whatsapp', modelo: 'claude-opus-5-5', contexto: null, tokens: 52000, chamadas: 1, ultima: 'web', atividade: 1793433112 }
+    ],
+    cursor: { estado: 'ok', ultimo: 1793347312, chats: 1 }
+  });
+});
+test('outrosAgentesDe: chave, estado e item ruins descartam a sessão; origem, modelo, tokens, chamadas, contexto, horário e última ferramenta ruins viram valor neutro; no máximo 20 do Grok e 50 do Hermes', () => {
+  const sG = (extra) => Object.assign({ chave: 'aaaaaaaaaa', ferramenta: 'grok', estado: 'trabalhando', modelo: 'grok-4.7', contexto_pct: 50, tokens: { entrada: 100, saida: 20 }, chamadas: 3, ultima_ferramenta: 'busca', atividade_epoch: T0 - 60 }, extra);
+  const sH = (extra) => Object.assign({ chave: 'aaaaaaaaaa', ferramenta: 'hermes', estado: 'ativa', origem: 'cli', modelo: 'claude-opus-5-5', tokens: { entrada: 100, saida: 20 }, chamadas: 3, ultima_ferramenta: 'busca', atividade_epoch: T0 - 60 }, extra);
+  const de = (grok, hermes) => Hermes.outrosAgentesDe({ sessoes_grok: { estado: 'ok', sessoes: grok || [] }, sessoes_hermes: { estado: 'ok', sessoes: hermes || [] } }).sessoes;
+  const umG = (extra) => { const r = de([sG(extra)]); assert.equal(r.length, 1, 'grok ' + JSON.stringify(extra)); return r[0]; };
+  const umH = (extra) => { const r = de([], [sH(extra)]); assert.equal(r.length, 1, 'hermes ' + JSON.stringify(extra)); return r[0]; };
+  assert.deepEqual(umG({}), { id: 'grok:aaaaaaaaaa', ferramenta: 'grok', estado: 'trabalhando', origem: null, modelo: 'grok-4.7', contexto: 50, tokens: 120, chamadas: 3, ultima: 'busca', atividade: T0 - 60 });   // controle
+  assert.deepEqual(umH({}), { id: 'hermes:aaaaaaaaaa', ferramenta: 'hermes', estado: 'ativa', origem: 'cli', modelo: 'claude-opus-5-5', contexto: null, tokens: 120, chamadas: 3, ultima: 'busca', atividade: T0 - 60 });   // controle
+  [{ chave: 'AAAAAAAAAA' }, { chave: 'aaaaaaaaa' }, { chave: 'aaaaaaaaaaa' }, { chave: 'aaaaaaaaa<' }, { chave: 1234567890 }, { chave: null },
+   { estado: 'ativa' }, { estado: '__proto__' }, { estado: 'constructor' }, { estado: null }]
+    .forEach((extra) => assert.deepEqual(de([sG(extra)]), [], 'grok não descartou ' + JSON.stringify(extra)));
+  [{ chave: 'AAAAAAAAAA' }, { chave: 'aaaaaaaaa<' }, { estado: 'trabalhando' }, { estado: 'esperando' }, { estado: '__proto__' }, { estado: 'constructor' }]
+    .forEach((extra) => assert.deepEqual(de([], [sH(extra)]), [], 'hermes não descartou ' + JSON.stringify(extra)));
+  const repG = de([sG({ chamadas: 1 }), sG({ chamadas: 2 })]), repH = de([], [sH({ chamadas: 1 }), sH({ chamadas: 2 })]);
+  assert.equal(repG.length, 1); assert.equal(repG[0].chamadas, 1); assert.equal(repH.length, 1); assert.equal(repH[0].chamadas, 1);
+  assert.deepEqual(de([null, 'aaaaaaaaaa', 7, [sG({})], sG({ chave: 'bbbbbbbbbb' })]).map((s) => s.id), ['grok:bbbbbbbbbb']);   // item que não é objeto: sem linha
+  assert.deepEqual(de([sG({})], [sH({})]).map((s) => s.id), ['grok:aaaaaaaaaa', 'hermes:aaaaaaaaaa']);                           // mesma chave nas duas ferramentas: duas linhas
+  ['telegram', '__proto__', 'constructor', null, 5].forEach((v) => assert.equal(umH({ origem: v }).origem, 'outra', 'origem ' + JSON.stringify(v)));
+  ['Grok-4', 'grok 4', 42, '-grok', 'a'.repeat(65)].forEach((v) => {
+    assert.equal(umG({ modelo: v }).modelo, null, 'modelo grok ' + JSON.stringify(v)); assert.equal(umH({ modelo: v }).modelo, null, 'modelo hermes ' + JSON.stringify(v));
+  });
+  assert.equal(umG({ modelo: 'outro modelo' }).modelo, 'outro modelo'); assert.equal(umH({ modelo: 'outro modelo' }).modelo, 'outro modelo');
+  [{ entrada: -1, saida: 20 }, { entrada: 1.5, saida: 20 }, { entrada: '100', saida: 20 }].forEach((t) => {
+    assert.equal(umG({ tokens: t }).tokens, null, 'tokens grok ' + JSON.stringify(t)); assert.equal(umH({ tokens: t }).tokens, null, 'tokens hermes ' + JSON.stringify(t));
+  });
+  [-1, 2.5, '3', true].forEach((v) => assert.equal(umG({ chamadas: v }).chamadas, null, 'chamadas ' + JSON.stringify(v)));
+  [-0.5, 100.5, '50', true].forEach((v) => assert.equal(umG({ contexto_pct: v }).contexto, null, 'contexto ' + JSON.stringify(v)));
+  assert.equal(umG({ contexto_pct: 0 }).contexto, 0); assert.equal(umG({ contexto_pct: 100 }).contexto, 100);   // controle: as pontas valem
+  [0, -5, '1793433652', true].forEach((v) => assert.equal(umG({ atividade_epoch: v }).atividade, null, 'atividade ' + JSON.stringify(v)));
+  ['serrote', '__proto__', 'constructor', null].forEach((v) => assert.equal(umG({ ultima_ferramenta: v }).ultima, null, 'ultima ' + JSON.stringify(v)));
+  const hex = (i) => i.toString(16).padStart(10, '0');
+  const g25 = Array.from({ length: 25 }, (_, i) => sG({ chave: hex(i) })), h55 = Array.from({ length: 55 }, (_, i) => sH({ chave: hex(i) }));
+  const lim = de(g25, h55);
+  assert.deepEqual(lim.filter((s) => s.ferramenta === 'grok').map((s) => s.id), g25.slice(0, 20).map((s) => 'grok:' + s.chave));
+  assert.deepEqual(lim.filter((s) => s.ferramenta === 'hermes').map((s) => s.id), h55.slice(0, 50).map((s) => 'hermes:' + s.chave));
+  assert.deepEqual(Hermes.outrosAgentesDe({ sessoes_grok: { estado: 'ok', sessoes: [] } }), { ativo: true, sessoes: [], cursor: { estado: null, ultimo: null, chats: 0 } });
+  assert.deepEqual(Hermes.outrosAgentesDe({ chat_cursor: { estado: 'ok', ultimo_chat_epoch: '1793347312', chats: 1 } }), { ativo: false, sessoes: [], cursor: { estado: null, ultimo: null, chats: 0 } });
+  const semCursor = Hermes.outrosAgentesDe({});
+  assert.deepStrictEqual(Hermes.outrosAgentesDe({ chat_cursor: { estado: 'ok', ultimo_chat_epoch: 0, chats: 3 } }), semCursor);
+  assert.deepStrictEqual(Hermes.outrosAgentesDe({ chat_cursor: { estado: 'ok', ultimo_chat_epoch: -5, chats: 3 } }), semCursor);
+});
+test('outros agentes: com a fixture o bloco aparece logo depois do de erros, com 3 linhas de texto fixo e o rodapé do cursor-agent, e o resto da seção de agentes não muda', () => {
+  assert.ok(html.includes('<div class="presence" id="extra-agents" role="group" aria-label="Sessões de outros agentes" hidden>'));
+  const sem = app(); sem.a.receber(semExtras());
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  const bloco = doc.getElementById('extra-agents'), agentes = doc.getElementById('agents');
+  assert.equal(bloco.parentNode, agentes);
+  assert.equal(agentes.children[agentes.children.indexOf(bloco) - 1], doc.getElementById('errors'));
+  assert.equal(bloco.hidden, false);
+  assert.equal(txt('extra-agents-badge'), '3 sessões');
+  assert.deepEqual(linhasExtra(doc).map(lerLinhaErro), [
+    { rotulo: 'Grok CLI', detalhe: 'grok-4.7 · ' + Hermes.fmtTokens(2000000), cls: 'status work', estado: 'trabalhando', sub: '34 chamadas · última: terminal · contexto 25% · atividade há ' + Hermes.duracao(30) },
+    { rotulo: 'Grok CLI', detalhe: '', cls: 'status idle', estado: 'ocioso', sub: 'atividade há ' + Hermes.duracao(7210) },
+    { rotulo: 'Hermes · WhatsApp', detalhe: 'claude-opus-5-5 · ' + Hermes.fmtTokens(52000), cls: 'status good', estado: 'ativa', sub: '1 chamada · última: web · atividade há ' + Hermes.duracao(610) }
+  ]);
+  linhasExtra(doc).map(lerLinhaErro).forEach((l, i) => assert.ok(l.detalhe.length <= 40, 'detalhe com mais de 40 caracteres na linha ' + i));
+  assert.equal(txt('extra-agents-cursor'), 'cursor-agent: último chat há ' + Hermes.duracao(86410) + ' · 1 chat local');
+  ['agent-rows', 'agent-empty', 'presence', 'presence-rows', 'presence-linux', 'presence-linux-rows', 'errors', 'errors-rows', 'errors-badge', 'errors-resumo', 'k-trab', 'k-total', 'k-online-texto', 'nav-agentes'].forEach((id) => {
+    assert.equal(txt(id), sem.txt(id), 'texto mudou: ' + id);
+    assert.equal(doc.getElementById(id).hidden, sem.doc.getElementById(id).hidden, 'visibilidade mudou: ' + id);
+  });
+});
+test('outros agentes: sem as três chaves, com as três em "erro" e com as três em sem_dado o bloco fica oculto, sem linhas e sem rodapé', () => {
+  const comEstado = (estado) => { const d = clone(fixture); CHAVES_EXTRA.forEach((k) => { d[k].estado = estado; }); return d; };
+  const ver = ({ doc, txt }, caso) => {
+    assert.equal(doc.getElementById('extra-agents').hidden, true, 'visível: ' + caso); assert.equal(linhasExtra(doc).length, 0, 'linhas: ' + caso);
+    assert.equal(txt('extra-agents-cursor'), '', 'rodapé: ' + caso);
+  };
+  [semExtras(), comEstado('erro'), comEstado('sem_dado')].forEach((d, i) => {
+    const novo = app(); novo.a.receber(clone(d)); ver(novo, 'app novo, caso ' + i);
+    const depois = app(); depois.a.receber(clone(fixture)); depois.a.receber(clone(d)); ver(depois, 'depois da fixture, caso ' + i);
+  });
+});
+test('outros agentes: ativo sem sessões mostra "nenhuma sessão", nenhuma linha e o rodapé conforme o estado do cursor-agent', () => {
+  const d = clone(fixture);
+  d.sessoes_grok = { estado: 'ok', sessoes: [] }; d.sessoes_hermes = { estado: 'erro' }; d.chat_cursor = { estado: 'sem_dado' };
+  const novo = app(); novo.a.receber(clone(d));
+  const depois = app(); depois.a.receber(clone(fixture)); depois.a.receber(clone(d));
+  [novo, depois].forEach(({ a, doc, txt }, i) => {
+    assert.equal(doc.getElementById('extra-agents').hidden, false, 'oculto: caso ' + i);
+    assert.equal(txt('extra-agents-badge'), 'nenhuma sessão'); assert.equal(linhasExtra(doc).length, 0);
+    assert.equal(txt('extra-agents-cursor'), 'cursor-agent: nenhum chat local');
+    const e = clone(d); e.chat_cursor = { estado: 'erro' }; a.receber(e);
+    assert.equal(txt('extra-agents-cursor'), '', 'rodapé com o cursor-agent em erro: caso ' + i);
+    assert.equal(doc.getElementById('extra-agents').hidden, false, 'oculto com o cursor-agent em erro: caso ' + i);
+  });
+});
+test('outros agentes: valor hostil vira texto fixo e não cria elemento; chave e estado hostis não criam linha', () => {
+  const H = '<img src=x onerror=alert(1)>';
+  const d = clone(fixture);
+  d.sessoes_grok.sessoes = [{ chave: H, ferramenta: 'grok', estado: 'trabalhando', atividade_epoch: T0 - 60 }, { chave: 'ddddeeeeff', ferramenta: 'grok', estado: H, atividade_epoch: T0 - 60 }];
+  d.sessoes_hermes.sessoes = [
+    { chave: 'deadbeef01', ferramenta: 'hermes', estado: 'ativa', origem: H, modelo: H, contexto_pct: '50', tokens: [1, 2], chamadas: 2, ultima_ferramenta: H, atividade_epoch: T0 - 60 },
+    { chave: H, ferramenta: 'hermes', estado: 'ativa', origem: 'cli', atividade_epoch: T0 - 60 },
+    { chave: 'deadbeef02', ferramenta: 'hermes', estado: H, origem: 'cli', atividade_epoch: T0 - 60 }
+  ];
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => { a.receber(d); assert.equal(erros.length, 0, 'alguma seção falhou com o valor hostil'); });
+  const bloco = doc.getElementById('extra-agents');
+  assert.equal(bloco.hidden, false); assert.equal(linhasExtra(doc).length, 1); assert.equal(txt('extra-agents-badge'), '1 sessão');
+  assert.deepEqual(lerLinhaErro(linhasExtra(doc)[0]), { rotulo: 'Hermes · outra origem', detalhe: '', cls: 'status good', estado: 'ativa', sub: '2 chamadas · atividade há ' + Hermes.duracao(70) });
+  assert.equal(bloco.descendentes().filter((e) => e.tag === 'img').length, 0);
+  assert.ok(!/onerror|<img|alert/.test(nb(bloco.textContent)), 'texto hostil no bloco');
+  bloco.descendentes().forEach((e) => Object.values(e.attrs).forEach((v) => assert.ok(!/onerror|<img|alert/.test(v), 'texto hostil em atributo')));
+});
+test('outros agentes: atualização ao vivo tira a linha que saiu e reaproveita o mesmo elemento da que mudou de estado', () => {
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  const antes = linhasExtra(doc)[0];
+  assert.equal(lerLinhaErro(antes).cls, 'status work'); assert.equal(lerLinhaErro(antes).estado, 'trabalhando');
+  const d = clone(fixture);
+  d.sessoes_grok.sessoes = d.sessoes_grok.sessoes.filter((s) => s.chave !== 'b2c3d4e5f6');
+  d.sessoes_grok.sessoes.find((s) => s.chave === 'a1b2c3d4e5').estado = 'esperando';
+  a.receber(d);
+  const linhas = linhasExtra(doc);
+  assert.equal(linhas.length, 2);
+  assert.equal(linhas[0], antes);
+  assert.deepEqual(linhas.map((tr) => lerLinhaErro(tr).rotulo), ['Grok CLI', 'Hermes · WhatsApp']);
+  const agora = lerLinhaErro(antes);
+  assert.equal(agora.cls, 'status wait'); assert.equal(agora.estado, 'esperando permissão');
+  assert.equal(txt('extra-agents-badge'), '2 sessões');
+});
+test('outros agentes que lançam não derrubam a lista de agentes nem o bloco de erros; a leitura boa seguinte desenha as 3 linhas', () => {
+  const base = app(); base.a.receber(clone(fixture));
+  const d = clone(fixture);
+  Object.defineProperty(d.sessoes_grok, 'sessoes', { enumerable: true, get() { throw new Error('boom extras'); } });
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => {
+    assert.doesNotThrow(() => a.receber(d));
+    assert.equal(erros.length, 1); assert.match(String(erros[0][0]), /outros agentes/); assert.match(String(erros[0][1]), /boom extras/);
+  });
+  ['agent-rows', 'errors'].forEach((id) => {
+    assert.equal(txt(id), base.txt(id), 'texto mudou: ' + id);
+    assert.equal(doc.getElementById(id).hidden, base.doc.getElementById(id).hidden, 'visibilidade mudou: ' + id);
+  });
+  silenciarErros(() => a.receber(clone(fixture)));
+  assert.equal(linhasExtra(doc).length, 3);
 });

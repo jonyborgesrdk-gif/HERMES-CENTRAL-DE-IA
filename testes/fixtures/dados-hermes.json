@@ -267,6 +267,27 @@
    "ultima_leitura_ok": 1793433709.0,
    "desatualizado": false
   },
+  "sessoes_grok": {
+   "ok": true,
+   "erro": null,
+   "hora": 1793433709.0,
+   "ultima_leitura_ok": 1793433709.0,
+   "desatualizado": false
+  },
+  "sessoes_hermes": {
+   "ok": true,
+   "erro": null,
+   "hora": 1793433709.0,
+   "ultima_leitura_ok": 1793433709.0,
+   "desatualizado": false
+  },
+  "chat_cursor": {
+   "ok": true,
+   "erro": null,
+   "hora": 1793433709.0,
+   "ultima_leitura_ok": 1793433709.0,
+   "desatualizado": false
+  },
   "erros_agentes": {
    "ok": true,
    "erro": null,
@@ -730,6 +751,17 @@
   "por_tipo": {"claude_code": 9, "codex": 4, "custom": 5, "generic_shell": 3, "outra": 0},
   "alertas": [{"tipo": "login", "desde_epoch": 1793433112.0}, {"tipo": "cota_baixa", "desde_epoch": 1793426512.0}]
  },
+ "sessoes_grok": {"estado": "ok", "sessoes": [
+   {"chave": "a1b2c3d4e5", "ferramenta": "grok", "estado": "trabalhando", "modelo": "grok-4.7", "contexto_pct": 25.0,
+    "tokens": {"entrada": 1970000, "saida": 30000, "cache_leitura": 900000, "cache_escrita": 0, "raciocinio": 5000, "total": 2905000},
+    "chamadas": 34, "ultima_ferramenta": "terminal", "atividade_epoch": 1793433692.0, "inicio_epoch": 1793430112.0},
+   {"chave": "b2c3d4e5f6", "ferramenta": "grok", "estado": "ocioso", "modelo": null, "contexto_pct": null, "tokens": null,
+    "chamadas": null, "ultima_ferramenta": null, "atividade_epoch": 1793426512.0, "inicio_epoch": null}]},
+ "sessoes_hermes": {"estado": "ok", "sessoes": [
+   {"chave": "c3d4e5f6a7", "ferramenta": "hermes", "estado": "ativa", "origem": "whatsapp", "modelo": "claude-opus-5-5",
+    "tokens": {"entrada": 50000, "saida": 2000, "cache_leitura": 0, "cache_escrita": 0, "raciocinio": 0, "total": null},
+    "mensagens": 40, "chamadas": 1, "ultima_ferramenta": "web", "atividade_epoch": 1793433112.0, "inicio_epoch": 1793430112.0}]},
+ "chat_cursor": {"estado": "ok", "ultimo_chat_epoch": 1793347312.0, "chats": 1},
  "erros_agentes": {
   "estado": "ok",
   "desde": 1793347312.0,

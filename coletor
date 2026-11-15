@@ -440,6 +440,8 @@ def extras_ativos():
         extras += ("vigilante2",)
     if os.environ.get('PAINEL_ERROS', '0') == '1':
         extras += ("erros_agentes",)
+    if os.environ.get('PAINEL_AGENTES_EXTRA', '0') == '1':
+        extras += ("sessoes_grok", "sessoes_hermes", "chat_cursor")
     return extras
 
 
@@ -474,6 +476,11 @@ def fontes_vivas(sem_contas=False):
     if os.environ.get('PAINEL_ERROS', '0') == '1':
         from fontes import erros_agentes
         fontes["erros_agentes"] = erros_agentes.ler
+    if os.environ.get('PAINEL_AGENTES_EXTRA', '0') == '1':
+        from fontes import sessoes_grok, sessoes_hermes, chat_cursor
+        fontes["sessoes_grok"] = sessoes_grok.ler
+        fontes["sessoes_hermes"] = sessoes_hermes.ler
+        fontes["chat_cursor"] = chat_cursor.ler
     return fontes
 
 
@@ -491,7 +498,8 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
                   "whatsapp": 10, "gastos_hermes": 60, "presenca_processos": 5,
                   "presenca_linux": 20,
                   "cota_codex_local": 120, "cota_grok_bot": 60, "cota_cursor": 120,
-                  "vigilante2": 30, "erros_agentes": 60}
+                  "vigilante2": 30, "erros_agentes": 60,
+                  "sessoes_grok": 10, "sessoes_hermes": 30, "chat_cursor": 120}
     extras = extras_ativos()
     for nome in ("eventos_hooks", "sessoes_codex", "maestri_wire", "cota_claude", "processos", "servicos") + extras:
         anterior = cache.get(nome)

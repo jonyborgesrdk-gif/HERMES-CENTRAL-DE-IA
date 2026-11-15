@@ -433,6 +433,46 @@ function errosDe(dados) {
   return { ativo: true, itens: itens,
            contagens: { aberto: conta(c.aberto), corrigido: conta(c.corrigido), verificado: conta(c.verificado), sem_tratamento: conta(c.sem_tratamento), contado: conta(c.contado) } };
 }
+/* Outros agentes (E21): sessões do Grok e do Hermes e último chat do cursor-agent. Só listas fixas, números, modelo filtrado e a chave curta. */
+var ESTADOS_EXTRA = { grok: { trabalhando: "work", esperando: "wait", ocioso: "idle", indeterminado: "stop" }, hermes: { ativa: "good" } };
+var ROTULOS_ESTADO_EXTRA = { trabalhando: "trabalhando", esperando: "esperando permissão", ocioso: "ocioso", indeterminado: "indeterminado", ativa: "ativa" };
+var ORIGENS_HERMES = { local: "local", subagent: "subagente", cli: "CLI", oneshot: "execução única", webhook: "webhook", desktop: "aplicativo", tool: "ferramenta", whatsapp: "WhatsApp", outra: "outra origem" };
+var CATEGORIAS_EXTRA = { leitura: "leitura", busca: "busca", terminal: "terminal", edicao: "edição", subagente: "subagente", computador: "computador", web: "web", outra: "outra ferramenta" };
+var MAX_SESSOES_EXTRA = { grok: 20, hermes: 50 };
+function outrosAgentesDe(dados) {
+  var tem = function (mapa, k) { return typeof k === "string" && Object.prototype.hasOwnProperty.call(mapa, k); };
+  var natural = function (x) { return numero(x) && x >= 0 && Math.floor(x) === x ? x : null; };
+  var modelo = function (x) { return x === "outro modelo" || (typeof x === "string" && /^[a-z0-9][a-z0-9.:_-]{0,63}$/.test(x)) ? x : null; };
+  var blocos = { grok: dados && dados.sessoes_grok, hermes: dados && dados.sessoes_hermes };
+  var sessoes = [], ativo = false;
+  ["grok", "hermes"].forEach(function (f) {
+    var b = blocos[f];
+    if (!b || typeof b !== "object" || Array.isArray(b) || b.estado !== "ok") return;
+    ativo = true;
+    var vistos = {}, n = 0;
+    lista(b.sessoes).forEach(function (s) {
+      if (n >= MAX_SESSOES_EXTRA[f] || !s || typeof s !== "object" || Array.isArray(s)) return;
+      if (typeof s.chave !== "string" || !/^[0-9a-f]{10}$/.test(s.chave) || vistos[s.chave] === true) return;
+      if (!tem(ESTADOS_EXTRA[f], s.estado)) return;
+      vistos[s.chave] = true; n += 1;
+      var t = objeto(s.tokens), ent = natural(t.entrada), sai = natural(t.saida);
+      sessoes.push({ id: f + ":" + s.chave, ferramenta: f, estado: s.estado,
+                     origem: f === "hermes" ? (tem(ORIGENS_HERMES, s.origem) ? s.origem : "outra") : null,
+                     modelo: modelo(s.modelo),
+                     contexto: numero(s.contexto_pct) && s.contexto_pct >= 0 && s.contexto_pct <= 100 ? s.contexto_pct : null,
+                     tokens: ent !== null && sai !== null ? ent + sai : null,
+                     chamadas: natural(s.chamadas),
+                     ultima: tem(CATEGORIAS_EXTRA, s.ultima_ferramenta) ? s.ultima_ferramenta : null,
+                     atividade: numero(s.atividade_epoch) && s.atividade_epoch > 0 ? s.atividade_epoch : null });
+    });
+  });
+  var c = dados && dados.chat_cursor, cursor = { estado: null, ultimo: null, chats: 0 };
+  if (c && typeof c === "object" && !Array.isArray(c)) {
+    if (c.estado === "ok" && numero(c.ultimo_chat_epoch) && c.ultimo_chat_epoch > 0) { cursor = { estado: "ok", ultimo: c.ultimo_chat_epoch, chats: natural(c.chats) || 0 }; ativo = true; }
+    else if (c.estado === "sem_dado") cursor.estado = "sem_dado";
+  }
+  return { ativo: ativo, sessoes: sessoes, cursor: cursor };
+}
 function processosDe(dados) {
   var p = objeto(dados && dados.processos);
   return Object.keys(p).sort().map(function (n) { return n + " × " + texto(p[n]); });
@@ -761,6 +801,27 @@ function criarApp(doc, win, opcoes) {
       plural(c.verificado, "verificado", "verificados"), c.sem_tratamento + " sem tratamento",
       c.contado + " só contados (permissão negada, interrupção, erro de API)"].join(" · "));
     setTxt($("errors-nota"), !e.ativo ? "" : "\"Verificado\" quer dizer evidência anexada pelo agente; o painel não confere a evidência. O texto do erro fica só na máquina: painel-erro ver <id>.");
+  }
+  function atualizarLinhaExtra(tr, item) {
+    var r = tr._r, agora = agoraS();
+    if (r.agente !== item.ferramenta) { r.agente = item.ferramenta; r.logo.replaceChildren(icone(doc, iconeDoAgente(item.ferramenta))); }
+    setTxt(r.rotulo, item.ferramenta === "grok" ? "Grok CLI" : "Hermes · " + ORIGENS_HERMES[item.origem]);
+    setTxt(r.detalhe, [item.modelo, item.tokens !== null ? fmtTokens(item.tokens) : ""].filter(Boolean).join(" · "));
+    var cls = "status " + ESTADOS_EXTRA[item.ferramenta][item.estado];
+    if (r.status.className !== cls) r.status.className = cls;
+    setTxt(r.estado, ROTULOS_ESTADO_EXTRA[item.estado]);
+    setTxt(r.sub, [item.chamadas !== null ? plural(item.chamadas, "chamada", "chamadas") : "",
+                   item.ultima ? "última: " + CATEGORIAS_EXTRA[item.ultima] : "",
+                   item.contexto !== null ? "contexto " + Math.round(item.contexto) + "%" : "",
+                   item.atividade === null ? "sem horário" : "atividade há " + duracao(agora - item.atividade)].filter(Boolean).join(" · "));
+  }
+  function desenharOutrosAgentes(x) {      // bloco próprio: não mexe nas linhas de agente, nos blocos de presença, no de erros nem nos cartões do topo
+    var c = x.cursor, n = x.sessoes.length;
+    $("extra-agents").hidden = !x.ativo;
+    setTxt($("extra-agents-badge"), n > 0 ? plural(n, "sessão", "sessões") : "nenhuma sessão");
+    sincronizar($("extra-agents-rows"), x.sessoes, function (item) { return item.id; }, criarLinhaErro, atualizarLinhaExtra);
+    setTxt($("extra-agents-cursor"), !x.ativo ? "" : c.estado === "ok" ? "cursor-agent: último chat há " + duracao(agoraS() - c.ultimo) + " · " + plural(c.chats, "chat local", "chats locais")
+      : c.estado === "sem_dado" ? "cursor-agent: nenhum chat local" : "");
   }
 
   /* ---- limites de uso ---- */
@@ -1193,6 +1254,7 @@ function criarApp(doc, win, opcoes) {
     secao("presence", "de presença por processo", function () { desenharPresenca(presencaDe(d)); });
     secao("presence-linux", "de presença no WSL", function () { desenharPresencaLinux(presencaLinuxDe(d)); });
     secao("errors", "de erros de ferramenta", function () { desenharErros(errosDe(d)); });
+    secao("extra-agents", "de outros agentes", function () { desenharOutrosAgentes(outrosAgentesDe(d)); });
     secao("limits", "de limites de uso", function () {
       var l; try { l = locais(); } catch (e) { l = []; }          // o erro da lista local é registrado pela seção dela
       desenharLimites(unificarCodex(contas(), l).contas);
@@ -1387,6 +1449,7 @@ var api = {
   resetEmPtBr: resetEmPtBr, textoReset: textoReset, dinheiro: dinheiro, fmtUsd: fmtUsd, fmtBrl: fmtBrl, fmtTokens: fmtTokens, maxBonito: maxBonito,
   agentesDe: agentesDe, contasDe: contasDe, consumoClaude5h: consumoClaude5h, gastosDe: gastosDe, servicosDe: servicosDe, pendenciasDe: pendenciasDe,
   errosDe: errosDe,
+  outrosAgentesDe: outrosAgentesDe,
   fontesComProblema: fontesComProblema, presencaDe: presencaDe, presencaLinuxDe: presencaLinuxDe, cotasLocaisDe: cotasLocaisDe, unificarCodex: unificarCodex, vigilanteDe: vigilanteDe, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
