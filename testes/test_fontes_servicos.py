@@ -1,6 +1,8 @@
 import os
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 import subprocess
 import tempfile
 import threading
@@ -64,7 +66,58 @@ class ServicosTests(unittest.TestCase):
                                 'ts': 99999}), encoding='utf-8')
         os.utime(p, (10, 10))
         vigia = servicos.ler(self.ctx)['servicos'][2]
-        self.assertEqual((vigia['estado'], vigia['detalhe']), ('ok', 'pid 1234 · 12:34:56'))
+        self.assertEqual((vigia['estado'], vigia['detalhe']), ('ok', 'pid 1234 · 01/01 12:34:56'))
+
+    def _vigia_em_memoria(self, data, agora, ts=None):
+        self.ctx['agora'] = agora.timestamp()
+        texto = json.dumps({'pid': 1823, 'hora': data,
+                            'ts': ts if ts is not None else datetime.fromisoformat(data).timestamp()})
+        with patch.object(Path, 'read_text', return_value=texto), \
+                patch.object(Path, 'stat', return_value=SimpleNamespace(st_mtime=self.ctx['agora'])), \
+                patch.object(servicos.time, 'monotonic', return_value=10):
+            r = servicos.ler(self.ctx)['servicos'][2]
+        self.assertEqual(r['nome'], 'Vigia')
+        self.assertEqual(r['hora'], self.ctx['agora'])
+        return r
+
+    def test_vigia_hoje_detalhe_preservado(self):
+        agora = datetime.fromisoformat('2026-11-12T23:59:00-03:00')
+        r = self._vigia_em_memoria('2026-11-12T23:58:42-03:00', agora)
+        self.assertEqual((r['estado'], r['detalhe']), ('ok', 'pid 1823 · 23:58:42'))
+
+    def test_vigia_16_dias_data_e_idade(self):
+        agora = datetime.fromisoformat('2026-11-12T23:59:00-03:00')
+        r = self._vigia_em_memoria('2026-10-27T23:58:42-03:00', agora)
+        self.assertEqual(r['estado'], 'fora')
+        self.assertEqual(r['detalhe'], 'parado desde 27/10 23:58 (há 16 d) · pid 1823')
+
+    def test_vigia_velho_minutos_e_horas(self):
+        agora = datetime.fromisoformat('2026-11-12T23:59:00-03:00')
+        for atraso, esperado in ((timedelta(minutes=7), '7 min'), (timedelta(hours=3), '3 h')):
+            with self.subTest(esperado=esperado):
+                data = agora - atraso
+                r = self._vigia_em_memoria(data.isoformat(), agora)
+                self.assertEqual(r['estado'], 'fora')
+                self.assertEqual(r['detalhe'],
+                                 f'parado desde {data:%d/%m %H:%M} (há {esperado}) · pid 1823')
+
+    def test_vigia_recente_dia_anterior_tem_data(self):
+        agora = datetime.fromisoformat('2026-11-13T00:00:10-03:00')
+        r = self._vigia_em_memoria('2026-11-12T23:59:42-03:00', agora)
+        self.assertEqual((r['estado'], r['detalhe']), ('ok', 'pid 1823 · 12/11 23:59:42'))
+
+    def test_vigia_data_invalida_sem_leitura(self):
+        agora = datetime.fromisoformat('2026-11-12T23:59:00-03:00')
+        r = self._vigia_em_memoria('data-invalida', agora, ts=agora.timestamp())
+        self.assertEqual(r['estado'], 'sem leitura')
+
+    def test_vigia_conversoes_protegidas(self):
+        agora = datetime.fromisoformat('2026-11-12T23:59:00-03:00')
+        for erro in (ValueError, OverflowError, OSError):
+            with self.subTest(erro=erro), patch.object(servicos, 'datetime') as relogio:
+                relogio.fromisoformat.side_effect = erro('data inválida')
+                r = self._vigia_em_memoria(agora.isoformat(), agora, ts=agora.timestamp())
+                self.assertEqual(r['estado'], 'sem leitura')
 
     def test_vigia_json_velho_nao_usa_mtime_recente(self):
         p = self.ctx['vigia_path']

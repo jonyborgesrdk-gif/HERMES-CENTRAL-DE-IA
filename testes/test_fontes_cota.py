@@ -47,8 +47,9 @@ class CotaTests(unittest.TestCase):
         r = cota_claude.atualizar(self.ctx)
         self.assertEqual(r['sessao_5h'], 6)
         self.assertEqual(cota_claude.ler(self.ctx), r)
-        self.assertEqual(self.calls[0][1], 60)
-        self.assertIn('--safe-mode', self.calls[0][0])
+        self.assertEqual(self.calls[0], (['claude', 'auth', 'status', '--json'], 10))
+        self.assertEqual(self.calls[1], (['claude', '--safe-mode', '--no-session-persistence',
+                                        '-p', '/usage', '--output-format', 'stream-json', '--verbose'], 60))
 
     def test_cinco_minutos(self):
         cota_claude.atualizar(self.ctx)
@@ -95,11 +96,85 @@ class CotaTests(unittest.TestCase):
     def test_auth_status_no_mesmo_cache(self):
         r = cota_claude.atualizar(self.ctx)
         self.assertEqual((r['email'], r['plano']), ('conta@example.com', 'plano-teste'))
-        self.assertEqual(self.calls[1], (['claude', 'auth', 'status', '--json'], 10))
+        self.assertEqual(self.calls[0], (['claude', 'auth', 'status', '--json'], 10))
         self.assertEqual(cota_claude.ler(self.ctx)['email'], 'conta@example.com')
         self.ctx['agora'] += 100
         cota_claude.atualizar(self.ctx)
         self.assertEqual(len(self.calls), 2)
+
+    def _sem_login(self, codigo):
+        anterior = dict(sessao_5h=17, semanal=31, reset_5h='reset anterior',
+                        reset_semanal='reset semanal anterior', hora=99000,
+                        email='anterior@example.com', plano='anterior')
+        chamadas = []
+        def executar(argv, timeout):
+            chamadas.append((argv, timeout))
+            texto = json.dumps({'loggedIn': False, 'authMethod': 'none', 'email': 'nao-herdar'})
+            if codigo:
+                raise subprocess.CalledProcessError(codigo, argv, output=texto)
+            return texto
+        self.ctx['executar'] = executar
+        with patch.object(cota_claude, 'ler', return_value=anterior):
+            r = cota_claude.atualizar(self.ctx)
+        self.assertEqual(r['erro'], 'Claude Code sem login')
+        self.assertEqual(r['erro_auth'], 'Claude Code sem login')
+        for chave, valor in anterior.items():
+            self.assertEqual(r[chave], valor)
+        self.assertEqual(r['tentativa'], 100000)
+        self.assertEqual(chamadas, [(['claude', 'auth', 'status', '--json'], 10)])
+        self.assertEqual(cota_claude.ler(self.ctx), r)
+        self.ctx['agora'] += 299
+        self.assertEqual(cota_claude.atualizar(self.ctx), r)
+        self.assertEqual(len(chamadas), 1)
+        self.ctx['agora'] += 1
+        cota_claude.atualizar(self.ctx)
+        self.assertEqual(len(chamadas), 2)
+
+    def test_sem_login_codigo_1_nao_chama_usage(self):
+        self._sem_login(1)
+
+    def test_sem_login_codigo_0_nao_chama_usage(self):
+        self._sem_login(0)
+
+    def test_login_bom_remove_erros_antigos(self):
+        anterior = {'erro': 'Claude Code sem login', 'erro_auth': 'Claude Code sem login'}
+        normal = self.executar
+        def executar(argv, timeout):
+            if argv[1:3] == ['auth', 'status']:
+                self.calls.append((argv, timeout))
+                return json.dumps({'loggedIn': True, 'email': 'conta@example.com',
+                                   'subscriptionType': 'plano-teste'})
+            return normal(argv, timeout)
+        self.ctx['executar'] = executar
+        with patch.object(cota_claude, 'ler', return_value=anterior):
+            r = cota_claude.atualizar(self.ctx)
+        self.assertNotIn('erro', r)
+        self.assertNotIn('erro_auth', r)
+        self.assertEqual(r['sessao_5h'], 6)
+        self.assertEqual(self.calls[0], (['claude', 'auth', 'status', '--json'], 10))
+        self.assertIn('/usage', self.calls[1][0])
+
+    def test_identidade_invalida_ou_falha_nao_e_sem_login(self):
+        normal = self.executar
+        for codigo, texto in ((0, '{'), (1, '{'), (0, '[]'), (1, '{"loggedIn":true}'),
+                              (1, '{"loggedIn":0}'), (1, '{"loggedIn":"false"}')):
+            with self.subTest(codigo=codigo, texto=texto):
+                self.calls.clear()
+                def executar(argv, timeout):
+                    if argv[1:3] == ['auth', 'status']:
+                        self.calls.append((argv, timeout))
+                        if codigo:
+                            raise subprocess.CalledProcessError(codigo, argv, output=texto)
+                        return texto
+                    return normal(argv, timeout)
+                self.ctx['executar'] = executar
+                with patch.object(cota_claude, 'ler', return_value={'email': 'herdado', 'plano': 'herdado'}):
+                    r = cota_claude.atualizar(self.ctx)
+                self.assertEqual(r['erro_auth'], 'identidade Claude sem leitura')
+                self.assertEqual((r['email'], r['plano']), ('herdado', 'herdado'))
+                self.assertNotIn('erro', r)
+                self.assertEqual(r['sessao_5h'], 6)
+                self.assertIn('/usage', self.calls[1][0])
 
     def test_auth_falha_nao_apaga_cota_e_preserva_identidade(self):
         cota_claude.atualizar(self.ctx)

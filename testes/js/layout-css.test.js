@@ -5,6 +5,39 @@ const fs = require('node:fs');
 const path = require('node:path');
 const cotas = fs.readFileSync(path.join(__dirname, '../../publico/cotas.js'), 'utf8');
 const index = fs.readFileSync(path.join(__dirname, '../../publico/classico.html'), 'utf8');
+const hermes = fs.readFileSync(path.join(__dirname, '../../publico/hermes.css'), 'utf8');
+function regraHermes(seletor) {
+  const inicio = hermes.indexOf(seletor + '{');
+  assert.ok(inicio >= 0, 'regra ausente: ' + seletor);
+  return hermes.slice(inicio, hermes.indexOf('}', inicio));
+}
+function luminancia(hex) {
+  const rgb = hex.replace('#', '').match(/../g).map((v) => parseInt(v, 16) / 255)
+    .map((v) => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4);
+  return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722;
+}
+function contraste(a, b) { const x = luminancia(a), y = luminancia(b); return (Math.max(x, y) + .05) / (Math.min(x, y) + .05); }
+test('Hermes: barras passadas contrastam 3:1 em ambos os temas; período atual é mais forte', () => {
+  for (const [seletor, fundo, atual] of [['.chart-bar', '#1d1d1c', '#ed925e'], ['[data-theme=light] .chart-bar', '#ffffff', '#ac572d']]) {
+    const cor = /background:(#[\da-f]{6})\b/.exec(regraHermes(seletor))[1];
+    assert.ok(contraste(cor, fundo) >= 3, seletor + ': ' + contraste(cor, fundo));
+    assert.ok(contraste(atual, fundo) > contraste(cor, fundo));
+  }
+  assert.match(regraHermes('.chart-bar:last-child'), /background:var\(--accent\)/);
+  assert.match(regraHermes('[data-theme=light] .chart-bar:last-child'), /background:var\(--accent\)/);
+  assert.match(regraHermes('.chart-bar.zero'), /opacity:\.4/);
+});
+test('Hermes: gráfico contém rótulos e colunas sem mínimos intrínsecos que estourem séries densas', () => {
+  assert.match(regraHermes('.chart'), /container-type:inline-size/);
+  assert.match(regraHermes('.chart'), /padding-top:2\dpx/);
+  assert.match(regraHermes('.chart-plot'), /grid-auto-columns:minmax\(0,1fr\)/);
+  assert.match(regraHermes('.chart-x'), /grid-auto-columns:minmax\(0,1fr\)/);
+  assert.match(regraHermes('.chart-bar'), /min-width:0/);
+  assert.match(regraHermes('.chart-bar'), /padding:0/);
+  assert.match(regraHermes('.chart-value'), /display:none/);
+  assert.match(regraHermes('.chart-value'), /overflow:hidden/);
+  assert.match(hermes, /@container\(min-width:350px\)\{\.chart-value\{display:block\}/);
+});
 function regra(fonte, seletor) {
   const i = fonte.indexOf(seletor + ' {');
   assert.ok(i >= 0, 'regra ausente: ' + seletor);

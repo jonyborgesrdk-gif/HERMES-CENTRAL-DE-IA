@@ -1,6 +1,8 @@
 # gerados pelo coletor e dados do seu time: ficam só na sua máquina
 publico/dados.js
 publico/dados.json
+publico/.dados.js.*.tmp
+publico/.dados.json.*.tmp
 quadro.json
 quadro.json.trava
 estado.json

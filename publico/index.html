@@ -68,6 +68,7 @@
     <div class="dashboard-row">
       <section class="panel cost-panel" id="usage" aria-labelledby="cost-title">
         <div class="panel-head"><div><div class="panel-title"><h2 id="cost-title">Gastos de IA</h2></div><p class="panel-desc" id="cost-desc">Distribuição do consumo no período</p></div><label><select class="compact-select" id="period-select" aria-label="Período de gastos"><option value="24h">Últimas 24 h</option><option value="hoje">Hoje</option><option value="7d" selected>Últimos 7 dias</option><option value="30d">Últimos 30 dias</option></select></label></div>
+        <div class="cost-privacy-notice" id="cost-privacy-notice" hidden><span>Valores ocultos pelo modo privacidade.</span><button class="button" id="cost-show-values" type="button">Mostrar valores</button></div>
         <div class="cost-top"><div class="cost-total mono sensitive" id="cost-total">—</div><span class="neutral-label sensitive" id="cost-tokens"></span></div>
         <div class="cost-body">
           <div class="chart sensitive" id="chart" role="group" aria-label="Distribuição dos gastos por intervalo"></div>

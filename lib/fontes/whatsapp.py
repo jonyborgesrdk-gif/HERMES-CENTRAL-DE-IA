@@ -75,7 +75,7 @@ def ler(ctx):
     hora_ponte, _ = _data(ponte.get('updated_at'))
     estado = ponte.get('state')
     if estado not in ('connected', 'disconnected', 'connecting', 'reconnecting',
-                      'starting', 'stopped', 'error', 'failed', 'disabled'):
+                      'starting', 'stopped', 'error', 'failed', 'disabled', 'retrying'):
         estado = 'desconhecido'
     gateway = dado.get('gateway_state')
     if gateway not in ('running', 'starting', 'stopping', 'stopped', 'error', 'failed'):
