@@ -368,6 +368,18 @@ function cotasLocaisDe(dados) {
   });
   return saida;
 }
+/* E19b: o Codex aparece num cartão só. Com números na conta, sai o observado; sem números na conta e com uso observado, saem as contas do Codex sem erro (conta com erro nunca é escondida). */
+function unificarCodex(contas, locais) {
+  contas = lista(contas); locais = lista(locais);
+  var local = locais.filter(function (x) { return x && x.chave === "cota_codex_local"; })[0];
+  if (!local) return { contas: contas.slice(), locais: locais.slice() };
+  var doCodex = function (c) { return !!c && c.ferramenta === "codex"; };
+  var semOLocal = function () { return locais.filter(function (x) { return x !== local; }); };
+  if (contas.some(function (c) { return doCodex(c) && c.semDados === false; })) return { contas: contas.slice(), locais: semOLocal() };
+  if (local.estado === "ok" && lista(local.barras).length > 0) return { contas: contas.filter(function (c) { return !doCodex(c) || !!c.erro; }), locais: locais.slice() };
+  if (contas.some(doCodex)) return { contas: contas.slice(), locais: semOLocal() };
+  return { contas: contas.slice(), locais: locais.slice() };
+}
 /* Vigilante 2 (E23): bloco próprio na seção Saúde dos serviços; não entra em servicosDe nem em pendenciasDe. */
 var TIPOS_VIGILANTE = ["fim_etapa", "aguarda_decisao", "confianca_pasta", "login", "cota_baixa", "terminal_caiu", "servico_fora", "painel_fora", "wire_fora", "falhas_repetidas", "outro"];
 var ROTULOS_VIGILANTE = { fim_etapa: "fim de etapa", aguarda_decisao: "aguarda decisão", confianca_pasta: "confiança de pasta", login: "login", cota_baixa: "cota baixa",
@@ -1093,13 +1105,20 @@ function criarApp(doc, win, opcoes) {
     var agentes = modeloUmaVez(function () { return agentesDe(d); }), contas = modeloUmaVez(function () { return contasDe(d); });
     var servicos = modeloUmaVez(function () { return servicosDe(d, agora); });
     var gastos = modeloUmaVez(function () { return gastosDe(d, estado.janela, estado.agrupamento); });
+    var locais = modeloUmaVez(function () { return cotasLocaisDe(d); });
     try { desenharChip(); } catch (e) { registrarErro("o indicador do topo", e); }
     secao("stats", "de resumo", function () { desenharKpis(agentes(), contas(), servicos(), gastos()); });
     secao("agents", "de agentes", function () { desenharAgentes(agentes()); });
     secao("presence", "de presença por processo", function () { desenharPresenca(presencaDe(d)); });
     secao("presence-linux", "de presença no WSL", function () { desenharPresencaLinux(presencaLinuxDe(d)); });
-    secao("limits", "de limites de uso", function () { desenharLimites(contas()); });
-    secao("limits-local", "de uso observado em arquivos locais", function () { desenharCotasLocais(cotasLocaisDe(d)); });
+    secao("limits", "de limites de uso", function () {
+      var l; try { l = locais(); } catch (e) { l = []; }          // o erro da lista local é registrado pela seção dela
+      desenharLimites(unificarCodex(contas(), l).contas);
+    });
+    secao("limits-local", "de uso observado em arquivos locais", function () {
+      var l = locais(), c; try { c = contas(); } catch (e) { c = []; }   // o erro das contas é registrado pela seção delas
+      desenharCotasLocais(unificarCodex(c, l).locais);
+    });
     secao("usage", "de gastos", function () { desenharGastos(gastos()); });
     secao("attention", "Precisa de você", function () { desenharPendencias(pendenciasDe(d)); });
     secao("services", "de serviços", function () { desenharServicos(servicos()); });
@@ -1281,7 +1300,7 @@ var api = {
   numero: numero, mascararEmails: mascararEmails, snapshotParaExportar: snapshotParaExportar, haSegundos: haSegundos, duracao: duracao, quando: quando,
   resetEmPtBr: resetEmPtBr, textoReset: textoReset, dinheiro: dinheiro, fmtUsd: fmtUsd, fmtBrl: fmtBrl, fmtTokens: fmtTokens, maxBonito: maxBonito,
   agentesDe: agentesDe, contasDe: contasDe, consumoClaude5h: consumoClaude5h, gastosDe: gastosDe, servicosDe: servicosDe, pendenciasDe: pendenciasDe,
-  fontesComProblema: fontesComProblema, presencaDe: presencaDe, presencaLinuxDe: presencaLinuxDe, cotasLocaisDe: cotasLocaisDe, vigilanteDe: vigilanteDe, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
+  fontesComProblema: fontesComProblema, presencaDe: presencaDe, presencaLinuxDe: presencaLinuxDe, cotasLocaisDe: cotasLocaisDe, unificarCodex: unificarCodex, vigilanteDe: vigilanteDe, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 else {
