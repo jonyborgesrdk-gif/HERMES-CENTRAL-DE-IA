@@ -267,6 +267,13 @@
    "ultima_leitura_ok": 1793433709.0,
    "desatualizado": false
   },
+  "erros_agentes": {
+   "ok": true,
+   "erro": null,
+   "hora": 1793433709.0,
+   "ultima_leitura_ok": 1793433709.0,
+   "desatualizado": false
+  },
   "presenca_linux": {
    "ok": true,
    "erro": null,
@@ -722,6 +729,20 @@
   "falhas_seguidas": 0,
   "por_tipo": {"claude_code": 9, "codex": 4, "custom": 5, "generic_shell": 3, "outra": 0},
   "alertas": [{"tipo": "login", "desde_epoch": 1793433112.0}, {"tipo": "cota_baixa", "desde_epoch": 1793426512.0}]
+ },
+ "erros_agentes": {
+  "estado": "ok",
+  "desde": 1793347312.0,
+  "contagens": {"aberto": 2, "corrigido": 1, "verificado": 1, "sem_tratamento": 3, "contado": 5},
+  "por_classe": {"permissao_negada": 4, "interrompido": 1, "codigo_saida": 4, "edicao": 1, "arquivo": 1, "tempo_esgotado": 0, "validacao": 1, "api": 0, "outra": 0},
+  "por_agente": {"claude": 9, "codex": 3},
+  "ultimas_24h": 6,
+  "itens": [
+   {"id": "0a1b2c3d4e", "agente": "claude", "ferramenta": "bash", "classe": "codigo_saida", "codigo": 2, "hora": 1793433412.0, "estado": "aberto", "evidencia": null},
+   {"id": "1b2c3d4e5f", "agente": "codex", "ferramenta": "comando", "classe": "codigo_saida", "codigo": 1, "hora": 1793426512.0, "estado": "aberto", "evidencia": null},
+   {"id": "2c3d4e5f6a", "agente": "claude", "ferramenta": "edit", "classe": "edicao", "codigo": null, "hora": 1793430112.0, "estado": "corrigido", "evidencia": null},
+   {"id": "3d4e5f6a7b", "agente": "claude", "ferramenta": "write", "classe": "arquivo", "codigo": null, "hora": 1793433112.0, "estado": "verificado", "evidencia": {"tipo": "teste", "codigo": 0}}
+  ]
  },
  "presenca_linux": {
   "estado": "parada",

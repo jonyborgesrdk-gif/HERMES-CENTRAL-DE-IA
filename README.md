@@ -133,6 +133,7 @@ inventa número.
 | `PAINEL_COTA_GROK_BOT` | `1` liga a leitura local do uso do Grok Bot (opt-in, desligada por padrão): percentual e próximo reset do último registro local do aplicativo, com o horário da leitura. Sem rede. Qualquer outro valor mantém a saída antiga. |
 | `PAINEL_COTA_CURSOR` | `1` liga a leitura local do plano do Cursor (opt-in, desligada por padrão): mostra o plano e a situação da assinatura guardados em cache pelo aplicativo e avisa que não há dados de cota. Sem rede. Qualquer outro valor mantém a saída antiga. O banco do Cursor é lido sem trava e sem gravar nada, com o aplicativo aberto ou fechado; com ele aberto, uma mudança de plano pode demorar a aparecer. |
 | `PAINEL_VIGILANTE` | `1` liga o bloco do Vigilante 2 (opt-in, desligado por padrão): o painel lê só `%LOCALAPPDATA%\vigilante2\ultimo.json` e mostra, na seção Saúde dos serviços, contagens, alertas ativos por tipo e se o Vigilante 2 está parado (sem atualização há mais de 3 min). Qualquer outro valor mantém a saída antiga. |
+| `PAINEL_ERROS` | `1` liga a captura de erros de ferramenta dos agentes (opt-in, desligada por padrão): o painel lê só os transcripts do Claude Code (`~/.claude/projects`) e as sessões do Codex (`~/.codex/sessions`), sem rede e sem subprocesso, e publica só categoria, ferramenta, estado, código de saída e contagens; nenhum texto de erro sai da máquina nem é copiado. A primeira passada só marca a posição de cada arquivo: nada anterior a ela é capturado. Qualquer outro valor mantém a saída antiga. Para ver, corrigir e verificar cada erro, veja a seção "Erros de ferramenta: ver, corrigir e verificar". |
 
 O GitHub é consultado pelo `gh` já logado na sua máquina; o painel não guarda token nenhum.
 
@@ -146,6 +147,25 @@ O quadro (`quadro.json`) é editado por dois comandos pequenos:
 ```
 
 O nome do agente não depende de acento nem de maiúscula.
+
+## Erros de ferramenta: ver, corrigir e verificar
+
+Com `PAINEL_ERROS=1` no coletor, cada erro de ferramenta do Claude Code e do Codex vira uma ocorrência com um identificador curto (10 caracteres hexadecimais) e um estado:
+
+- **aberto**: erro novo, ainda sem registro.
+- **corrigido**: o agente registrou que corrigiu, com uma nota opcional.
+- **verificado**: o agente anexou uma evidência (a saída de um teste ou de um comando, com o código de saída). Quer dizer "evidência anexada pelo agente": o painel guarda o arquivo e mostra o tipo e o código, mas não confere se a evidência é verdadeira.
+- **sem tratamento**: ficou aberto por mais de 7 dias.
+- **só contado**: permissão negada, interrupção e erro de API entram só nas contagens; não há o que corrigir, e o comando recusa registrar correção ou evidência para eles.
+
+```bash
+./painel-erro listar                # abertos; --estado todos|corrigido|verificado|sem_tratamento|contado, --agente claude|codex, --json
+./painel-erro ver 0123abcdef        # entrada da ferramenta e erro, lidos do transcript, com os segredos trocados por [oculto]
+./painel-erro corrigido 0123abcdef --nota "o que foi corrigido"
+./painel-erro verificado 0123abcdef --tipo teste --comando "py -m unittest" --codigo 0 --saida saida.txt
+```
+
+`ver` mostra o texto só no terminal de quem roda (se for outro agente, o texto passa para o transcript dele); `listar` e `ver` não gravam nada. Os arquivos ficam no diretório de dados do painel (`PAINEL_IAS_DIR`, ou `%LOCALAPPDATA%\painel-ias`), que o servidor não serve: `erros-ocorrencias.json` (gravado só pelo coletor; guarda, de cada erro, a classe, a ferramenta, o código, a hora e o ponteiro para o transcript (caminho do arquivo, posição e chave da chamada); nenhum texto do erro nem do comando (o caminho do transcript do Claude Code traz o nome da pasta do projeto)), `erros-registro.json` e a pasta `erros-evidencias/` (gravados só pelo `painel-erro`). Para zerar, pare o coletor e apague esses três; a passada seguinte recomeça só marcando a posição atual, sem capturar o que veio antes.
 
 ## Solução de problemas
 

@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Mostra e registra os erros de ferramenta dos agentes (Claude Code e Codex) que o coletor capturou com
+PAINEL_ERROS=1.
+
+Cada ocorrência tem um identificador curto (10 caracteres hexadecimais) e um estado:
+  aberto          erro novo, ainda sem registro
+  corrigido       o agente registrou a correção
+  verificado      o agente anexou uma evidência (a saída de um teste ou de um comando); o painel não a confere
+  sem_tratamento  ficou aberto por mais de 7 dias
+  contado         permissão negada, interrupção ou erro de API: só entra nas contagens, não há o que corrigir
+
+Uso:
+  painel-erro listar [--estado aberto|corrigido|verificado|sem_tratamento|contado|todos]
+                     [--agente claude|codex] [--limite N] [--json]
+                                   lista as ocorrências, da mais recente para a mais antiga
+                                   (padrão: --estado aberto e --limite 50, de 1 a 500)
+  painel-erro ver ID [--bytes N]   mostra a entrada da ferramenta e o erro, lidos do transcript, com os
+                                   segredos trocados por [oculto] (padrão: 4000 caracteres por bloco,
+                                   de 200 a 20000)
+  painel-erro corrigido ID [--nota TEXTO]
+                                   registra que o erro foi corrigido (nota de até 280 caracteres)
+  painel-erro verificado ID --tipo teste|comando --comando TEXTO --codigo N --saida ARQUIVO
+                                   anexa a evidência: o comando rodado (até 500 caracteres), o código de
+                                   saída dele e o arquivo com a saída (não vazio, até 256 KiB)
+
+Os arquivos ficam no diretório de dados do painel (PAINEL_IAS_DIR, ou %LOCALAPPDATA%\\painel-ias):
+erros-ocorrencias.json (gravado só pelo coletor), erros-registro.json e erros-evidencias/ (gravados só por
+este comando). Nenhum texto do transcript é copiado para eles; listar e ver não gravam nada.
+"""
+import argparse
+import json
+import os
+import re
+import sys
+import time
+import unicodedata
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+
+import comum                        # noqa: E402
+import leitor                       # noqa: E402
+import erros_registro as registro   # noqa: E402
+
+ESTADOS_FILTRO = registro.ESTADOS + ("todos",)
+CABECALHO = ("ID", "IDADE", "AGENTE", "FERRAMENTA", "CLASSE", "CÓDIGO", "ESTADO")
+CORTE = " … (cortado)"
+SEM_OCORRENCIAS = "nenhuma ocorrência registrada (a captura liga com PAINEL_ERROS=1 no coletor)"
+SEM_TEXTO = "texto indisponível: o transcript mudou ou foi apagado"
+RE_ID = re.compile(r"[0-9a-f]{10}")
+
+
+class Analisador(argparse.ArgumentParser):
+    def error(self, message):
+        raise comum.ErroDeEntrada("argumentos inválidos (%s). Veja painel-erro --help." % message)
+
+
+def idade(segundos):
+    s = max(0, int(segundos))
+    if s < 60:
+        return "%d s" % s
+    if s < 3600:
+        return "%d min" % (s // 60)
+    if s < 86400:
+        return "%d h" % (s // 3600)
+    return "%d d" % (s // 86400)
+
+
+def codigo_de(codigo):
+    return "-" if codigo is None else str(codigo)
+
+
+def limpar_saida(texto):
+    """Troca por U+FFFD os caracteres de controle e de formatação (menos \\n e \\t): o texto vem de saída
+    de ferramenta e pode trazer sequências de escape de terminal ou marcas de direção de texto."""
+    texto = texto.replace("\r\n", "\n").replace("\r", "\n")
+    return "".join("\ufffd" if c not in "\n\t" and unicodedata.category(c) in ("Cc", "Cf") else c
+                   for c in texto)
+
+
+def mascarar_e_cortar(texto, limite):
+    """Mascara o texto INTEIRO, limpa e só depois corta: um segredo partido na borda deixaria de ser
+    reconhecido."""
+    texto = limpar_saida(leitor.mascarar(texto))
+    if len(texto) > limite:
+        return texto[:limite] + CORTE
+    return texto
+
+
+def listar(dir_dados, args, agora_s):
+    if not 1 <= args.limite <= 500:
+        raise comum.ErroDeEntrada("--limite: use um número de 1 a 500.")
+    itens = registro.listar(dir_dados, agora_s)
+    escolhidos = [i for i in itens
+                  if (args.estado == "todos" or i["estado"] == args.estado)
+                  and (args.agente is None or i["agente"] == args.agente)][:args.limite]
+    if args.json:
+        print(json.dumps(escolhidos, ensure_ascii=False))
+        return 0
+    if not itens:
+        print(SEM_OCORRENCIAS)
+        return 0
+    if not escolhidos:
+        print("nenhuma ocorrência com estado %s" % args.estado)
+        return 0
+    linhas = [CABECALHO] + [(i["id"], idade(agora_s - i["hora"]), i["agente"], i["ferramenta"], i["classe"],
+                             codigo_de(i["codigo"]), i["estado"]) for i in escolhidos]
+    larguras = [max(len(linha[c]) for linha in linhas) for c in range(len(CABECALHO))]
+    for linha in linhas:
+        print("  ".join(valor.ljust(largura) for valor, largura in zip(linha, larguras)).rstrip())
+    return 0
+
+
+def ver(dir_dados, args, agora_s):
+    if not 200 <= args.bytes <= 20000:
+        raise comum.ErroDeEntrada("--bytes: use um número de 200 a 20000.")
+    if not RE_ID.fullmatch(args.id):
+        raise registro.ErroRegistro("id inválido")
+    estado = registro.carregar_ocorrencias(dir_dados)
+    oc = estado["ocorrencias"].get(args.id) if estado is not None else None
+    if oc is None:
+        raise registro.ErroRegistro("id desconhecido")
+    situacao = registro.estado_de(oc, registro.carregar_registro(dir_dados, False), agora_s)
+    print("id: %s" % oc["id"])
+    print("agente: %s | ferramenta: %s | classe: %s | código: %s | estado: %s" % (
+        oc["agente"], oc["ferramenta"], oc["classe"], codigo_de(oc["codigo"]), situacao))
+    print("transcript: %s" % limpar_saida(oc["arquivo"]))
+    texto = registro.ler_texto(oc)
+    if texto is None:
+        print("painel-erro: %s" % SEM_TEXTO, file=sys.stderr)
+        return 1
+    print("sessão: %s" % limpar_saida(leitor.mascarar(texto["sessao"])))
+    print("pasta: %s" % limpar_saida(leitor.mascarar(texto["pasta"])))
+    print("--- entrada da ferramenta ---")
+    print(mascarar_e_cortar(texto["entrada"], args.bytes))
+    print("--- erro ---")
+    print(mascarar_e_cortar(texto["erro"], args.bytes))
+    return 0
+
+
+def main():
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    analisador = Analisador(prog="painel-erro", add_help=False)
+    analisador.add_argument("-h", "--help", "--ajuda", dest="ajuda", action="store_true")
+    acoes = analisador.add_subparsers(dest="acao")
+
+    p = acoes.add_parser("listar", add_help=False)
+    p.add_argument("--estado", choices=ESTADOS_FILTRO, default="aberto")
+    p.add_argument("--agente", choices=registro.AGENTES)
+    p.add_argument("--limite", type=int, default=50)
+    p.add_argument("--json", action="store_true")
+
+    p = acoes.add_parser("ver", add_help=False)
+    p.add_argument("id")
+    p.add_argument("--bytes", type=int, default=4000)
+
+    p = acoes.add_parser("corrigido", add_help=False)
+    p.add_argument("id")
+    p.add_argument("--nota")
+
+    p = acoes.add_parser("verificado", add_help=False)
+    p.add_argument("id")
+    p.add_argument("--tipo", required=True)
+    p.add_argument("--comando", required=True)
+    p.add_argument("--codigo", type=int, required=True)
+    p.add_argument("--saida", required=True)
+
+    args = analisador.parse_args()
+    if args.ajuda:
+        print(__doc__.strip())
+        return 0
+    if args.acao is None:
+        raise comum.ErroDeEntrada("passe listar, ver, corrigido ou verificado.")
+
+    dir_dados = registro.diretorio_dados()
+    agora_s = time.time()
+
+    if args.acao == "listar":
+        return listar(dir_dados, args, agora_s)
+
+    if args.acao == "ver":
+        return ver(dir_dados, args, agora_s)
+
+    if args.acao == "corrigido":
+        nota = comum.limpar_texto(args.nota, 280, "nota") if args.nota is not None else None
+        registro.registrar_corrigido(dir_dados, args.id, nota, agora_s)
+        print("registrado: %s corrigido" % args.id)
+        return 0
+
+    comando = comum.limpar_texto(args.comando, 500, "comando")
+    registro.registrar_verificado(dir_dados, args.id, args.tipo, comando, args.codigo, args.saida, agora_s)
+    print("registrado: %s verificado (evidência: %s, código %d)" % (args.id, args.tipo, args.codigo))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (comum.ErroDeEntrada, registro.ErroRegistro) as erro:
+        print("painel-erro: %s" % erro, file=sys.stderr)
+        sys.exit(2)
+    except registro.ErroEstado as erro:
+        print("painel-erro: %s" % erro, file=sys.stderr)
+        sys.exit(1)
+    except OSError as erro:
+        print("painel-erro: falha de arquivo (%s)" % type(erro).__name__, file=sys.stderr)
+        sys.exit(1)

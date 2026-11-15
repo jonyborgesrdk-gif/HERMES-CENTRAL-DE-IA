@@ -116,7 +116,7 @@ def chamadas_desprotegidas(texto):
 class ProtecaoEstatica(unittest.TestCase):
     def test_producao_sem_subprocessos_desprotegidos(self):
         arquivos = {RAIZ / nome for nome in ('servidor.py', 'sentinela.py', 'coletor', 'refresh-completo',
-                                            'painel-missao', 'painel-pendencia')}
+                                            'painel-missao', 'painel-pendencia', 'painel-erro')}
         for pasta in ('lib', 'cotas', 'hooks'):
             arquivos.update((RAIZ / pasta).rglob('*.py'))
         for arquivo in (RAIZ / 'hooks').rglob('*'):
