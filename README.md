@@ -171,7 +171,7 @@ Com `PAINEL_ERROS=1` no coletor, cada erro de ferramenta do Claude Code e do Cod
 
 ## Uso de rede por programa
 
-Com `PAINEL_REDE=1` a seção de agentes ganha o bloco "Rede · por programa · último minuto": bytes enviados e recebidos e conexões de cada programa da tabela fixa, por categoria de destino (local, rede privada, tailnet, internet). O coletor só lê o arquivo `rede-resumo.json`; quem captura é o comando `painel-rede`, num processo à parte.
+Com `PAINEL_REDE=1` a seção de agentes ganha o bloco "Rede · por programa · último minuto": bytes enviados e recebidos e conexões de cada programa da tabela fixa, por categoria de destino (local, rede privada, tailnet, internet). O coletor só lê o arquivo `rede-resumo.json`; quem captura é o comando `painel-rede`, num processo à parte. Cada programa tem também um gráfico pequeno da taxa enviada e recebida nos últimos 10 minutos, com a escala no máximo atingido e o valor do pico ao lado ("máx."). Esse histórico fica só na memória da página (recarregar zera) e cada ponto é a média entre duas leituras do coletor, cerca de 10 s.
 
 - **Iniciar:** num terminal de administrador, na pasta do painel, `py -3.14 -I -B painel-rede capturar`. De preferência chame o `python.exe` do Python 3.14 pelo caminho completo, com os mesmos argumentos (`-I -B painel-rede capturar`), porque o lançador `py` consulta configuração gravável sem privilégio. Sem elevação o comando recusa, não grava nada e não tenta se elevar.
 - **Parar:** Ctrl+C no terminal da captura, ou `painel-rede parar` em outro terminal de administrador.

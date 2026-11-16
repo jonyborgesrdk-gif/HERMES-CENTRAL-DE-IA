@@ -1722,7 +1722,7 @@ const comRede = (mudancas) => { const d = clone(fixture); Object.assign(d.rede_u
 const linhasRede = (doc) => doc.getElementById('network-rows').children;
 const parRede = (p) => ({ local: [0, 0], privada: [0, 0], tailnet: [0, 0], internet: [0, 0], ...p });
 const progRede = (produto, extra = {}) => ({ produto, rotulo: 'Programa ' + produto, familia: 'claude', tipo: 'cli', conexoes: 1, janela: parRede({ internet: [10, 10] }), total: parRede({}), ...extra });
-const REDE_VAZIA = { estado: null, itens: [], cpu: null, eventos: null, perdidos: 0, retoma: null, sinal: null, motivo: null, noTeto: false };
+const REDE_VAZIA = { estado: null, itens: [], cpu: null, eventos: null, perdidos: 0, retoma: null, sinal: null, motivo: null, noTeto: false, gerado: null, desde: null };
 test('fmtBytes: zero, negativo, NaN e texto dão "0 B"; base 1.000 com uma casa e vírgula decimal até TB', () => {
   [0, -1, NaN, '1500', undefined, null, Infinity, true].forEach((v) => assert.equal(Hermes.fmtBytes(v), '0 B', 'valor ' + String(v)));
   assert.equal(Hermes.fmtBytes(999), '999 B'); assert.equal(Hermes.fmtBytes(1000), '1 kB'); assert.equal(Hermes.fmtBytes(1500), '1,5 kB');
@@ -1732,11 +1732,11 @@ test('redeDe: ausente, null, lista, desligado e estado desconhecido dão estado 
   [semRede(), { rede_uso: null }, { rede_uso: [] }, { rede_uso: 'ativo' }, comRede({ estado: 'desligado' }), comRede({ estado: 'serrote' }), comRede({ estado: '__proto__' }), undefined, null]
     .forEach((d, i) => assert.deepStrictEqual(Hermes.redeDe(d), REDE_VAZIA, 'caso ' + i));
   const r = Hermes.redeDe(clone(fixture));
-  assert.deepStrictEqual({ ...r, itens: null }, { estado: 'ativo', itens: null, cpu: 0.4, eventos: 1236, perdidos: 0, retoma: null, sinal: null, motivo: null, noTeto: false });
+  assert.deepStrictEqual({ ...r, itens: null }, { estado: 'ativo', itens: null, cpu: 0.4, eventos: 1236, perdidos: 0, retoma: null, sinal: null, motivo: null, noTeto: false, gerado: 1793433717, desde: 1793430112 });
   assert.deepStrictEqual(r.itens, [
-    { id: 'claude_cli', rotulo: 'Claude Code CLI', familia: 'claude', conexoes: 3, enviados: 1500000, recebidos: 28000000, destinos: [{ cat: 'internet', bytes: 29500000 }] },
-    { id: 'grok_cli', rotulo: 'Grok CLI', familia: 'grok', conexoes: 1, enviados: 302000, recebidos: 500, destinos: [{ cat: 'tailnet', bytes: 300000 }, { cat: 'local', bytes: 2500 }] },
-    { id: 'outros', rotulo: 'Outros programas', familia: 'outra', conexoes: 42, enviados: 1205000, recebidos: 5000000,
+    { id: 'claude_cli', rotulo: 'Claude Code CLI', familia: 'claude', conexoes: 3, enviados: 1500000, recebidos: 28000000, destinos: [{ cat: 'internet', bytes: 29500000 }], totalEnv: 90000000, totalRec: 2000000000 },
+    { id: 'grok_cli', rotulo: 'Grok CLI', familia: 'grok', conexoes: 1, enviados: 302000, recebidos: 500, destinos: [{ cat: 'tailnet', bytes: 300000 }, { cat: 'local', bytes: 2500 }], totalEnv: 302000, totalRec: 500 },
+    { id: 'outros', rotulo: 'Outros programas', familia: 'outra', conexoes: 42, enviados: 1205000, recebidos: 5000000, totalEnv: 1205000, totalRec: 5000000,
       destinos: [{ cat: 'internet', bytes: 4200000 }, { cat: 'local', bytes: 2000000 }, { cat: 'privada', bytes: 5000 }] }
   ]);
 });
@@ -1868,4 +1868,271 @@ test('rede que lança não derruba a lista de agentes, o bloco de erros nem o de
   });
   silenciarErros(() => a.receber(clone(fixture)));
   assert.equal(linhasRede(doc).length, 3);
+});
+
+/* ---------- E22b: gráfico de rede por programa ---------- */
+const G0 = fixture.rede_uso.gerado_em_epoch, D0 = fixture.rede_uso.desde_epoch;
+const itemRede = (id, totalEnv, totalRec) => ({ id, rotulo: 'P ' + id, familia: 'claude', conexoes: 1, enviados: 0, recebidos: 0, destinos: [], totalEnv, totalRec });
+const modeloRede = (gerado, itens, extra = {}) => ({ ...REDE_VAZIA, estado: 'ativo', gerado, desde: D0, itens, ...extra });
+const plano = (o) => JSON.parse(JSON.stringify(o));      // os mapas do histórico não têm protótipo: compara pelo conteúdo
+const retratoRede = (seg, totalClaude, mud = {}) => {
+  const d = clone(fixture); d.rede_uso.gerado_em_epoch = G0 + seg;
+  if (totalClaude) d.rede_uso.programas[0].total.internet = totalClaude;
+  Object.assign(d.rede_uso, mud); return d;
+};
+const lerGrafico = (tr) => {
+  const ds = tr.descendentes(), caixa = ds.find((e) => e.className === 'net-graph'), svg = ds.find((e) => e.tag === 'svg' && e.className === 'net-spark'), taxa = ds.find((e) => e.className === 'net-rate');
+  return { caixa, svg, oculto: caixa.hidden, rec: svg.children[0].attrs.d, env: svg.children[1].attrs.d, taxas: taxa.children.map((e) => nb(e.textContent)), texto: nb(taxa.textContent) };
+};
+test('fmtTaxa: bytes por segundo, valor inválido vira 0 B/s', () => {
+  [0, -1, NaN, '1500', undefined, null, Infinity].forEach((v) => assert.equal(Hermes.fmtTaxa(v), '0 B/s'));
+  assert.equal(nb(Hermes.fmtTaxa(999)), '999 B/s');
+  assert.equal(nb(Hermes.fmtTaxa(1500)), '1,5 kB/s');
+  assert.equal(nb(Hermes.fmtTaxa(500000)), '500 kB/s');
+  assert.equal(nb(Hermes.fmtTaxa(28000000)), '28 MB/s');
+});
+test('redeDe: gerado, desde e total por programa', () => {
+  const r = Hermes.redeDe(clone(fixture));
+  assert.equal(r.gerado, 1793433717); assert.equal(r.desde, 1793430112);
+  ['gerado_em_epoch', 'desde_epoch'].forEach((campo) => {
+    const outro = campo === 'gerado_em_epoch' ? 'desde' : 'gerado';
+    ['amanhã', null, 0, -5, undefined].forEach((v) => {
+      const d = clone(fixture);
+      if (v === undefined) delete d.rede_uso[campo]; else d.rede_uso[campo] = v;
+      const x = Hermes.redeDe(d);
+      assert.equal(x[campo === 'gerado_em_epoch' ? 'gerado' : 'desde'], null, campo + ' ' + String(v));
+      assert.equal(x[outro], r[outro]);
+      assert.deepStrictEqual(x.itens, r.itens);
+    });
+  });
+  const p = Hermes.redeDe(comRede({ estado: 'parado', gerado_em_epoch: 123 }));
+  assert.equal(p.gerado, 123); assert.deepStrictEqual(p.itens, []);
+  const tot = (total) => { const d = comRede({ programas: [progRede('a', { total })], outros: { conexoes: 0, janela: parRede({}) } }); return Hermes.redeDe(d).itens[0]; };
+  [undefined, null, 'texto', [], parRede({ local: ['1', 2] }), parRede({ local: [1, 2, 3] }), parRede({ local: [-1, 5] }), parRede({ local: [1.5, 2] })].forEach((t, i) => {
+    const it = tot(t);
+    assert.equal(it.totalEnv, 0, 'env caso ' + i); assert.equal(it.totalRec, 0, 'rec caso ' + i);
+  });
+  const mistura = tot(parRede({ local: [10, 20], internet: ['1', 2], tailnet: [3, 4] }));
+  assert.equal(mistura.totalEnv, 13); assert.equal(mistura.totalRec, 24);
+  const o = Hermes.redeDe(comRede({ programas: [], outros: { conexoes: 2, janela: parRede({}), total: parRede({ privada: [7, 8] }) } })).itens[0];
+  assert.equal(o.id, 'outros'); assert.equal(o.totalEnv, 7); assert.equal(o.totalRec, 8);
+});
+test('acumularRede: base, primeiro ponto, repetição e intervalo', () => {
+  const h0 = Hermes.histRedeVazio();
+  assert.deepStrictEqual(plano(h0), { gerado: null, desde: null, fim: null, totais: {}, series: {}, picos: {} });
+  ['totais', 'series', 'picos'].forEach((k) => assert.equal(Object.getPrototypeOf(h0[k]), null));
+  const h1 = Hermes.acumularRede(h0, modeloRede(G0, [itemRede('a', 1000, 5000), itemRede('b', 0, 0)]));
+  assert.deepStrictEqual(plano(h1), { gerado: G0, desde: D0, fim: G0, totais: { a: [1000, 5000], b: [0, 0] }, series: {}, picos: {} });
+  const h2 = Hermes.acumularRede(h1, modeloRede(G0 + 10, [itemRede('a', 21000, 5005000), itemRede('b', 0, 0)]));
+  assert.deepStrictEqual(plano(h2.series), { a: [{ t: G0 + 10, env: 2000, rec: 500000 }], b: [{ t: G0 + 10, env: 0, rec: 0 }] });
+  assert.deepStrictEqual(plano(h2.picos), { a: 500000, b: 0 });
+  assert.equal(h2.gerado, G0 + 10); assert.equal(h2.fim, G0 + 10);
+  assert.deepStrictEqual(plano(h2.totais), { a: [21000, 5005000], b: [0, 0] });
+  ['totais', 'series', 'picos'].forEach((k) => assert.equal(Object.getPrototypeOf(h2[k]), null));
+  assert.equal(Hermes.acumularRede(h2, modeloRede(G0 + 10, [itemRede('a', 999999, 999999)])), h2);
+  assert.deepStrictEqual(plano(h0), { gerado: null, desde: null, fim: null, totais: {}, series: {}, picos: {} });
+  assert.deepStrictEqual(plano(h1), { gerado: G0, desde: D0, fim: G0, totais: { a: [1000, 5000], b: [0, 0] }, series: {}, picos: {} });
+  const h12 = Hermes.acumularRede(h1, modeloRede(G0 + 12, [itemRede('a', 1000 + 24000, 5000 + 1200), itemRede('b', 0, 0)]));
+  assert.deepStrictEqual(plano(h12.series.a), [{ t: G0 + 12, env: 2000, rec: 100 }]);
+  const hu = Hermes.acumularRede(undefined, modeloRede(G0, []));
+  assert.equal(hu.gerado, G0);
+});
+test('acumularRede: casos que não geram ponto', () => {
+  const base = () => {
+    const h1 = Hermes.acumularRede(Hermes.histRedeVazio(), modeloRede(G0, [itemRede('a', 1000, 5000), itemRede('b', 0, 0)]));
+    return Hermes.acumularRede(h1, modeloRede(G0 + 10, [itemRede('a', 21000, 5005000), itemRede('b', 0, 0)]));
+  };
+  const par = (h) => [h.series.a.length, h.series.b.length];
+  let h = Hermes.acumularRede(base(), modeloRede(G0 + 20, [itemRede('a', 20000, 5006000), itemRede('b', 5, 5)]));
+  assert.deepStrictEqual(par(h), [1, 2]);
+  assert.deepStrictEqual(plano(h.series.b[1]), { t: G0 + 20, env: 0.5, rec: 0.5 });
+  assert.deepStrictEqual(plano(h.totais), { a: [20000, 5006000], b: [5, 5] });
+  h = Hermes.acumularRede(base(), modeloRede(G0 + 20, [itemRede('a', 30000, 5000000), itemRede('b', 5, 5)]));
+  assert.deepStrictEqual(par(h), [1, 2]);
+  assert.deepStrictEqual(plano(h.totais), { a: [30000, 5000000], b: [5, 5] });
+  h = Hermes.acumularRede(base(), modeloRede(G0 + 20, [itemRede('a', 30000, 6000000), itemRede('b', 10, 10)], { desde: D0 + 1 }));
+  assert.deepStrictEqual(par(h), [1, 1]);
+  assert.equal(h.desde, D0 + 1); assert.equal(h.gerado, G0 + 20);
+  h = Hermes.acumularRede(h, modeloRede(G0 + 30, [itemRede('a', 31000, 6002000), itemRede('b', 10, 10)], { desde: D0 + 1 }));
+  assert.deepStrictEqual(plano(h.series.a[1]), { t: G0 + 30, env: 100, rec: 200 });
+  assert.deepStrictEqual(plano(h.series.b[1]), { t: G0 + 30, env: 0, rec: 0 });
+  h = Hermes.acumularRede(base(), modeloRede(G0 + 41, [itemRede('a', 40000, 6000000), itemRede('b', 10, 10)]));
+  assert.deepStrictEqual(par(h), [1, 1]);
+  h = Hermes.acumularRede(base(), modeloRede(G0 + 40, [itemRede('a', 40000, 6000000), itemRede('b', 10, 10)]));
+  assert.deepStrictEqual(par(h), [2, 2]);
+  h = Hermes.acumularRede(base(), modeloRede(G0 + 5, [itemRede('a', 40000, 6000000), itemRede('b', 10, 10)]));
+  assert.deepStrictEqual(par(h), [1, 1]); assert.equal(h.gerado, G0 + 5);
+  h = Hermes.acumularRede(base(), modeloRede(G0 + 20, [itemRede('a', 21000, 5005000), itemRede('b', 0, 0), itemRede('c', 9e9, 9e9)]));
+  assert.equal('c' in h.series, false); assert.deepStrictEqual(plano(h.totais).c, [9e9, 9e9]);
+  h = Hermes.acumularRede(h, modeloRede(G0 + 30, [itemRede('a', 21000, 5005000), itemRede('b', 0, 0), itemRede('c', 9e9 + 100, 9e9 + 300)]));
+  assert.deepStrictEqual(plano(h.series.c), [{ t: G0 + 30, env: 10, rec: 30 }]);
+  assert.equal(h.picos.c, 30);
+});
+test('acumularRede: sem retrato ativo a base cai e o desenho fica', () => {
+  const h2 = Hermes.acumularRede(Hermes.acumularRede(Hermes.histRedeVazio(), modeloRede(G0, [itemRede('a', 1000, 5000), itemRede('b', 0, 0)])),
+    modeloRede(G0 + 10, [itemRede('a', 21000, 5005000), itemRede('b', 0, 0)]));
+  const itens = [itemRede('a', 30000, 6000000)];
+  const entradas = [modeloRede(G0 + 20, itens, { estado: 'pausado_carga' }), ...['parado', 'encerrado', 'erro_captura', null].map((estado) => modeloRede(G0 + 20, itens, { estado })), modeloRede(null, itens), undefined, null];
+  entradas.forEach((x, i) => {
+    const h = Hermes.acumularRede(h2, x);
+    assert.equal(h.gerado, null, 'gerado ' + i); assert.equal(h.desde, null); assert.equal(h.fim, G0 + 10);
+    assert.deepStrictEqual(plano(h.totais), {}); assert.equal(Object.getPrototypeOf(h.totais), null);
+    assert.equal(h.series, h2.series); assert.equal(h.picos, h2.picos);
+    assert.equal(Hermes.acumularRede(h, x), h);
+  });
+  const vazio = Hermes.histRedeVazio();
+  assert.equal(Hermes.acumularRede(vazio, modeloRede(G0 + 20, itens, { estado: 'pausado_carga' })), vazio);
+  let h = Hermes.acumularRede(h2, entradas[0]);
+  h = Hermes.acumularRede(h, modeloRede(G0 + 70, [itemRede('a', 900000, 9000000), itemRede('b', 0, 0)]));
+  assert.equal(h.series.a.length, 1); assert.equal(h.series.b.length, 1); assert.equal(h.fim, G0 + 70);
+  h = Hermes.acumularRede(h, modeloRede(G0 + 80, [itemRede('a', 901000, 9002000), itemRede('b', 0, 0)]));
+  assert.deepStrictEqual(plano(h.series.a[1]), { t: G0 + 80, env: 100, rec: 200 });
+  assert.equal(h.picos.a, 500000);
+});
+test('acumularRede: janela de 600 s, teto de 240 pontos, programa que some e ids sem protótipo', () => {
+  let h = Hermes.histRedeVazio(), tot = 0;
+  for (let i = 0; i <= 70; i++) {
+    tot += i === 0 ? 0 : i === 1 ? 10000 : 10;
+    h = Hermes.acumularRede(h, modeloRede(G0 + 10 * i, [itemRede('a', 0, tot)]));
+  }
+  assert.equal(h.fim, G0 + 700);
+  assert.ok(h.series.a.every((p) => p.t >= h.fim - 600));
+  assert.equal(h.series.a.length, 61);
+  assert.ok(h.series.a.every((p) => p.rec !== 1000));
+  assert.equal(h.picos.a, 1000);
+  h = Hermes.histRedeVazio();
+  for (let i = 0; i <= 300; i++) h = Hermes.acumularRede(h, modeloRede(G0 + i, [itemRede('a', 0, i * 100)]));
+  assert.equal(h.series.a.length, 240); assert.equal(h.series.a[0].t, h.fim - 239);
+  h = Hermes.acumularRede(Hermes.histRedeVazio(), modeloRede(G0, [itemRede('a', 0, 0), itemRede('b', 0, 0)]));
+  h = Hermes.acumularRede(h, modeloRede(G0 + 10, [itemRede('a', 100, 100), itemRede('b', 100, 100)]));
+  assert.deepStrictEqual(plano(h.series.b), [{ t: G0 + 10, env: 10, rec: 10 }]); assert.equal(h.picos.b, 10);
+  for (let s = 20; s <= 610; s += 10) {
+    h = Hermes.acumularRede(h, modeloRede(G0 + s, [itemRede('a', s * 10, s * 10)]));
+    assert.ok('b' in h.series, 'series ' + s); assert.ok('b' in h.picos, 'picos ' + s); assert.equal('b' in h.totais, false);
+  }
+  h = Hermes.acumularRede(h, modeloRede(G0 + 620, [itemRede('a', 6200, 6200)]));
+  assert.equal('b' in h.series, false); assert.equal('b' in h.picos, false);
+  assert.equal(h.series.a.length, 61); assert.equal(h.picos.a, 10);
+  h = Hermes.acumularRede(Hermes.histRedeVazio(), modeloRede(G0, [itemRede('__proto__', 0, 0), itemRede('constructor', 0, 0)]));
+  h = Hermes.acumularRede(h, modeloRede(G0 + 10, [itemRede('__proto__', 1000, 2000), itemRede('constructor', 3000, 4000)]));
+  assert.deepStrictEqual(plano(h.series['__proto__']), [{ t: G0 + 10, env: 100, rec: 200 }]);
+  assert.deepStrictEqual(plano(h.series['constructor']), [{ t: G0 + 10, env: 300, rec: 400 }]);
+  assert.equal(h.picos['__proto__'], 200); assert.equal(h.picos['constructor'], 400);
+  assert.deepStrictEqual(Object.keys(h.series).sort(), ['__proto__', 'constructor']);
+  assert.equal(Object.getPrototypeOf(h.series), null);
+  assert.equal(Object.keys(Object.prototype).length, 0); assert.equal(({}).a, undefined);
+});
+test('tracoRede: coordenadas, saltos, escala e pontos fora do formato', () => {
+  const F = G0 + 700, t = (p, c, pico) => Hermes.tracoRede(p, c, F, pico, 120, 24);
+  assert.equal(Hermes.tracoRede([], 'rec', F, 100, 120, 24), '');
+  assert.equal(Hermes.tracoRede(undefined, 'rec', F, 100, 120, 24), '');
+  assert.equal(Hermes.tracoRede(null, 'rec', F, 100, 120, 24), '');
+  [null, NaN, 'x'].forEach((f) => assert.equal(Hermes.tracoRede([{ t: F, rec: 1 }], 'rec', f, 100, 120, 24), ''));
+  assert.equal(t([{ t: F, rec: 100 }], 'rec', 100), 'M120 1L120 1');
+  assert.equal(t([{ t: F, rec: 0 }], 'rec', 100), 'M120 23L120 23');
+  [0, -1, NaN, undefined, 'x'].forEach((pico) => assert.equal(t([{ t: F, rec: 50 }], 'rec', pico), 'M120 23L120 23'));
+  assert.equal(t([{ t: F - 300, rec: 50 }], 'rec', 100), 'M60 12L60 12');
+  assert.equal(t([{ t: F - 600, rec: 100 }], 'rec', 100), 'M0 1L0 1');
+  assert.equal(t([{ t: F - 700, rec: 100 }], 'rec', 100), 'M0 1L0 1');
+  assert.equal(t([{ t: F + 5, rec: 100 }], 'rec', 100), 'M120 1L120 1');
+  assert.equal(t([{ t: F - 10, rec: 50 }, { t: F, rec: 100 }], 'rec', 100), 'M118 12L118 12L120 1');
+  assert.equal(t([{ t: F - 100, rec: 100 }, { t: F - 90, rec: 0 }, { t: F - 59, rec: 100 }, { t: F - 29, rec: 0 }], 'rec', 100), 'M100 1L100 1L102 23M108.2 1L108.2 1L114.2 23');
+  assert.equal(t([{ t: F, rec: 500 }], 'rec', 100), 'M120 1L120 1');
+  assert.equal(t([{ t: F, env: 2000 }], 'env', 500000), 'M120 22.9L120 22.9');
+  const dois = [{ t: F - 10, env: 10, rec: 80 }, { t: F, env: 20, rec: 40 }];
+  assert.notEqual(t(dois, 'env', 100), t(dois, 'rec', 100));
+  assert.equal(t([{ t: F - 10, rec: 50 }, null, { t: F - 5, rec: 'x' }, { t: 'y', rec: 1 }, { t: F - 4, rec: -1 }, { t: F, rec: 100 }], 'rec', 100), 'M118 12L118 12L120 1');
+});
+test('rede: o gráfico nasce oculto, aparece no segundo retrato e reaproveita os elementos', () => {
+  const { a, doc } = app(); a.receber(retratoRede(0));
+  let linhas = linhasRede(doc);
+  assert.equal(linhas.length, 3);
+  const antes = linhas.map(lerLinhaErro);
+  linhas.forEach((tr) => { const g = lerGrafico(tr); assert.equal(g.oculto, true); assert.equal(g.rec, ''); assert.equal(g.env, ''); });
+  assert.deepStrictEqual(antes, [
+    { rotulo: 'Claude Code CLI', detalhe: '3 conexões', cls: 'status good', estado: '↑ ' + Hermes.fmtBytes(1500000) + ' · ↓ ' + Hermes.fmtBytes(28000000), sub: 'internet ' + Hermes.fmtBytes(29500000) },
+    { rotulo: 'Grok CLI', detalhe: '1 conexão', cls: 'status good', estado: '↑ ' + Hermes.fmtBytes(302000) + ' · ↓ ' + Hermes.fmtBytes(500), sub: 'tailnet ' + Hermes.fmtBytes(300000) + ' · local ' + Hermes.fmtBytes(2500) },
+    { rotulo: 'Outros programas', detalhe: '42 conexões', cls: 'status good', estado: '↑ ' + Hermes.fmtBytes(1205000) + ' · ↓ ' + Hermes.fmtBytes(5000000),
+      sub: 'internet ' + Hermes.fmtBytes(4200000) + ' · local ' + Hermes.fmtBytes(2000000) + ' · rede privada ' + Hermes.fmtBytes(5000) }
+  ]);
+  const g0 = lerGrafico(linhas[0]);
+  assert.equal(g0.svg.attrs.viewBox, '0 0 120 24'); assert.equal(g0.svg.attrs.width, '120'); assert.equal(g0.svg.attrs.height, '24'); assert.equal(g0.svg.attrs['aria-hidden'], 'true');
+  assert.equal(g0.svg.children.length, 2);
+  assert.deepStrictEqual(g0.svg.children.map((e) => e.tag), ['path', 'path']);
+  assert.deepStrictEqual(g0.svg.children.map((e) => e.className), ['net-down', 'net-up']);
+  assert.equal(g0.caixa.attrs.title, 'Taxa média entre duas leituras, nos últimos 10 minutos. A escala é o máximo atingido desde que a página abriu.');
+  const taxa = g0.caixa.descendentes().find((e) => e.className === 'net-rate');
+  assert.deepStrictEqual(taxa.children.map((e) => e.className), ['net-up', 'net-down', '']);
+  const primeira = linhas[0];
+  a.receber(retratoRede(10, [90020000, 2005000000]));
+  linhas = linhasRede(doc);
+  assert.equal(linhas[0], primeira); assert.equal(lerGrafico(linhas[0]).svg, g0.svg);
+  linhas.forEach((tr) => assert.equal(lerGrafico(tr).oculto, false));
+  const g1 = lerGrafico(linhas[0]);
+  assert.equal(g1.rec, 'M120 1L120 1'); assert.equal(g1.env, 'M120 22.9L120 22.9');
+  assert.deepStrictEqual(g1.taxas, ['↑ 2 kB/s', '↓ 500 kB/s', 'máx. 500 kB/s']);
+  assert.equal(g1.texto, '↑ 2 kB/s · ↓ 500 kB/s · máx. 500 kB/s');
+  [1, 2].forEach((i) => {
+    const g = lerGrafico(linhas[i]);
+    assert.equal(g.rec, 'M120 23L120 23'); assert.equal(g.env, 'M120 23L120 23');
+    assert.deepStrictEqual(g.taxas, ['↑ 0 B/s', '↓ 0 B/s', 'máx. 0 B/s']);
+  });
+  assert.deepStrictEqual(linhas.map(lerLinhaErro), antes);
+});
+test('rede: escala pelo máximo, retrato repetido, pausa, volta e chave que some e volta', () => {
+  const { a, doc } = app();
+  a.receber(retratoRede(0)); a.receber(retratoRede(10, [90020000, 2005000000]));
+  const ler = () => lerGrafico(linhasRede(doc)[0]);
+  a.receber(retratoRede(20, [90030000, 2006000000]));
+  let g = ler();
+  assert.equal(g.rec, 'M118 1L118 1L120 18.6'); assert.equal(g.env, 'M118 22.9L118 22.9L120 23');
+  assert.deepStrictEqual(g.taxas, ['↑ 1 kB/s', '↓ 100 kB/s', 'máx. 500 kB/s']);
+  a.receber(retratoRede(20, [90030000, 2006000000])); a.desenharTudo();
+  let g2 = ler();
+  assert.equal(g2.rec, g.rec); assert.equal(g2.env, g.env); assert.deepStrictEqual(g2.taxas, g.taxas);
+  a.receber(retratoRede(30, null, { estado: 'pausado_carga', retoma_em_epoch: G0 + 90 }));
+  assert.equal(linhasRede(doc).length, 3);
+  g2 = ler();
+  assert.equal(g2.oculto, false); assert.equal(g2.rec, g.rec); assert.equal(g2.env, g.env);
+  assert.deepStrictEqual(g2.taxas, ['↑ —', '↓ —', 'máx. 500 kB/s']);
+  a.receber(retratoRede(100, [90530000, 2056000000]));
+  g = ler();
+  assert.equal(g.rec, 'M102 1L102 1L104 18.6'); assert.deepStrictEqual(g.taxas, ['↑ —', '↓ —', 'máx. 500 kB/s']);
+  a.receber(retratoRede(110, [90540000, 2058000000]));
+  g = ler();
+  assert.equal(g.rec, 'M100 1L100 1L102 18.6M120 14.2L120 14.2');
+  assert.deepStrictEqual(g.taxas, ['↑ 1 kB/s', '↓ 200 kB/s', 'máx. 500 kB/s']);
+  a.receber(semRede());
+  assert.equal(linhasRede(doc).length, 0);
+  a.receber(retratoRede(120, [90550000, 2060000000]));
+  assert.equal(linhasRede(doc).length, 3);
+  g = ler();
+  assert.equal(g.oculto, false); assert.equal(g.taxas[0], '↑ —');
+});
+test('rede: valores hostis não viram marcação nem número inválido, e o CSS tem as regras do gráfico', () => {
+  const { a, doc } = app();
+  silenciarErros((erros) => {
+    a.receber(retratoRede(0));
+    const total = (seg, t, mud = {}) => { const d = retratoRede(seg, null, mud); d.rede_uso.programas[0].total = t; a.receber(d); };
+    total(10, '<img src=x onerror=alert(1)>');
+    total(20, { internet: ['9', '9'] });
+    total(30, { internet: [9e15, 9e15] });
+    total(40, { internet: [9e15 + 2000000, 9e15 + 4000000] });
+    a.receber(retratoRede(50, null, { gerado_em_epoch: '<script>' }));
+    assert.equal(erros.length, 0);
+  });
+  const bloco = doc.getElementById('network'), ds = bloco.descendentes();
+  assert.equal(ds.some((e) => e.tag === 'img' || e.tag === 'script'), false);
+  linhasRede(doc).forEach((tr) => {
+    const g = lerGrafico(tr);
+    assert.match(g.rec, /^(?:[ML]\d+(?:\.\d)? \d+(?:\.\d)?)*$/); assert.match(g.env, /^(?:[ML]\d+(?:\.\d)? \d+(?:\.\d)?)*$/);
+    assert.ok(!/NaN|Infinity|undefined/.test(g.texto));
+  });
+  ds.forEach((e) => Object.values(e.attrs).forEach((v) => assert.ok(!/onerror|<img|alert/.test(String(v)))));
+  const linhasCss = css.split('\n');
+  ['.net-graph{display:block;margin-top:5px}', '.net-graph[hidden]{display:none}', '.net-spark{width:120px;height:24px;border-bottom:1px solid var(--line)}',
+    '.net-spark path{fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}',
+    '.net-rate{display:block;margin-top:3px;font-size:10px;color:var(--faint);white-space:normal}', '.net-rate span{white-space:nowrap}',
+    '.net-up{color:var(--accent)}', '.net-down{color:var(--green)}'].forEach((l) => assert.ok(linhasCss.includes(l), l));
+  assert.equal(linhasCss.filter((l) => l.startsWith('.net-') && l.includes('#')).length, 0);
 });
