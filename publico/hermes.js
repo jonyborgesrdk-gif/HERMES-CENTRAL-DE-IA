@@ -43,6 +43,8 @@ var SVGNS = "http://www.w3.org/2000/svg";           // namespace do SVG, não é
 var CHAVE_TEMA = "painel-tema", CHAVE_PRIVACIDADE = "painel-privacidade";   // as mesmas da página clássica
 var TEMAS = ["auto", "claro", "escuro"], ROTULO_TEMA = { auto: "automático", claro: "claro", escuro: "escuro" };
 var VELHO_DEPOIS_DE_S = 60, LER_A_CADA_MS = 5000, TEMPO_REFRESH_MS = 15000;
+var JANELA_GRAFICO_S = 600, SALTO_GRAFICO_S = 30, MAX_PONTOS_GRAFICO = 240, GRAFICO_L = 120, GRAFICO_A = 24;   // gráfico de rede por programa (E22b)
+var TITULO_GRAFICO_REDE = "Taxa média entre duas leituras, nos últimos 10 minutos. A escala é o máximo atingido desde que a página abriu.";
 var JANELAS = { "24h": "Últimas 24 h", hoje: "Hoje", "7d": "Últimos 7 dias", "30d": "Últimos 30 dias" };
 var SECOES = [["overview", "Visão geral"], ["agents", "Agentes"], ["usage", "Consumo e gastos"], ["services", "Serviços"], ["events", "Eventos"]];
 var ROTULO_ESTADO = { trabalhando: "Trabalhando", ocioso: "Ocioso", esperando: "Esperando", parado: "Parado", indeterminado: "Indeterminado", sem_leitura: "Sem leitura" };
@@ -486,7 +488,7 @@ function redeDe(dados) {
   var familias = ["claude", "codex", "grok", "hermes", "cursor", "copilot", "maestri"], motivos = ["sessao", "provedor", "consumidor", "outro"];
   var r = dados && dados.rede_uso;
   if (!r || typeof r !== "object" || Array.isArray(r) || estados.indexOf(r.estado) < 0)
-    return { estado: null, itens: [], cpu: null, eventos: null, perdidos: 0, retoma: null, sinal: null, motivo: null, noTeto: false };
+    return { estado: null, itens: [], cpu: null, eventos: null, perdidos: 0, retoma: null, sinal: null, motivo: null, noTeto: false, gerado: null, desde: null };
   var inteiro = function (x) { return numero(x) && x >= 0 && Math.floor(x) === x; };
   var natural = function (x) { return inteiro(x) ? x : 0; };
   var positivo = function (x) { return numero(x) && x > 0 ? x : null; };
@@ -503,7 +505,7 @@ function redeDe(dados) {
   };
   var saida = { estado: r.estado, itens: [], cpu: numero(r.cpu_pct) && r.cpu_pct >= 0 ? r.cpu_pct : null, eventos: numero(r.eventos_s) && r.eventos_s >= 0 ? r.eventos_s : null,
                 perdidos: natural(r.perdidos), retoma: positivo(r.retoma_em_epoch), sinal: positivo(r.ultimo_sinal_epoch),
-                motivo: r.estado === "erro_captura" ? (motivos.indexOf(r.motivo) >= 0 ? r.motivo : "outro") : null, noTeto: r.conexoes_no_teto === true };
+                motivo: r.estado === "erro_captura" ? (motivos.indexOf(r.motivo) >= 0 ? r.motivo : "outro") : null, noTeto: r.conexoes_no_teto === true, gerado: positivo(r.gerado_em_epoch), desde: positivo(r.desde_epoch) };
   if (r.estado !== "ativo" && r.estado !== "pausado_carga") return saida;
   var vistos = Object.create(null), itens = [];
   vistos.outros = true;      // "outros" é a chave da última linha: um programa com esse produto repetiria a chave
@@ -512,21 +514,69 @@ function redeDe(dados) {
     if (typeof p.produto !== "string" || !/^[a-z0-9_]{1,40}$/.test(p.produto) || vistos[p.produto] === true) return;
     if (typeof p.rotulo !== "string" || !p.rotulo || p.rotulo.length > 60) return;
     vistos[p.produto] = true;
-    var s = somar(p.janela);
+    var s = somar(p.janela), t = somar(p.total);
     itens.push({ id: p.produto, rotulo: p.rotulo, familia: familias.indexOf(p.familia) >= 0 ? p.familia : "outra", conexoes: natural(p.conexoes),
-                 enviados: s.enviados, recebidos: s.recebidos, destinos: s.destinos });
+                 enviados: s.enviados, recebidos: s.recebidos, destinos: s.destinos, totalEnv: t.enviados, totalRec: t.recebidos });
   });
   itens = itens.map(function (it, i) { return { it: it, i: i }; })
     .sort(function (a, b) { return (b.it.enviados + b.it.recebidos) - (a.it.enviados + a.it.recebidos) || a.i - b.i; })
     .slice(0, 40).map(function (x) { return x.it; });
   var o = r.outros;
   if (o && typeof o === "object" && !Array.isArray(o)) {
-    var so = somar(o.janela), co = natural(o.conexoes);
+    var so = somar(o.janela), co = natural(o.conexoes), to = somar(o.total);
     if (co > 0 || so.enviados + so.recebidos > 0)
-      itens.push({ id: "outros", rotulo: "Outros programas", familia: "outra", conexoes: co, enviados: so.enviados, recebidos: so.recebidos, destinos: so.destinos });
+      itens.push({ id: "outros", rotulo: "Outros programas", familia: "outra", conexoes: co, enviados: so.enviados, recebidos: so.recebidos, destinos: so.destinos, totalEnv: to.enviados, totalRec: to.recebidos });
   }
   saida.itens = itens;
   return saida;
+}
+/* Gráfico de rede (E22b): taxa por intervalo entre dois retratos, a partir do total acumulado. Só números; o
+   histórico vive na memória da página. Mapas sem protótipo: "__proto__" e "constructor" são produtos válidos. */
+function fmtTaxa(v) { return fmtBytes(v) + "/s"; }
+function histRedeVazio() {
+  return { gerado: null, desde: null, fim: null, totais: Object.create(null), series: Object.create(null), picos: Object.create(null) };
+}
+function acumularRede(hist, x) {
+  var h = hist || histRedeVazio();
+  if (!x || x.estado !== "ativo" || x.gerado === null) {      // sem retrato ativo com horário: a base cai; o que já foi desenhado fica
+    if (h.gerado === null) return h;
+    return { gerado: null, desde: null, fim: h.fim, totais: Object.create(null), series: h.series, picos: h.picos };
+  }
+  if (x.gerado === h.gerado) return h;                        // o mesmo retrato chega várias vezes: não é amostra nova
+  var continuo = h.gerado !== null && x.desde === h.desde && x.gerado > h.gerado && x.gerado - h.gerado <= SALTO_GRAFICO_S;
+  var dt = continuo ? x.gerado - h.gerado : 0, corte = x.gerado - JANELA_GRAFICO_S;
+  var totais = Object.create(null), series = Object.create(null), picos = Object.create(null);
+  x.itens.forEach(function (it) { totais[it.id] = [it.totalEnv, it.totalRec]; });
+  Object.keys(h.series).forEach(function (id) {               // corta o que saiu da janela; programa que sumiu e esvaziou sai com o pico
+    var s = h.series[id].filter(function (p) { return p.t >= corte; });
+    if (s.length === 0 && !(id in totais)) return;
+    series[id] = s;
+    if (numero(h.picos[id])) picos[id] = h.picos[id];
+  });
+  if (continuo) x.itens.forEach(function (it) {
+    var a = h.totais[it.id];
+    if (!a) return;                                           // não estava no retrato anterior: só vira base
+    var de = it.totalEnv - a[0], dr = it.totalRec - a[1];
+    if (de < 0 || dr < 0) return;                             // contador menor que o anterior: sem ponto, base nova
+    var p = { t: x.gerado, env: de / dt, rec: dr / dt }, s = (series[it.id] || []).concat([p]);
+    series[it.id] = s.length > MAX_PONTOS_GRAFICO ? s.slice(s.length - MAX_PONTOS_GRAFICO) : s;
+    picos[it.id] = Math.max(picos[it.id] || 0, p.env, p.rec);
+  });
+  return { gerado: x.gerado, desde: x.desde, fim: x.gerado, totais: totais, series: series, picos: picos };
+}
+function tracoRede(pontos, campo, fim, pico, largura, altura) {
+  if (!numero(fim) || !numero(largura) || !numero(altura)) return "";
+  var d = "", anterior = null, teto = numero(pico) && pico > 0 ? pico : 0;
+  lista(pontos).forEach(function (p) {
+    var v = p && p[campo];
+    if (!numero(v) || v < 0 || !numero(p.t)) return;          // ponto fora do formato não entra no traço
+    var x = Math.round(Math.max(0, Math.min(largura, largura * (1 - (fim - p.t) / JANELA_GRAFICO_S))) * 10) / 10;
+    var y = Math.round((1 + (altura - 2) * (1 - (teto > 0 ? Math.min(1, v / teto) : 0))) * 10) / 10;
+    var par = x + " " + y;
+    d += anterior === null || p.t - anterior > SALTO_GRAFICO_S ? "M" + par + "L" + par : "L" + par;
+    anterior = p.t;
+  });
+  return d;
 }
 function processosDe(dados) {
   var p = objeto(dados && dados.processos);
@@ -638,6 +688,7 @@ function criarApp(doc, win, opcoes) {
     tema: TEMAS.indexOf(temaSalvo) >= 0 ? temaSalvo : "auto", privado: ler(CHAVE_PRIVACIDADE) !== "0"
   };
   var timerToast = null, focoAntesDoModal = null, fecharTransporte = null;
+  var histRede = histRedeVazio();      // histórico do gráfico de rede: só na memória desta página (recarregar zera)
   var comoArquivo = !!(win.location && win.location.protocol === "file:");     // fetch e EventSource não funcionam por file:
   var m = function (t) { return estado.privado ? mascararEmails(t) : t; };    // todo texto de dado passa por aqui
 
@@ -878,6 +929,28 @@ function criarApp(doc, win, opcoes) {
     setTxt($("extra-agents-cursor"), !x.ativo ? "" : c.estado === "ok" ? "cursor-agent: último chat há " + duracao(agoraS() - c.ultimo) + " · " + plural(c.chats, "chat local", "chats locais")
       : c.estado === "sem_dado" ? "cursor-agent: nenhum chat local" : "");
   }
+  function criarLinhaRede(chave) {      // a linha comum mais a caixa do gráfico, embaixo dos destinos
+    var tr = criarLinhaErro(chave), r = tr._r;
+    r.caixa = el(doc, "span", "net-graph");
+    r.caixa.hidden = true;
+    r.caixa.setAttribute("title", TITULO_GRAFICO_REDE);
+    var svg = doc.createElementNS(SVGNS, "svg");
+    svg.setAttribute("class", "net-spark");
+    svg.setAttribute("viewBox", "0 0 " + GRAFICO_L + " " + GRAFICO_A);
+    svg.setAttribute("width", String(GRAFICO_L)); svg.setAttribute("height", String(GRAFICO_A));
+    svg.setAttribute("aria-hidden", "true");
+    r.tracoRec = doc.createElementNS(SVGNS, "path"); r.tracoRec.setAttribute("class", "net-down");
+    r.tracoEnv = doc.createElementNS(SVGNS, "path"); r.tracoEnv.setAttribute("class", "net-up");
+    svg.appendChild(r.tracoRec); svg.appendChild(r.tracoEnv);
+    var taxa = el(doc, "small", "net-rate");
+    r.taxaEnv = el(doc, "span", "net-up"); r.taxaRec = el(doc, "span", "net-down"); r.taxaPico = el(doc, "span");
+    taxa.appendChild(r.taxaEnv); taxa.appendChild(doc.createTextNode(" · "));
+    taxa.appendChild(r.taxaRec); taxa.appendChild(doc.createTextNode(" · "));
+    taxa.appendChild(r.taxaPico);
+    r.caixa.appendChild(svg); r.caixa.appendChild(taxa);
+    r.sub.parentNode.appendChild(r.caixa);
+    return tr;
+  }
   function atualizarLinhaRede(tr, item) {
     var r = tr._r, nomes = { local: "local", privada: "rede privada", tailnet: "tailnet", internet: "internet" };
     if (r.familia !== item.familia) { r.familia = item.familia; r.logo.replaceChildren(icone(doc, iconeDoAgente(item.familia))); }
@@ -887,8 +960,17 @@ function criarApp(doc, win, opcoes) {
     if (r.status.className !== cls) r.status.className = cls;
     setTxt(r.estado, "↑ " + fmtBytes(item.enviados) + " · ↓ " + fmtBytes(item.recebidos));
     setTxt(r.sub, item.destinos.length > 0 ? item.destinos.map(function (x) { return nomes[x.cat] + " " + fmtBytes(x.bytes); }).join(" · ") : "sem tráfego no último minuto");
+    var serie = histRede.series[item.id] || [], pico = histRede.picos[item.id] || 0, ult = serie.length > 0 ? serie[serie.length - 1] : null;
+    var atual = ult !== null && histRede.gerado !== null && ult.t === histRede.gerado ? ult : null;      // taxa velha não passa por atual
+    r.caixa.hidden = serie.length === 0;
+    setAttr(r.tracoRec, "d", tracoRede(serie, "rec", histRede.fim, pico, GRAFICO_L, GRAFICO_A));
+    setAttr(r.tracoEnv, "d", tracoRede(serie, "env", histRede.fim, pico, GRAFICO_L, GRAFICO_A));
+    setTxt(r.taxaEnv, "↑ " + (atual ? fmtTaxa(atual.env) : "—"));
+    setTxt(r.taxaRec, "↓ " + (atual ? fmtTaxa(atual.rec) : "—"));
+    setTxt(r.taxaPico, "máx. " + fmtTaxa(pico));
   }
   function desenharRede(x) {      // bloco próprio: não mexe nas linhas de agente, nos blocos de presença, de erros e de outros agentes nem nos cartões do topo
+    histRede = acumularRede(histRede, x);
     var agora = agoraS(), nota = "", selos = { ativo: "ativa", pausado_carga: "pausada por carga", parado: "parada", encerrado: "encerrada", erro_captura: "erro" };
     if (x.estado === "ativo") nota = ["Captura ativa", x.cpu !== null ? fmtNum(x.cpu, 0, 1) + "% de um núcleo" : "", x.eventos !== null ? fmtNum(x.eventos, 0, 0) + " eventos por segundo" : "",
       x.perdidos > 0 ? plural(x.perdidos, "evento perdido", "eventos perdidos") : "", x.noTeto ? "contagem de conexões no teto" : ""].filter(Boolean).join(" · ");
@@ -898,7 +980,7 @@ function criarApp(doc, win, opcoes) {
     else if (x.estado === "erro_captura") nota = ["sessao", "provedor", "consumidor"].indexOf(x.motivo) >= 0 ? "Não foi possível abrir a sessão de captura" : "A captura parou com erro";
     $("network").hidden = x.estado === null;
     setTxt($("network-badge"), x.estado === null ? "" : selos[x.estado]);
-    sincronizar($("network-rows"), x.itens, function (item) { return item.id; }, criarLinhaErro, atualizarLinhaRede);
+    sincronizar($("network-rows"), x.itens, function (item) { return item.id; }, criarLinhaRede, atualizarLinhaRede);
     setTxt($("network-nota"), nota);
   }
 
@@ -1529,7 +1611,7 @@ var api = {
   agentesDe: agentesDe, contasDe: contasDe, consumoClaude5h: consumoClaude5h, gastosDe: gastosDe, servicosDe: servicosDe, pendenciasDe: pendenciasDe,
   errosDe: errosDe,
   outrosAgentesDe: outrosAgentesDe,
-  redeDe: redeDe, fmtBytes: fmtBytes,
+  redeDe: redeDe, fmtBytes: fmtBytes, fmtTaxa: fmtTaxa, histRedeVazio: histRedeVazio, acumularRede: acumularRede, tracoRede: tracoRede,
   fontesComProblema: fontesComProblema, presencaDe: presencaDe, presencaLinuxDe: presencaLinuxDe, cotasLocaisDe: cotasLocaisDe, unificarCodex: unificarCodex, vigilanteDe: vigilanteDe, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
