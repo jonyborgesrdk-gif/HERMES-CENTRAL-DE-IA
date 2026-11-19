@@ -12,7 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import servidor
 
-HOST = 'desktop-a6kd752.tail03a452.ts.net'
+HOST = 'painel-exemplo.tailnet-exemplo.ts.net'
 
 
 class HostsTests(unittest.TestCase):
@@ -71,7 +71,7 @@ class HostsTests(unittest.TestCase):
         self.assertEqual(self.pedir(self.iniciar(HOST), HOST.upper()), 200)
 
     def test_outro_host_ts_net_continua_403(self):
-        self.assertEqual(self.pedir(self.iniciar(HOST), 'outro.tail03a452.ts.net'), 403)
+        self.assertEqual(self.pedir(self.iniciar(HOST), 'outro.tailnet-exemplo.ts.net'), 403)
 
     def test_origin_https_do_host_aceita_dados(self):
         srv = self.iniciar(HOST)
@@ -84,7 +84,7 @@ class HostsTests(unittest.TestCase):
 
     def test_origin_https_de_outro_host_e_403(self):
         srv = self.iniciar(HOST)
-        self.assertEqual(self.pedir(srv, HOST, 'https://outro.tail03a452.ts.net'), 403)
+        self.assertEqual(self.pedir(srv, HOST, 'https://outro.tailnet-exemplo.ts.net'), 403)
 
     def test_refresh_passa_da_checagem_de_origem(self):
         srv = self.iniciar(HOST)
