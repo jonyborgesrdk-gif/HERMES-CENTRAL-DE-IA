@@ -444,6 +444,10 @@ def extras_ativos():
         extras += ("sessoes_grok", "sessoes_hermes", "chat_cursor")
     if os.environ.get('PAINEL_REDE', '0') == '1':
         extras += ("rede_uso",)
+    if os.environ.get('PAINEL_MAQUINA', '0') == '1':
+        extras += ("maquina",)
+    if os.environ.get('PAINEL_CUSTO', '0') == '1':
+        extras += ("custo_agentes",)
     return extras
 
 
@@ -486,6 +490,12 @@ def fontes_vivas(sem_contas=False):
     if os.environ.get('PAINEL_REDE', '0') == '1':
         from fontes import rede_uso
         fontes["rede_uso"] = rede_uso.ler
+    if os.environ.get('PAINEL_MAQUINA', '0') == '1':
+        from fontes import maquina
+        fontes["maquina"] = maquina.ler
+    if os.environ.get('PAINEL_CUSTO', '0') == '1':
+        from fontes import custo_agentes
+        fontes["custo_agentes"] = custo_agentes.ler
     return fontes
 
 
@@ -505,7 +515,7 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
                   "cota_codex_local": 120, "cota_grok_bot": 60, "cota_cursor": 120,
                   "vigilante2": 30, "erros_agentes": 60,
                   "sessoes_grok": 10, "sessoes_hermes": 30, "chat_cursor": 120,
-                  "rede_uso": 10}
+                  "rede_uso": 10, "maquina": 10, "custo_agentes": 300}
     extras = extras_ativos()
     for nome in ("eventos_hooks", "sessoes_codex", "maestri_wire", "cota_claude", "processos", "servicos") + extras:
         anterior = cache.get(nome)

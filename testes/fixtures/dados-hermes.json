@@ -1,4 +1,180 @@
 {
+ "custo_agentes": {
+   "estado": "ok",
+   "hoje": {
+     "usd": 2,
+     "brl": 10,
+     "tokens": {
+       "total": 110
+     },
+     "flags": []
+   },
+   "sete_dias": {
+     "usd": 6,
+     "brl": 30,
+     "tokens": {
+       "total": 110
+     },
+     "flags": []
+   },
+   "agentes": [
+     {
+       "agente": "claude",
+       "selo": "assinatura (equivalente de API)",
+       "estado": "ok",
+       "hoje": {
+         "usd": 2,
+         "brl": 10,
+         "tokens": {
+           "total": 110
+         },
+         "flags": []
+       },
+       "sete_dias": {
+         "usd": 6,
+         "brl": 30,
+         "tokens": {
+           "total": 110
+         },
+         "flags": []
+       }
+     },
+     {
+       "agente": "codex",
+       "selo": "assinatura (equivalente de API)",
+       "estado": "ok",
+       "hoje": {
+         "usd": 0,
+         "brl": 0,
+         "tokens": {
+           "total": 110
+         },
+         "flags": []
+       },
+       "sete_dias": {
+         "usd": 0,
+         "brl": 0,
+         "tokens": {
+           "total": 110
+         },
+         "flags": []
+       }
+     },
+     {
+       "agente": "grok",
+       "selo": "informado pelo Grok",
+       "estado": "ok",
+       "hoje": {
+         "usd": 0,
+         "brl": 0,
+         "tokens": {
+           "total": 110
+         },
+         "flags": []
+       },
+       "sete_dias": {
+         "usd": 0,
+         "brl": 0,
+         "tokens": {
+           "total": 110
+         },
+         "flags": []
+       }
+     },
+     {
+       "agente": "hermes",
+       "selo": "estimado",
+       "estado": "ok",
+       "hoje": {
+         "usd": 0,
+         "brl": 0,
+         "tokens": {
+           "total": 110
+         },
+         "flags": []
+       },
+       "sete_dias": {
+         "usd": 0,
+         "brl": 0,
+         "tokens": {
+           "total": 110
+         },
+         "flags": []
+       }
+     },
+     {
+       "agente": "cursor-agent",
+       "selo": "sem leitura",
+       "estado": "sem leitura",
+       "hoje": {
+         "usd": null,
+         "brl": null,
+         "tokens": {
+           "total": 110
+         },
+         "flags": []
+       },
+       "sete_dias": {
+         "usd": null,
+         "brl": null,
+         "tokens": {
+           "total": 110
+         },
+         "flags": []
+       }
+     }
+   ],
+   "dias": [
+     {
+       "dia": "2026-10-30",
+       "total": {
+         "usd": 4,
+         "brl": 20,
+         "tokens": {
+           "total": 110
+         },
+         "flags": []
+       },
+       "agentes": []
+     },
+     {
+       "dia": "2026-10-31",
+       "total": {
+         "usd": 2,
+         "brl": 10,
+         "tokens": {
+           "total": 110
+         },
+         "flags": []
+       },
+       "agentes": []
+     }
+   ],
+   "sessoes": [
+     {
+       "usd": 2,
+       "brl": 10,
+       "tokens": {
+         "total": 110
+       },
+       "flags": [],
+       "agente": "claude",
+       "modelo": "claude-opus-5-5",
+       "inicio_epoch": 1793430000,
+       "fim_epoch": 1793433000
+     }
+   ],
+   "sessoes_hoje": 1,
+   "cotacao": {
+     "usd_brl": 5,
+     "data_epoch": 1793433600,
+     "fonte": "manual",
+     "desatualizada": false
+   },
+   "tarifas": [],
+   "avisos": [],
+   "registros_ignorados": 0
+ },
  "versao": 1,
  "gerado_em": "2026-10-31T05:01:52-03:00",
  "gerado_em_epoch": 1793433712.0,
@@ -261,6 +437,13 @@
    "desatualizado": false
   },
   "vigilante2": {
+   "ok": true,
+   "erro": null,
+   "hora": 1793433709.0,
+   "ultima_leitura_ok": 1793433709.0,
+   "desatualizado": false
+  },
+  "maquina": {
    "ok": true,
    "erro": null,
    "hora": 1793433709.0,
@@ -743,6 +926,16 @@
   "estado": "ok",
   "plano": "pro_plus",
   "assinatura": "active"
+ },
+ "maquina": {
+  "cpu_pct": 23.4,
+  "cpu_janela_s": 10.0,
+  "discos": [
+   {"unidade": "C:", "total_bytes": 536870912000, "livre_bytes": 214748364800, "usado_pct": 60.0},
+   {"unidade": "D:", "total_bytes": 1073741824000, "livre_bytes": 107374182400, "usado_pct": 90.0}
+  ],
+  "discos_sem_leitura": 0,
+  "lido_em_epoch": 1793433700.0
  },
  "vigilante2": {
   "estado": "ok",

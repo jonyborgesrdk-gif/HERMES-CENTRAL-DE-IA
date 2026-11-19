@@ -136,6 +136,46 @@ inventa número.
 | `PAINEL_ERROS` | `1` liga a captura de erros de ferramenta dos agentes (opt-in, desligada por padrão): o painel lê só os transcripts do Claude Code (`~/.claude/projects`) e as sessões do Codex (`~/.codex/sessions`), sem rede e sem subprocesso, e publica só categoria, ferramenta, estado, código de saída e contagens; nenhum texto de erro sai da máquina nem é copiado. A primeira passada só marca a posição de cada arquivo: nada anterior a ela é capturado. Qualquer outro valor mantém a saída antiga. Para ver, corrigir e verificar cada erro, veja a seção "Erros de ferramenta: ver, corrigir e verificar". |
 | `PAINEL_AGENTES_EXTRA` | `1` liga as sessões de outros agentes (opt-in, desligada por padrão): sessões vivas do Grok CLI (`~/.grok`), sessões do Hermes abertas com atividade nos últimos 15 minutos (`state.db`, só leitura) e a data do último chat do cursor-agent (`~/.cursor/chats`). Publica só estado, modelo, contagens de tokens, categoria da última ferramenta e horários; nenhum título, resumo, pasta, prompt ou identificador de sessão. Sem rede e sem subprocesso. Qualquer outro valor mantém a saída de antes. |
 | `PAINEL_REDE` | `1` liga a leitura do resumo de rede (opt-in, desligada por padrão). O coletor só lê `rede-resumo.json`; quem captura é o comando `painel-rede capturar`, iniciado à parte num terminal de administrador (veja "Uso de rede por programa"). Saem só bytes e conexões por programa da tabela fixa e por categoria de destino (local, rede privada, tailnet, internet); nenhum endereço, porta, PID ou nome de processo é gravado. Qualquer outro valor mantém a saída de antes. |
+| `PAINEL_MAQUINA` | `1` liga o cartão "Máquina" (opt-in, desligado por padrão): uso de CPU (delta entre duas leituras de `GetSystemTimes`; a primeira passada mostra "sem leitura") e espaço dos discos fixos, na seção Saúde dos serviços. Sem rede, sem subprocesso e sem biblioteca extra; saem só números e a letra da unidade. Qualquer outro valor mantém a saída antiga. |
+| `PAINEL_CUSTO` | Somente `1` liga o cartão "Custo" e a fonte `custo_agentes`, a cada 300 s: últimos 7 dias e até 20 sessões mais caras de hoje, US$ e R$, tokens por tipo. Claude Code e Codex são equivalentes de API da assinatura; Grok informa o próprio custo; Hermes é estimado e rateado por mensagens; Cursor-agent fica sem leitura. Sem a variável, nenhuma chave é adicionada. |
+
+As tarifas aprovadas (US$ por 1 milhão de tokens) ficam em `lib/tarifas_padrao.json`,
+no formato `{"modelos": {"nome-do-modelo": {"entrada": 2, "cache_leitura": 0.1,
+"cache_escrita_30m": 2.5, "saida": 10, "fonte": "https://exemplo.com/precos",
+"conferido_em": "2026-11-19"}}}`. Para Claude, use `cache_escrita_5m` e
+`cache_escrita_1h` no lugar de `cache_escrita_30m`; Haiku inclui `acima_100k`
+com os mesmos cinco preços. Copie o arquivo ou forneça modelos completos em
+`%LOCALAPPDATA%/painel-ias/tarifas.json` (ou no diretório de `PAINEL_IAS_DIR`);
+os modelos informados sobrepõem os padrões. `{"modelos": {}}` é válido e mantém
+os padrões sem aviso. Arquivo inválido usa o padrão e avisa.
+Cada modelo exige `fonte` HTTPS e `conferido_em`; mais de 30 dias gera aviso.
+Modelo desconhecido preserva tokens e tem custo nulo. Os agregados por agente,
+dia, semana e sessão somam os eventos com preço e publicam `parcial: true` e
+`eventos_sem_custo: N` quando faltam preços; a página mostra "≥ R$ X (parcial)"
+e "≥ US$ X". Se todos os eventos estiverem sem custo, o agregado fica nulo
+("sem leitura"); ausência de atividade mantém zero. Não são valores de fatura
+nem cobrança adicional da assinatura.
+
+A conversão reutiliza `gastos_hermes.cotacao`, seu cache AwesomeAPI e
+`PAINEL_USD_BRL` manual. A página mostra data, origem e desatualização; sem
+cotação já obtida, R$ fica "sem leitura" e US$ continua disponível.
+Claude é deduplicado por `message.id` (última ocorrência). Quando os quatro
+contadores superiores de uso estão zerados, uma lista não vazia de `iterations`
+com dicionários fornece a soma dos contadores e do cache 5m/1h; se o topo tiver
+uso, as iterações não são somadas novamente. Codex soma
+`last_token_usage` por evento: entrada comum = `input_tokens` menos
+`cached_input_tokens` menos `cache_write_input_tokens`, cobrando cache à parte.
+A inclusão da escrita no input é hipótese sem amostra local positiva; raciocínio
+já está na saída. Eventos Codex sem entrada, cache ou saída contam zero, mesmo
+que `total_tokens` informe o novo contexto após compactação. Entrada de turno
+acima de 272k usa tarifa curta com aviso.
+Contadores inconsistentes ou cache Claude sem duração preservam tokens, com custo
+nulo. Custos/tokens de sessões exibidos referem-se à parcela de hoje; horários
+cobrem os registros lidos da sessão. No Hermes, rateio e horários são aproximados;
+os tokens são arredondados para inteiros na saída e exibidos com separador de milhar.
+Só arquivos modificados nos últimos 8 dias são lidos; `.jsonl.zst` exige Python
+3.14. Arquivos inalterados usam cache em memória. A saída contém apenas agentes,
+modelos filtrados, números e avisos constantes, sem nomes de projeto ou sessão.
 
 O GitHub é consultado pelo `gh` já logado na sua máquina; o painel não guarda token nenhum.
 
