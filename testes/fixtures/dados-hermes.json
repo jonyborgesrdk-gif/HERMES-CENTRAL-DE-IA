@@ -267,6 +267,13 @@
    "ultima_leitura_ok": 1793433709.0,
    "desatualizado": false
   },
+  "maquina": {
+   "ok": true,
+   "erro": null,
+   "hora": 1793433709.0,
+   "ultima_leitura_ok": 1793433709.0,
+   "desatualizado": false
+  },
   "sessoes_grok": {
    "ok": true,
    "erro": null,
@@ -743,6 +750,16 @@
   "estado": "ok",
   "plano": "pro_plus",
   "assinatura": "active"
+ },
+ "maquina": {
+  "cpu_pct": 23.4,
+  "cpu_janela_s": 10.0,
+  "discos": [
+   {"unidade": "C:", "total_bytes": 536870912000, "livre_bytes": 214748364800, "usado_pct": 60.0},
+   {"unidade": "D:", "total_bytes": 1073741824000, "livre_bytes": 107374182400, "usado_pct": 90.0}
+  ],
+  "discos_sem_leitura": 0,
+  "lido_em_epoch": 1793433700.0
  },
  "vigilante2": {
   "estado": "ok",

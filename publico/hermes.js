@@ -578,6 +578,23 @@ function tracoRede(pontos, campo, fim, pico, largura, altura) {
   });
   return d;
 }
+/* Máquina (E24): CPU e discos fixos; bloco próprio na seção Saúde dos serviços; não entra em servicosDe nem em pendenciasDe. */
+function maquinaDe(dados) {
+  var m = dados && dados.maquina;
+  var vazio = { ativo: false, cpu: null, discos: [] };
+  if (!m || typeof m !== "object" || Array.isArray(m) || !Array.isArray(m.discos)) return vazio;
+  var pct = function (x) { return numero(x) ? Math.min(100, Math.max(0, x)) : 0; };
+  var bytes = function (x) { return numero(x) && x >= 0 ? x : 0; };
+  return {
+    ativo: true,
+    cpu: numero(m.cpu_pct) ? pct(m.cpu_pct) : null,
+    janela: numero(m.cpu_janela_s) && m.cpu_janela_s > 0 ? m.cpu_janela_s : null,
+    discos: m.discos.filter(function (d) { return d && typeof d === "object" && !Array.isArray(d) && typeof d.unidade === "string" && /^[A-Z]:$/.test(d.unidade); }).slice(0, 26).map(function (d) {
+      var total = bytes(d.total_bytes), livre = Math.min(bytes(d.livre_bytes), total);
+      return { unidade: d.unidade, total: total, livre: livre, usado: pct(d.usado_pct) };
+    })
+  };
+}
 function processosDe(dados) {
   var p = objeto(dados && dados.processos);
   return Object.keys(p).sort().map(function (n) { return n + " × " + texto(p[n]); });
@@ -1312,6 +1329,42 @@ function criarApp(doc, win, opcoes) {
     });
   }
 
+  /* ---- Máquina (E24): CPU e discos, só leitura, sem clique e sem modal ---- */
+  function desenharMaquina(m) {
+    $("maquina").hidden = !m.ativo;
+    setTxt($("maquina-badge"), m.ativo ? plural(m.discos.length, "disco", "discos") : "");
+    var br = function (n, casas) { return n.toFixed(casas).replace(".", ","); };
+    var gib = function (b) { return br(b / 1073741824, 1) + " GiB"; };
+    var cartoes = [];
+    if (m.ativo) {
+      cartoes.push({ icone: "activity", cls: m.cpu === null ? "idle" : m.cpu >= 90 ? "bad" : "good", rotulo: m.cpu === null ? "Sem leitura" : br(m.cpu, 1) + "%",
+                     titulo: "CPU", texto: m.cpu === null ? "sem leitura" : "uso " + br(m.cpu, 1) + "%", pct: m.cpu === null ? 0 : m.cpu, nome: "Uso de CPU",
+                     tempo: m.janela === null ? "aguardando duas leituras" : "média de " + Math.round(m.janela) + " s" });
+      m.discos.forEach(function (d) {
+        cartoes.push({ icone: "database", cls: d.usado >= 90 ? "bad" : "good", rotulo: br(d.usado, 1) + "% usado", titulo: "Disco " + d.unidade,
+                       texto: gib(d.total - d.livre) + " de " + gib(d.total), pct: d.usado, nome: "Uso do disco " + d.unidade, tempo: "livre " + gib(d.livre) });
+      });
+    }
+    desenharRegiao(doc, $("maquina-grid"), { cartoes: cartoes }, function () {
+      return cartoes.map(function (c) {
+        var card = el(doc, "div", "service"), topo = el(doc, "div", "service-top"), ic = el(doc, "span", "service-icon");
+        ic.appendChild(icone(doc, c.icone));
+        var st = el(doc, "span", "status " + c.cls);
+        st.appendChild(el(doc, "span", "dot")); st.appendChild(el(doc, "span", null, c.rotulo));
+        topo.appendChild(ic); topo.appendChild(st); card.appendChild(topo);
+        card.appendChild(el(doc, "h3", null, c.titulo));
+        var p = el(doc, "p", null, c.texto); p.setAttribute("title", c.texto); card.appendChild(p);
+        var trilho = el(doc, "div", "track");
+        trilho.setAttribute("role", "meter"); trilho.setAttribute("aria-label", c.nome);
+        trilho.setAttribute("aria-valuemin", "0"); trilho.setAttribute("aria-valuemax", "100"); trilho.setAttribute("aria-valuenow", String(Math.round(c.pct)));
+        var cheio = el(doc, "span"); cheio.style.width = c.pct + "%"; trilho.appendChild(cheio); card.appendChild(trilho);
+        var tempo = el(doc, "div", "service-time"); tempo.appendChild(icone(doc, "clock")); tempo.appendChild(el(doc, "span", null, c.tempo));
+        card.appendChild(tempo);
+        return card;
+      });
+    });
+  }
+
   /* ---- janela de detalhes (agente, serviço ou conta); atualiza no lugar quando os dados mudam ---- */
   function modeloDoModal() {
     var sel = estado.modal, d = estado.dados, agora = agoraS();
@@ -1428,6 +1481,7 @@ function criarApp(doc, win, opcoes) {
     secao("attention", "Precisa de você", function () { desenharPendencias(pendenciasDe(d)); });
     secao("services", "de serviços", function () { desenharServicos(servicos()); });
     secao("vigilante", "do Vigilante 2", function () { desenharVigilante(vigilanteDe(d)); });
+    secao("maquina", "da Máquina", function () { desenharMaquina(maquinaDe(d)); });
     if (estado.modal) secao("modal-dialog", "da janela de detalhes", desenharModal);
   }
   function receber(d) {
@@ -1612,7 +1666,7 @@ var api = {
   errosDe: errosDe,
   outrosAgentesDe: outrosAgentesDe,
   redeDe: redeDe, fmtBytes: fmtBytes, fmtTaxa: fmtTaxa, histRedeVazio: histRedeVazio, acumularRede: acumularRede, tracoRede: tracoRede,
-  fontesComProblema: fontesComProblema, presencaDe: presencaDe, presencaLinuxDe: presencaLinuxDe, cotasLocaisDe: cotasLocaisDe, unificarCodex: unificarCodex, vigilanteDe: vigilanteDe, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
+  fontesComProblema: fontesComProblema, presencaDe: presencaDe, presencaLinuxDe: presencaLinuxDe, cotasLocaisDe: cotasLocaisDe, unificarCodex: unificarCodex, vigilanteDe: vigilanteDe, maquinaDe: maquinaDe, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 else {

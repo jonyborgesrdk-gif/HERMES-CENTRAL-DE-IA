@@ -340,7 +340,7 @@ test('contrato: a página só lê, na raiz do dados.json, campos que o coletor p
   a.abrirModal({ tipo: 'agente', chave: 'sess-1' }); a.abrirModal({ tipo: 'agente', chave: 'sess-2' }); a.abrirModal({ tipo: 'servico', chave: 'whatsapp' }); a.abrirModal({ tipo: 'conta', chave: 'claude:abc' });
   const fora = [...lidos].filter((k) => !(k in fixture) && k !== 'toJSON');
   assert.deepEqual(fora, []);
-  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'presenca_linux', 'vigilante2', 'erros_agentes', 'sessoes_grok', 'sessoes_hermes', 'chat_cursor', 'rede_uso', 'cota_codex_local', 'cota_grok_bot', 'cota_cursor', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
+  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'presenca_linux', 'vigilante2', 'maquina', 'erros_agentes', 'sessoes_grok', 'sessoes_hermes', 'chat_cursor', 'rede_uso', 'cota_codex_local', 'cota_grok_bot', 'cota_cursor', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
 });
 
 /* ---------- segurança e privacidade ---------- */
@@ -1303,6 +1303,82 @@ test('vigilante que lança não impede a grade de serviços, os KPIs nem a lista
   assert.equal(doc.getElementById('agent-rows').children.length, d.agentes.length);
   assert.equal(doc.getElementById('services')._avisoSecao, undefined);
   assert.match(txt('vigilante'), /não foi possível desenhar esta seção/);
+});
+
+/* ---------- E24: bloco "Máquina" (CPU e discos) na seção Saúde dos serviços ---------- */
+const semMaq = () => { const d = clone(fixture); delete d.maquina; return d; };
+const comMaq = (extra) => { const d = clone(fixture); Object.assign(d.maquina, extra); return d; };
+const cartoesMaq = (doc) => doc.getElementById('maquina-grid').children;
+const larguras = (doc) => Array.from(cartoesMaq(doc)).map((c) => porClasse(c, 'track')[0].children[0].style.width);
+test('maquinaDe: sem a chave, "erro" e formatos errados ficam inativos; valores hostis são normalizados', () => {
+  [undefined, { estado: 'erro' }, null, 'x', [], { discos: 'x' }].forEach((v) => {
+    const d = semMaq(); if (v !== undefined) d.maquina = v;
+    const r = Hermes.maquinaDe(d); assert.equal(r.ativo, false); assert.deepEqual(r.discos, []);
+  });
+  assert.equal(Hermes.maquinaDe(null).ativo, false);
+  const r = Hermes.maquinaDe(fixture);
+  assert.equal(r.ativo, true); assert.equal(r.cpu, 23.4); assert.equal(r.janela, 10); assert.equal(r.discos.length, 2);
+  assert.deepEqual(r.discos[0], { unidade: 'C:', total: 536870912000, livre: 214748364800, usado: 60 });
+  assert.equal(Hermes.maquinaDe(comMaq({ cpu_pct: null })).cpu, null);
+  assert.equal(Hermes.maquinaDe(comMaq({ cpu_pct: NaN })).cpu, null);
+  assert.equal(Hermes.maquinaDe(comMaq({ cpu_pct: 'alto' })).cpu, null);
+  assert.equal(Hermes.maquinaDe(comMaq({ cpu_pct: -5 })).cpu, 0);
+  assert.equal(Hermes.maquinaDe(comMaq({ cpu_pct: 250 })).cpu, 100);
+  const h = Hermes.maquinaDe(comMaq({ discos: [{ unidade: '<img src=x onerror=alert(1)>', total_bytes: 10, livre_bytes: 5, usado_pct: 50 },
+    { unidade: 'E:', total_bytes: 'x', livre_bytes: -1, usado_pct: NaN }, { unidade: 'F:', total_bytes: 100, livre_bytes: 900, usado_pct: 'y' }, null, 'G:'] }));
+  assert.deepEqual(h.discos, [{ unidade: 'E:', total: 0, livre: 0, usado: 0 }, { unidade: 'F:', total: 100, livre: 100, usado: 0 }]);
+  assert.equal(Hermes.maquinaDe(comMaq({ discos: [{ unidade: 'C:', total_bytes: 100, livre_bytes: 25, usado_pct: 400 }] })).discos[0].usado, 100);
+});
+test('maquina: render da fixture mostra CPU e dois discos, com barra limitada, sem botão e sem mexer nos serviços nem nos KPIs', () => {
+  const { a, doc, txt } = app(); a.receber(clone(fixture));
+  const base = app(); base.a.receber(semMaq());
+  assert.equal(doc.getElementById('maquina').hidden, false); assert.equal(txt('maquina-badge'), '2 discos');
+  const cs = cartoesMaq(doc); assert.equal(cs.length, 3);
+  cs.forEach((c) => assert.notEqual(c.tag, 'button'));
+  const t = (c) => nb(c.textContent);
+  assert.match(t(cs[0]), /CPU/); assert.match(t(cs[0]), /uso 23,4%/); assert.match(t(cs[0]), /média de 10 s/);
+  assert.match(t(cs[1]), /Disco C:/); assert.match(t(cs[1]), /300,0 GiB de 500,0 GiB/); assert.match(t(cs[1]), /60,0% usado/); assert.match(t(cs[1]), /livre 200,0 GiB/);
+  assert.match(t(cs[2]), /Disco D:/); assert.match(t(cs[2]), /90,0% usado/);
+  assert.ok(cs[2].children[0].children[1].classList.contains('bad')); assert.ok(cs[1].children[0].children[1].classList.contains('good'));
+  assert.deepEqual(larguras(doc), ['23.4%', '60%', '90%']);
+  assert.equal(doc.getElementById('services-grid').children.length, 5);
+  ['k-serv', 'k-serv-total', 'nav-servicos'].forEach((id) => assert.equal(txt(id), base.txt(id), 'mudou ' + id));
+  assert.equal(base.doc.getElementById('maquina').hidden, true);
+});
+test('maquina: CPU nulo mostra "sem leitura" e barra zerada', () => {
+  const { a, doc } = app(); a.receber(comMaq({ cpu_pct: null, cpu_janela_s: null }));
+  const cs = cartoesMaq(doc); const t = nb(cs[0].textContent);
+  assert.match(t, /sem leitura/); assert.match(t, /aguardando duas leituras/); assert.ok(!/\d,\d%/.test(t));
+  assert.equal(larguras(doc)[0], '0%'); assert.equal(cs.length, 3);
+});
+test('maquina: sem a chave e "erro" deixam o bloco oculto e sem cartões', () => {
+  [undefined, { estado: 'erro' }].forEach((v) => {
+    const d = semMaq(); if (v !== undefined) d.maquina = v;
+    const { a, doc } = app(); a.receber(d);
+    assert.equal(doc.getElementById('maquina').hidden, true); assert.equal(cartoesMaq(doc).length, 0);
+  });
+});
+test('maquina: valores hostis (NaN, negativo, acima de 100, texto) nunca geram largura fora de 0-100 nem elemento', () => {
+  const { a, doc } = app();
+  a.receber(comMaq({ cpu_pct: 250, discos: [{ unidade: 'C:', total_bytes: 100, livre_bytes: 50, usado_pct: -20 }, { unidade: 'D:', total_bytes: 100, livre_bytes: 50, usado_pct: NaN },
+    { unidade: 'E:', total_bytes: 100, livre_bytes: 50, usado_pct: 'x' }, { unidade: '<img src=x onerror=alert(1)>', total_bytes: 1, livre_bytes: 1, usado_pct: 1 }] }));
+  assert.equal(cartoesMaq(doc).length, 4);
+  assert.deepEqual(larguras(doc), ['100%', '0%', '0%', '0%']);   // negativo, NaN e texto valem 0; a unidade hostil é descartada
+  const bloco = doc.getElementById('maquina');
+  assert.equal(bloco.descendentes().filter((e) => e.tag === 'img').length, 0);
+  assert.ok(!nb(bloco.textContent).includes('onerror'));
+});
+test('maquina que lança não impede a grade de serviços nem os KPIs; o aviso fica só no bloco', () => {
+  const base = app(); silenciarErros(() => base.a.receber(clone(fixture)));
+  const d = clone(fixture);
+  Object.defineProperty(d.maquina, 'discos', { enumerable: true, get() { throw new Error('boom maquina'); } });
+  const { a, doc, txt } = app();
+  silenciarErros((erros) => {
+    assert.doesNotThrow(() => a.receber(d));
+    assert.equal(erros.length, 1); assert.match(String(erros[0][0]), /Máquina/); assert.match(String(erros[0][1]), /boom maquina/);
+  });
+  ['k-serv', 'k-serv-total', 'nav-servicos', 'services-grid', 'k-trab', 'nav-agentes'].forEach((id) => assert.equal(txt(id), base.txt(id), 'mudou ' + id));
+  assert.match(txt('maquina'), /não foi possível desenhar esta seção/);
 });
 
 /* ---------- E19b: o Codex num cartão só ---------- */
