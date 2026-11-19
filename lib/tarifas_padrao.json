@@ -1,0 +1,11 @@
+{
+  "modelos": {
+    "claude-fable-5-2": {"entrada": 8, "cache_escrita_5m": 10, "cache_escrita_1h": 16, "cache_leitura": 0.2, "saida": 40, "fonte": "https://platform.claude.com/docs/en/about-claude/pricing", "conferido_em": "2026-11-19"},
+    "claude-fable-5-1": {"entrada": 10, "cache_escrita_5m": 12.5, "cache_escrita_1h": 20, "cache_leitura": 0.25, "saida": 50, "fonte": "https://platform.claude.com/docs/en/about-claude/pricing", "conferido_em": "2026-11-19"},
+    "claude-opus-5-5": {"entrada": 4, "cache_escrita_5m": 5, "cache_escrita_1h": 8, "cache_leitura": 0.2, "saida": 20, "fonte": "https://platform.claude.com/docs/en/about-claude/pricing", "conferido_em": "2026-11-19"},
+    "claude-sonnet-5-5": {"entrada": 2, "cache_escrita_5m": 2.5, "cache_escrita_1h": 4, "cache_leitura": 0.1, "saida": 10, "fonte": "https://platform.claude.com/docs/en/about-claude/pricing", "conferido_em": "2026-11-19"},
+    "claude-haiku-5-5": {"entrada": 0.1, "cache_escrita_5m": 0.125, "cache_escrita_1h": 0.2, "cache_leitura": 0.01, "saida": 0.5, "acima_100k": {"entrada": 0.5, "cache_escrita_5m": 0.625, "cache_escrita_1h": 1, "cache_leitura": 0.05, "saida": 2.5}, "fonte": "https://platform.claude.com/docs/en/about-claude/pricing", "conferido_em": "2026-11-19"},
+    "gpt-6.1-sol": {"entrada": 2, "cache_leitura": 0.1, "cache_escrita_30m": 2.5, "saida": 10, "fonte": "https://developers.openai.com/api/docs/pricing", "conferido_em": "2026-11-19"},
+    "gpt-6.2-astra": {"entrada": 8, "cache_leitura": 0.4, "cache_escrita_30m": 10, "saida": 40, "fonte": "https://developers.openai.com/api/docs/pricing", "conferido_em": "2026-11-19"}
+  }
+}

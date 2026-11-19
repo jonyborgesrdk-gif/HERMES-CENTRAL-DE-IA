@@ -340,7 +340,7 @@ test('contrato: a página só lê, na raiz do dados.json, campos que o coletor p
   a.abrirModal({ tipo: 'agente', chave: 'sess-1' }); a.abrirModal({ tipo: 'agente', chave: 'sess-2' }); a.abrirModal({ tipo: 'servico', chave: 'whatsapp' }); a.abrirModal({ tipo: 'conta', chave: 'claude:abc' });
   const fora = [...lidos].filter((k) => !(k in fixture) && k !== 'toJSON');
   assert.deepEqual(fora, []);
-  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'presenca_linux', 'vigilante2', 'maquina', 'erros_agentes', 'sessoes_grok', 'sessoes_hermes', 'chat_cursor', 'rede_uso', 'cota_codex_local', 'cota_grok_bot', 'cota_cursor', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
+  ['agentes', 'contas', 'servicos', 'processos', 'fontes', 'whatsapp', 'gastos_hermes', 'presenca_processos', 'presenca_linux', 'vigilante2', 'maquina', 'custo_agentes', 'erros_agentes', 'sessoes_grok', 'sessoes_hermes', 'chat_cursor', 'rede_uso', 'cota_codex_local', 'cota_grok_bot', 'cota_cursor', 'quadro', 'prs', 'origem', 'gerado_em_epoch'].forEach((k) => assert.ok(lidos.has(k), 'não leu ' + k));
 });
 
 /* ---------- segurança e privacidade ---------- */
@@ -1305,6 +1305,91 @@ test('vigilante que lança não impede a grade de serviços, os KPIs nem a lista
   assert.match(txt('vigilante'), /não foi possível desenhar esta seção/);
 });
 
+/* ---------- E25: custo por agente ---------- */
+const semCusto = () => { const d = clone(fixture); delete d.custo_agentes; return d; };
+test('custo: fixture mostra hoje, 7 dias, agentes, selos, sessões e cotação', () => {
+  const { a, doc, txt } = app(); a.estado.privado = false; a.receber(clone(fixture));
+  assert.equal(doc.getElementById('custo').hidden, false);
+  assert.match(txt('custo-body'), /Hoje: R\$ 10,00 · US\$ 2,00/);
+  assert.match(txt('custo-body'), /7 dias: R\$ 30,00 · US\$ 6,00/);
+  ['Claude Code', 'Codex', 'Grok', 'Hermes', 'Cursor-agent', 'assinatura (equivalente de API)', 'informado pelo Grok', 'estimado', 'sem leitura', 'claude-opus-5-5', '110 tokens', 'Cotação: R$ 5,0000', 'manual'].forEach((v) => assert.ok(txt('custo-body').includes(v), v));
+  const barras = porClasse(doc.getElementById('custo-body'), 'track');
+  assert.deepEqual(barras.map((b) => b.children[0].style.width), ['100%', '50%']);
+  const base = app(); base.a.estado.privado = false; base.a.receber(semCusto());
+  ['k-trab', 'k-total', 'k-serv', 'agent-rows'].forEach((id) => assert.equal(txt(id), base.txt(id)));
+});
+test('custo: sem chave ou estado erro oculta e limpa o cartão', () => {
+  const { a, doc } = app(); a.receber(clone(fixture));
+  [undefined, null, {}, { estado: 'erro' }, { estado: 'ok', dias: null }].forEach((c) => {
+    const d = semCusto(); if (c !== undefined) d.custo_agentes = c;
+    a.receber(d);
+    assert.equal(doc.getElementById('custo').hidden, true);
+    assert.equal(doc.getElementById('custo-body').children.length, 0);
+  });
+});
+test('custo: sem cotação mostra sem leitura em R$ e mantém US$; data, cache velho e avisos', () => {
+  const d = clone(fixture), c = d.custo_agentes;
+  c.cotacao = null; c.hoje.brl = null; c.sete_dias.brl = null;
+  c.avisos = ['tarifa conferida há mais de 30 dias', 'modelo sem tarifa; custo sem leitura', 'arquivo de tarifas do usuário inválido; usando o padrão'];
+  c.sessoes[0].usd = null; c.sessoes[0].brl = null; c.sessoes[0].flags = ['sem_tarifa', 'contexto_longo_nao_ajustado'];
+  const { a, txt } = app(); a.receber(d);
+  assert.match(txt('custo-body'), /Hoje: R\$ sem leitura · US\$ 2,00/);
+  assert.match(txt('custo-body'), /Cotação: sem leitura · sem data/);
+  ['tarifa conferida há mais de 30 dias', 'modelo sem tarifa', 'sem tarifa', 'contexto longo não ajustado', 'usando o padrão'].forEach((v) => assert.ok(txt('custo-body').includes(v)));
+  c.cotacao = { usd_brl: 5.4, data_epoch: T0, fonte: 'cache', desatualizada: true }; a.receber(d);
+  assert.ok(txt('custo-body').includes(new Date(T0 * 1000).toLocaleString('pt-BR')));
+  assert.match(txt('custo-body'), /cache · desatualizada/);
+});
+test('custo: números e textos hostis são filtrados; barras finitas de 0 a 100', () => {
+  const { a, doc, txt } = app(), d = clone(fixture), c = d.custo_agentes;
+  c.dias = [NaN, -2, '33', Infinity, 20, 40].map((v, i) => ({ dia: '2026-11-' + (10+i), total: { usd: v, brl: v } }));
+  c.agentes.push({ agente: '<img src=x onerror=alert(1)>', selo: '<script>' });
+  c.sessoes[0].modelo = '<img src=x onerror=alert(1)>'; c.sessoes[0].flags = ['<script>'];
+  c.sessoes[0].inicio_epoch = Infinity; c.sessoes[0].fim_epoch = 1e300;
+  c.cotacao = { usd_brl: NaN, data_epoch: 1e300, fonte: '<script>' };
+  c.hoje = { usd: NaN, brl: -1 }; c.avisos = ['<script>'];
+  silenciarErros((erros) => { a.receber(d); assert.equal(erros.length, 0); });
+  assert.deepEqual(porClasse(doc.getElementById('custo-body'), 'track').map((b) => b.children[0].style.width), ['0%', '0%', '0%', '0%', '50%', '100%']);
+  assert.ok(!/NaN|Infinity|undefined|<img|<script>|onerror/.test(txt('custo-body')));
+  assert.equal(doc.getElementById('custo').descendentes().some((e) => e.tag === 'script' || e.tag === 'img'), false);
+});
+test('custo: exceção isolada na seção e limite de 20 sessões', () => {
+  const d = clone(fixture); d.custo_agentes.sessoes = Array(30).fill(d.custo_agentes.sessoes[0]);
+  assert.equal(Hermes.custosAgentesDe(d).sessoes.length, 20);
+  Object.defineProperty(d, 'custo_agentes', { get() { throw new Error('boom custo'); } });
+  const { a, txt } = app();
+  silenciarErros((erros) => { a.receber(d); assert.equal(erros.length, 1); });
+  assert.match(txt('custo'), /não foi possível desenhar esta seção/);
+  assert.match(txt('maquina'), /CPU/);
+});
+test('custo: parcial preserva os valores conhecidos em totais, agente, dia e sessão', () => {
+  const d = clone(fixture), c = d.custo_agentes;
+  [c.hoje, c.sete_dias, c.agentes[0].hoje, c.agentes[0].sete_dias, c.dias[0].total, c.sessoes[0]].forEach((v) => {
+    v.parcial = true; v.eventos_sem_custo = 2;
+  });
+  c.sessoes[0].tokens.total = 1234567;
+  const { a, doc, txt } = app(); a.receber(d);
+  assert.match(txt('custo-body'), /Hoje: ≥ R\$ 10,00 \(parcial\) · ≥ US\$ 2,00/);
+  assert.match(txt('custo-body'), /7 dias: ≥ R\$ 30,00 \(parcial\) · ≥ US\$ 6,00/);
+  assert.match(txt('custo-body'), /2026-10-30 · ≥ R\$ 20,00 \(parcial\) · ≥ US\$ 4,00/);
+  assert.ok(txt('custo-body').includes('1.234.567 tokens'));
+  assert.deepEqual(porClasse(doc.getElementById('custo-body'), 'track').map((b) => b.children[0].style.width), ['100%', '50%']);
+  c.hoje.brl = null; a.receber(d);
+  assert.match(txt('custo-body'), /Hoje: R\$ sem leitura · ≥ US\$ 2,00/);
+});
+test('custo: strings de dinheiro mostram sem leitura, barras zeradas e parcial sem preço fica nulo', () => {
+  const { a, doc, txt } = app(), d = clone(fixture), c = d.custo_agentes;
+  c.hoje = { usd: '2', brl: '10', parcial: true, eventos_sem_custo: 1 };
+  c.dias[0].total = { usd: '40', brl: '200' };
+  c.sessoes[0].usd = null; c.sessoes[0].brl = null; c.sessoes[0].parcial = true;
+  a.receber(d);
+  assert.match(txt('custo-body'), /Hoje: R\$ sem leitura · US\$ sem leitura/);
+  assert.match(txt('custo-body'), /2026-10-30 · R\$ sem leitura · US\$ sem leitura/);
+  assert.equal(porClasse(doc.getElementById('custo-body'), 'track')[0].children[0].style.width, '0%');
+  assert.ok(!txt('custo-body').includes('≥ R$ sem leitura'));
+  assert.ok(!txt('custo-body').includes('≥ US$ sem leitura'));
+});
+
 /* ---------- E24: bloco "Máquina" (CPU e discos) na seção Saúde dos serviços ---------- */
 const semMaq = () => { const d = clone(fixture); delete d.maquina; return d; };
 const comMaq = (extra) => { const d = clone(fixture); Object.assign(d.maquina, extra); return d; };
@@ -1344,6 +1429,14 @@ test('maquina: render da fixture mostra CPU e dois discos, com barra limitada, s
   assert.equal(doc.getElementById('services-grid').children.length, 5);
   ['k-serv', 'k-serv-total', 'nav-servicos'].forEach((id) => assert.equal(txt(id), base.txt(id), 'mudou ' + id));
   assert.equal(base.doc.getElementById('maquina').hidden, true);
+});
+test('maquina E24b: CPU a 90% ou 100% nunca fica vermelha; disco a 90% fica', () => {
+  [90, 100].forEach((cpu) => {
+    const { a, doc } = app(); a.receber(comMaq({ cpu_pct: cpu }));
+    const cs = cartoesMaq(doc);
+    assert.equal(porClasse(cs[0], 'status')[0].className, 'status good');
+    assert.equal(porClasse(cs[2], 'status')[0].className, 'status bad');
+  });
 });
 test('maquina: CPU nulo mostra "sem leitura" e barra zerada', () => {
   const { a, doc } = app(); a.receber(comMaq({ cpu_pct: null, cpu_janela_s: null }));

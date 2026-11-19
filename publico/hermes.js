@@ -595,6 +595,33 @@ function maquinaDe(dados) {
     })
   };
 }
+/* Custo (E25): somente campos permitidos e números finitos entram no desenho. */
+function custosAgentesDe(dados) {
+  var c = dados && dados.custo_agentes;
+  if (!c || c.estado !== "ok" || !Array.isArray(c.dias)) return { ativo: false };
+  var n = function (v) { return numero(v) && v >= 0 ? v : 0; };
+  var dinheiro = function (v) { return numero(v) && v >= 0 ? v : null; };
+  var valor = function (v) { v = objeto(v); return { usd: dinheiro(v.usd), brl: dinheiro(v.brl), parcial: v.parcial === true }; };
+  var nomes = { claude: "Claude Code", codex: "Codex", grok: "Grok", hermes: "Hermes", "cursor-agent": "Cursor-agent" };
+  var selos = { claude: "assinatura (equivalente de API)", codex: "assinatura (equivalente de API)", grok: "informado pelo Grok", hermes: "estimado", "cursor-agent": "sem leitura" };
+  var flags = { sem_tarifa: "sem tarifa", tarifa_velha: "tarifa velha", contexto_longo_nao_ajustado: "contexto longo não ajustado", distribuicao_aproximada: "distribuição aproximada", tokens_inconsistentes: "tokens inconsistentes", cache_sem_duracao: "cache sem duração" };
+  var avisos = ["arquivo de tarifas do usuário inválido; usando o padrão", "tarifa conferida há mais de 30 dias", "modelo sem tarifa; custo sem leitura", "Hermes sem leitura; totais não incluem Hermes", "contadores de tokens inconsistentes; custo sem leitura", "cache Claude sem duração; custo sem leitura"];
+  var lista = function (v) { return Array.isArray(v) ? v : []; };
+  var modelo = function (v) { return typeof v === "string" && /^[a-z0-9][a-z0-9.:_-]{0,63}$/.test(v) ? v : "outro modelo"; };
+  var cambio = objeto(c.cotacao);
+  var dias = c.dias.filter(function (d) { return d && typeof d.dia === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.dia); }).slice(0, 7).map(function (d) { return { dia: d.dia, valor: valor(d.total), barra: n(objeto(d.total).usd) }; });
+  var pico = Math.max.apply(null, [0].concat(dias.map(function (d) { return d.barra; })));
+  dias.forEach(function (d) { d.pct = pico > 0 ? Math.min(100, Math.max(0, d.barra / pico * 100)) : 0; });
+  return { ativo: true, hoje: valor(c.hoje), semana: valor(c.sete_dias), dias: dias,
+    agentes: lista(c.agentes).filter(function (a) { return a && Object.prototype.hasOwnProperty.call(nomes, a.agente); }).slice(0, 5).map(function (a) { return { nome: nomes[a.agente], selo: selos[a.agente], hoje: valor(a.hoje), semana: valor(a.sete_dias) }; }),
+    sessoes: lista(c.sessoes).filter(function (s) { return s && Object.prototype.hasOwnProperty.call(nomes, s.agente); }).slice(0, 20).map(function (s) {
+      return { nome: nomes[s.agente], modelo: modelo(s.modelo), valor: valor(s), inicio: n(s.inicio_epoch), fim: n(s.fim_epoch),
+        tokens: n(objeto(s.tokens).total), flags: lista(s.flags).filter(function (f) { return Object.prototype.hasOwnProperty.call(flags, f); }).map(function (f) { return flags[f]; }) };
+    }), avisos: lista(c.avisos).filter(function (a) { return avisos.indexOf(a) !== -1; }),
+    cotacao: numero(cambio.usd_brl) && cambio.usd_brl > 0 ? cambio.usd_brl : null,
+    data: numero(cambio.data_epoch) && cambio.data_epoch > 0 && cambio.data_epoch < 32503680000 ? cambio.data_epoch : null,
+    velha: cambio.desatualizada === true, fonte: ["manual", "awesomeapi", "cache"].indexOf(cambio.fonte) !== -1 ? cambio.fonte : "sem leitura" };
+}
 function processosDe(dados) {
   var p = objeto(dados && dados.processos);
   return Object.keys(p).sort().map(function (n) { return n + " × " + texto(p[n]); });
@@ -1337,7 +1364,7 @@ function criarApp(doc, win, opcoes) {
     var gib = function (b) { return br(b / 1073741824, 1) + " GiB"; };
     var cartoes = [];
     if (m.ativo) {
-      cartoes.push({ icone: "activity", cls: m.cpu === null ? "idle" : m.cpu >= 90 ? "bad" : "good", rotulo: m.cpu === null ? "Sem leitura" : br(m.cpu, 1) + "%",
+      cartoes.push({ icone: "activity", cls: m.cpu === null ? "idle" : "good", rotulo: m.cpu === null ? "Sem leitura" : br(m.cpu, 1) + "%",
                      titulo: "CPU", texto: m.cpu === null ? "sem leitura" : "uso " + br(m.cpu, 1) + "%", pct: m.cpu === null ? 0 : m.cpu, nome: "Uso de CPU",
                      tempo: m.janela === null ? "aguardando duas leituras" : "média de " + Math.round(m.janela) + " s" });
       m.discos.forEach(function (d) {
@@ -1362,6 +1389,35 @@ function criarApp(doc, win, opcoes) {
         card.appendChild(tempo);
         return card;
       });
+    });
+  }
+
+  function desenharCusto(c) {
+    $("custo").hidden = !c.ativo;
+    var moeda = function (v, prefixo, parcial) { return v === null ? prefixo + " sem leitura" : (parcial ? "≥ " : "") + prefixo + " " + v.toFixed(2).replace(".", ",") + (parcial && prefixo === "R$" ? " (parcial)" : ""); };
+    var par = function (v) { return moeda(v.brl, "R$", v.parcial) + " · " + moeda(v.usd, "US$", v.parcial); };
+    desenharRegiao(doc, $("custo-body"), c, function () {
+      if (!c.ativo) return [];
+      var nos = [el(doc, "p", "cost-total mono", "Hoje: " + par(c.hoje)), el(doc, "p", "mono", "7 dias: " + par(c.semana))];
+      c.agentes.forEach(function (a) {
+        var card = el(doc, "div", "service");
+        card.appendChild(el(doc, "h3", null, a.nome)); card.appendChild(el(doc, "span", "badge", a.selo));
+        card.appendChild(el(doc, "p", null, "Hoje: " + par(a.hoje) + " · 7 dias: " + par(a.semana))); nos.push(card);
+      });
+      c.dias.forEach(function (d) {
+        var linha = el(doc, "div", "usage-row"); linha.appendChild(el(doc, "p", null, d.dia + " · " + par(d.valor)));
+        var trilho = el(doc, "div", "track"), barra = el(doc, "span");
+        barra.style.width = d.pct + "%"; trilho.appendChild(barra); linha.appendChild(trilho); nos.push(linha);
+      });
+      nos.push(el(doc, "h3", null, "Sessões de hoje (até 20 mais caras)"));
+      if (!c.sessoes.length) nos.push(el(doc, "p", null, "sem sessões lidas hoje"));
+      c.sessoes.forEach(function (s) {
+        var hora = function (v) { return v > 0 && v < 32503680000 ? new Date(v * 1000).toLocaleTimeString("pt-BR") : "sem leitura"; };
+        nos.push(el(doc, "p", null, s.nome + " · " + s.modelo + " · " + hora(s.inicio) + "–" + hora(s.fim) + " · " + par(s.valor) + " · " + Math.round(s.tokens).toLocaleString("pt-BR") + " tokens" + (s.flags.length ? " · " + s.flags.join(" · ") : "")));
+      });
+      nos.push(el(doc, "p", "cost-notes", "Cotação: " + (c.cotacao === null ? "sem leitura" : "R$ " + c.cotacao.toFixed(4).replace(".", ",")) + " · " + (c.data === null ? "sem data" : new Date(c.data * 1000).toLocaleString("pt-BR")) + " · " + c.fonte + (c.velha ? " · desatualizada" : "")));
+      c.avisos.forEach(function (a) { nos.push(el(doc, "p", "cost-notes", a)); });
+      return nos;
     });
   }
 
@@ -1482,6 +1538,7 @@ function criarApp(doc, win, opcoes) {
     secao("services", "de serviços", function () { desenharServicos(servicos()); });
     secao("vigilante", "do Vigilante 2", function () { desenharVigilante(vigilanteDe(d)); });
     secao("maquina", "da Máquina", function () { desenharMaquina(maquinaDe(d)); });
+    secao("custo", "de Custo", function () { desenharCusto(custosAgentesDe(d)); });
     if (estado.modal) secao("modal-dialog", "da janela de detalhes", desenharModal);
   }
   function receber(d) {
@@ -1663,7 +1720,7 @@ var api = {
   numero: numero, mascararEmails: mascararEmails, snapshotParaExportar: snapshotParaExportar, haSegundos: haSegundos, duracao: duracao, quando: quando,
   resetEmPtBr: resetEmPtBr, textoReset: textoReset, dinheiro: dinheiro, fmtUsd: fmtUsd, fmtBrl: fmtBrl, fmtTokens: fmtTokens, maxBonito: maxBonito,
   agentesDe: agentesDe, contasDe: contasDe, consumoClaude5h: consumoClaude5h, gastosDe: gastosDe, servicosDe: servicosDe, pendenciasDe: pendenciasDe,
-  errosDe: errosDe,
+  errosDe: errosDe, custosAgentesDe: custosAgentesDe,
   outrosAgentesDe: outrosAgentesDe,
   redeDe: redeDe, fmtBytes: fmtBytes, fmtTaxa: fmtTaxa, histRedeVazio: histRedeVazio, acumularRede: acumularRede, tracoRede: tracoRede,
   fontesComProblema: fontesComProblema, presencaDe: presencaDe, presencaLinuxDe: presencaLinuxDe, cotasLocaisDe: cotasLocaisDe, unificarCodex: unificarCodex, vigilanteDe: vigilanteDe, maquinaDe: maquinaDe, filtrarAgentes: filtrarAgentes, estadoWhatsapp: estadoWhatsapp, iniciarTransporte: iniciarTransporte, criarApp: criarApp, ICONES: ICONES
