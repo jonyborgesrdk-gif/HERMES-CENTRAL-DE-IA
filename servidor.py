@@ -1,5 +1,6 @@
 """Servidor local do painel: estáticos, JSON e SSE; supervisor opcional do coletor."""
 import argparse
+import base64
 import ctypes
 from ctypes import wintypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -20,10 +22,13 @@ import time
 from urllib.parse import unquote, urlsplit
 
 from lib.semjanela import sem_janela_kwargs
+from lib.fontes import diretorio
 
 sys.dont_write_bytecode = True
 RAIZ = Path(__file__).resolve().parent
 PORTA_COLETOR = 7420
+PORTA_LOCAL = 7422
+MAX_LOCAL = 4 * 1024 * 1024
 PREFIXO = 'window.__painelDados && window.__painelDados('
 # Exposição opcional via `tailscale serve`; o socket continua preso a 127.0.0.1.
 _HOST_DNS = re.compile(r'(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?')
@@ -80,8 +85,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Cross-Origin-Resource-Policy', 'same-origin')
         # Só diretivas que não dependem dos scripts/estilos inline da página: anti-clickjacking e base/form.
-        self.send_header('Content-Security-Policy', "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+        self.send_header('Content-Security-Policy', self.politica_conteudo())
         super().end_headers()
+
+    def politica_conteudo(self):
+        return "frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
     def permitido(self):
         host = self.headers.get('Host')
@@ -247,6 +255,204 @@ class Handler(BaseHTTPRequestHandler):
             pass  # cliente saiu ou socket ficou bloqueado
 
 
+def ler_porta_local(porta_principal):
+    bruto = os.environ.get('PAINEL_PORTA_LOCAL', str(PORTA_LOCAL))
+    porta = PORTA_LOCAL
+    logger = logging.getLogger('painel.servidor')
+    if re.fullmatch(r'[0-9]{1,5}', bruto):
+        valor = int(bruto)
+        if 1024 <= valor <= 65535:
+            porta = valor
+        else:
+            logger.warning('porta local inválida; usando padrão 7422')
+    else:
+        logger.warning('porta local inválida; usando padrão 7422')
+    if porta == porta_principal:
+        logger.warning('listener local indisponível: porta coincide com a principal')
+        return None
+    return porta
+
+
+def politica_pagina_local(texto):
+    fontes = []
+    for tag in ('script', 'style'):
+        blocos = re.findall(r'<%s>(.*?)</%s>' % (tag, tag), texto, re.DOTALL)
+        if not blocos:
+            raise ValueError('página local sem bloco inline')
+        hashes = ["'sha256-%s'" % base64.b64encode(
+            hashlib.sha256(bloco.encode('utf-8')).digest()).decode('ascii') for bloco in blocos]
+        fontes.append('%s-src %s' % (tag, ' '.join(hashes)))
+    return ("default-src 'none'; connect-src 'self'; " + '; '.join(fontes)
+            + "; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+
+
+class HandlerLocal(Handler):
+    # Conexões locais curtas: não deixar keep-alive ou cliente incompleto atrasar a parada.
+    timeout = 2
+
+    def politica_conteudo(self):
+        return getattr(self, 'csp_local', None) or super().politica_conteudo()
+
+    def end_headers(self):
+        self.close_connection = True
+        self.send_header('Connection', 'close')
+        self.send_header('Referrer-Policy', 'no-referrer')
+        super().end_headers()
+
+    def permitido(self):
+        hosts = self.headers.get_all('Host', [])
+        origens = self.headers.get_all('Origin', [])
+        porta = self.server.server_port
+        encaminhado = any(nome.casefold() in ('forwarded', 'via', 'x-real-ip')
+            or nome.casefold().startswith(('x-forwarded-', 'tailscale-')) for nome in self.headers)
+        if (encaminhado or len(hosts) != 1 or len(origens) > 1
+                or hosts[0] not in ('127.0.0.1:%d' % porta, 'localhost:%d' % porta)
+                or (origens and origens[0] != 'http://' + hosts[0])):
+            self.negar()
+            return False
+        return True
+
+    def parse_request(self):
+        if not super().parse_request():
+            return False
+        if self.command not in ('GET', 'HEAD'):
+            if self.permitido():
+                self.send_response(405)
+                self.send_header('Allow', 'GET, HEAD')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+            return False
+        return True
+
+    def atender(self, cabeca):
+        if not self.permitido():
+            return
+        try:
+            caminho = urlsplit(self.path).path
+        except ValueError:
+            caminho = None
+        # Lista fechada; nunca resolver um caminho fornecido pelo cliente no filesystem.
+        if caminho not in ('/', '/local.json'):
+            self.send_error(404)
+            return
+        if caminho == '/local.json' and not self.permitido_dados():
+            return
+        try:
+            if caminho == '/':
+                # Normalizar quebras como o parser HTML do navegador, antes de calcular os hashes.
+                texto = (RAIZ / 'publico_local' / 'index.html').read_text(encoding='utf-8')
+                corpo = texto.encode('utf-8')
+                self.csp_local = politica_pagina_local(texto)
+                tipo = 'text/html; charset=utf-8'
+            else:
+                arquivo = self.server.dados / 'local.json'
+                if arquivo.stat().st_size > MAX_LOCAL:
+                    raise ValueError('limite local')
+                with arquivo.open('rb') as stream:
+                    bruto = stream.read(MAX_LOCAL + 1)
+                if len(bruto) > MAX_LOCAL:
+                    raise ValueError('limite local')
+                valor = json.loads(bruto.decode('utf-8'))
+                if not isinstance(valor, dict):
+                    raise ValueError('objeto local inválido')
+                corpo = json.dumps(valor, ensure_ascii=True, allow_nan=False).encode('ascii')
+                tipo = 'application/json; charset=utf-8'
+            status = 200
+        except (OSError, ValueError, RecursionError):
+            status, corpo, tipo = 503, b'{"estado":"sem leitura"}', 'application/json; charset=utf-8'
+        self.send_response(status)
+        self.send_header('Content-Type', tipo)
+        self.send_header('Content-Length', str(len(corpo)))
+        self.end_headers()
+        if not cabeca:
+            self.wfile.write(corpo)
+
+
+class PainelLocalHTTP(ThreadingHTTPServer):
+    allow_reuse_address = False
+    daemon_threads = True
+    block_on_close = False
+    timeout = 0.2
+
+    def __init__(self, porta, parar):
+        self.dados = diretorio({}).resolve()
+        if self.dados.is_relative_to((RAIZ / 'publico').resolve()):
+            raise ValueError('diretório local dentro de publico')
+        self.parar = parar
+        self._conexoes = set()
+        self._trava_conexoes = threading.Lock()
+        self._fios_requisicao = set()
+        super().__init__(('127.0.0.1', porta), HandlerLocal)
+        self.fio = threading.Thread(target=self.rodar, name='painel-local', daemon=True)
+
+    def server_bind(self):
+        if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+    def process_request(self, conexao, endereco):
+        self._fios_requisicao = {fio for fio in self._fios_requisicao if fio.is_alive()}
+        fio = threading.Thread(target=self.process_request_thread, args=(conexao, endereco),
+                               name='painel-local-requisicao', daemon=True)
+        self._fios_requisicao.add(fio)
+        fio.start()
+
+    def get_request(self):
+        conexao, endereco = super().get_request()
+        with self._trava_conexoes:
+            self._conexoes.add(conexao)
+        return conexao, endereco
+
+    def shutdown_request(self, conexao):
+        try:
+            super().shutdown_request(conexao)
+        finally:
+            with self._trava_conexoes:
+                self._conexoes.discard(conexao)
+
+    def rodar(self):
+        try:
+            while not self.parar.is_set():
+                self.handle_request()
+        finally:
+            # Interromper inclusive cliente que mantém a leitura ativa enviando fragmentos.
+            with self._trava_conexoes:
+                conexoes = tuple(self._conexoes)
+            for conexao in conexoes:
+                try:
+                    conexao.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass  # O handler pode ter fechado a conexão entre a cópia e o shutdown.
+            self.server_close()
+            for fio in self._fios_requisicao:
+                fio.join()  # O main limita a espera por este fio; todos os fios locais são daemon.
+
+
+def iniciar_servidor_local(principal):
+    if not any(os.environ.get(nome) == '1' for nome in (
+            'PAINEL_CONEXOES', 'PAINEL_COMANDO', 'PAINEL_REDE_SESSAO')):
+        return None
+    porta = ler_porta_local(principal.server_port)
+    if porta is None:
+        return None
+    logger = logging.getLogger('painel.servidor')
+    try:
+        local = PainelLocalHTTP(porta, principal.parar)
+    except ValueError:
+        logger.warning('listener local indisponível: diretório de dados dentro de publico')
+        return None
+    except OSError:
+        logger.warning('listener local indisponível: falha de bind')
+        return None
+    try:
+        local.fio.start()
+    except RuntimeError:
+        local.server_close()
+        raise
+    logger.info('listener local iniciado porta=%d', local.server_port)
+    return local
+
+
 class Trava:
     def __init__(self, caminho):
         self.arquivo = open(caminho, 'a+b')
@@ -386,7 +592,7 @@ def main(argv=None):
         return 2
     pasta = Path(os.environ.get('PAINEL_IAS_DIR') or
                  Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'painel-ias')
-    servidor = supervisor = sentinela = trava = handler = None
+    servidor = local = supervisor = sentinela = trava = handler = None
     logger = logging.getLogger('painel.servidor')
     logger.setLevel(logging.INFO)
     logger.propagate = False
@@ -400,6 +606,7 @@ def main(argv=None):
         handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
         logger.addHandler(handler)
         servidor = PainelHTTP(RAIZ / 'publico', args.porta)
+        local = iniciar_servidor_local(servidor)
         extras = [flag for flag in ('--sem-gh', '--sem-contas') if getattr(args, flag[2:].replace('-', '_'))]
         if args.com_coletor:
             supervisor = Supervisor(extras)
@@ -423,6 +630,10 @@ def main(argv=None):
         if servidor:
             servidor.parar.set()
             servidor.server_close()
+        if local:
+            local.fio.join(timeout=5)
+            if local.fio.is_alive():
+                logger.warning('listener local: tempo de encerramento excedido')
         if supervisor:
             supervisor.close()
         if sentinela:
