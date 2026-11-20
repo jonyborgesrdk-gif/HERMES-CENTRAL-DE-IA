@@ -1455,9 +1455,14 @@ class DetalheE28(unittest.TestCase):
             legado.fechar_ciclo(bruto, {7: 'claude_cli'}, ciclo)
             self.assertEqual(ag.retrato(), legado.retrato())
             foto = ag.detalhe.retrato('ativo', BASE+62, BASE)
-            self.assertEqual(len(foto['fluxos']), 1)
-            self.assertEqual(foto['fluxos'][0]['janela'], [11, 22] if ciclo == 1 else [0, 0])
-            self.assertEqual(foto['fluxos'][0]['total'], [11, 22])
+            if ciclo == 1:
+                self.assertEqual(len(foto['fluxos']), 1)
+                self.assertEqual(foto['fluxos'][0]['janela'], [11, 22])
+                self.assertEqual(foto['fluxos'][0]['total'], [11, 22])
+            else:
+                self.assertEqual(foto['fluxos'], [])
+                self.assertEqual(foto['expirados']['fluxos_total'], [11, 22])
+            self.assertEqual(foto['pids'][0]['total'], [11, 22])
             self.assertEqual(foto['pids'][0]['criado'], 123456)
         # O mesmo PID com outra criação é outra identidade, nunca herda os bytes antigos.
         ag.fechar_ciclo({(10, 7, e): 9}, {}, 32, {7: 999999})
@@ -1509,6 +1514,56 @@ class DetalheE28(unittest.TestCase):
             self.assertEqual(cortado['fluxos'], [])
             self.assertEqual(cortado['pids'][0]['total'], [10, 0])
             self.assertEqual(cortado['fluxos_omitidos'], 1)
+
+
+class ExpiracaoE29b(unittest.TestCase):
+    def test_5000_fluxos_de_pid_vivo_limitados_a_janela_sem_omissoes(self):
+        ag = rc.Agregador(True)
+        for ciclo in range(1, 5001):
+            e = ender('203.0.113.1', '192.0.2.2', 443, 10000+ciclo)
+            ag.fechar_ciclo({(10, 7, e): 1, (11, 7, e): 2}, {}, ciclo, {7: 123})
+            self.assertEqual(len(ag.detalhe.fluxos), min(ciclo, rc.CICLOS_JANELA))
+            self.assertEqual(ag.detalhe.fluxos_omitidos, 0)
+        foto = ag.detalhe.retrato('ativo', BASE+10000, BASE)
+        self.assertEqual(len(foto['fluxos']), rc.CICLOS_JANELA)
+        self.assertEqual(foto['pids'][0]['total'], [5000, 10000])
+        self.assertEqual(foto['expirados']['total'], [0, 0])
+        self.assertEqual(foto['expirados']['fluxos_total'], [4970, 9940])
+
+    def test_pid_e_sessao_preservam_total_e_fluxo_reaparece_apos_inatividade(self):
+        from lib.fontes import rede_sessao
+        ag = rc.Agregador(True)
+        criado = int((BASE - 100 + 11644473600) * 10**7)
+        identidades = {7: criado}
+        processos = {7: dict(pid=7, ppid=0, criado=criado, caminho=CLAUDE, nome='claude.exe')}
+        e = ender('203.0.113.1', '192.0.2.2', 443, 1234)
+        ag.fechar_ciclo({(10, 7, e): 11, (11, 7, e): 22}, {}, 1, identidades)
+        antes = ag.detalhe.retrato('ativo', BASE+2, BASE)
+        for ciclo in range(2, 32):
+            ag.fechar_ciclo({}, {}, ciclo, identidades)
+        depois = ag.detalhe.retrato('ativo', BASE+62, BASE)
+        self.assertEqual(depois['fluxos'], [])
+        self.assertEqual(depois['pids'], [dict(antes['pids'][0], janela=[0, 0])])
+        self.assertEqual(depois['expirados']['total'], [0, 0])
+        self.assertEqual(depois['expirados']['fluxos_total'], [11, 22])
+        for foto in (antes, depois):
+            secao = rede_sessao.montar(foto, processos, TABELA, foto['gerado_em'])
+            self.assertEqual(secao['sessoes'][0]['pid_raiz'], 7)
+            self.assertEqual(secao['sessoes'][0]['total'], [11, 22])
+            self.assertEqual(secao['outros']['total'], [0, 0])
+        ag.fechar_ciclo({(10, 7, e): 3, (11, 7, e): 4}, {}, 32, identidades)
+        retomada = ag.detalhe.retrato('ativo', BASE+64, BASE)
+        self.assertEqual(len(retomada['fluxos']), 1)
+        self.assertEqual(retomada['fluxos'][0]['total'], [3, 4])
+        self.assertEqual(retomada['expirados']['fluxos_total'], [11, 22])
+        secao = rede_sessao.montar(retomada, processos, TABELA, BASE+64)
+        self.assertEqual(secao['sessoes'][0]['pid_raiz'], 7)
+        self.assertEqual(secao['sessoes'][0]['total'], [14, 26])
+        self.assertEqual(secao['outros']['total'], [0, 0])
+        # O mesmo fluxo pode expirar novamente sem recontar seu histórico anterior.
+        ag.fechar_ciclo({}, {}, 62, identidades)
+        self.assertEqual(ag.detalhe.expirados['fluxos_total'], [14, 26])
+        self.assertEqual(ag.detalhe.pids[(7, criado)], [14, 26])
 
 
 class CorrecoesE29(unittest.TestCase):

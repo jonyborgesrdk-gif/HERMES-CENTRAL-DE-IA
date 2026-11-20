@@ -479,16 +479,20 @@ não uma identificação determinística de cada transcript.
 
 Limites: 8.192 identidades de PID e 4.096 fluxos retidos, janela de 30
 ciclos de 2 s, arquivo/leitura de até 2 MiB; 100 sessões, 100 conexões por sessão
-e 2.000 conexões exibidas no total. Fluxos conservados mantêm totais após sair da
-janela enquanto a identidade estiver no snapshot atual. Identidades e fluxos
-ausentes e sem atividade na janela são despejados a cada ciclo; os totais por
-PID passam a `expirados.total`, incorporado a “Outros”. `expirados.fluxos_total`
-é uma contagem paralela dos fluxos removidos e não é somada novamente aos
-bytes por PID. Cortes de conexões não reduzem os totais por PID; após o teto
+e 2.000 conexões exibidas no total. Conexões sem tráfego na janela de 60 s saem
+da lista a cada ciclo, mesmo com o processo vivo; seus totais passam a
+`expirados.fluxos_total`, contagem paralela que não é somada aos bytes por PID.
+Se o fluxo voltar, reaparece com contadores por conexão a partir da retomada;
+o total acumulado por PID/sessão permanece preservado.
+Identidades de processos vivos são mantidas mesmo inativas: apagá-las deslocaria
+o histórico para “Outros” e reduziria o total da sessão quando o tráfego voltasse.
+Só identidades ausentes do snapshot e sem atividade na janela são despejadas;
+seus totais passam a `expirados.total`, incorporado a “Outros”.
+Cortes de conexões não reduzem os totais por PID; após o teto
 de PIDs, os bytes vão ao agregado de identidade desconhecida. Os contadores de descarte da captura
 contam observações de fluxo/PID por ciclo (podem repetir uma conexão), e os
 omitidos da página contam linhas. Valores são saturados em 10^15 bytes por direção.
-Risco residual E29 MJ-A: fluxos de processos vivos não expiram; processos duradouros como svchost, navegador ou node podem encher o teto de 4.096 fluxos, fazendo conexões novas virarem `fluxos_omitidos`; os bytes por sessão continuam corretos, e o tempo até o teto não foi medido.
+E29b (MJ-A): fluxos inativos de processos vivos também expiram após a janela de 60 s; os totais por sessão são preservados. O teto de 4.096 ainda pode omitir conexões se houver mais fluxos com atividade dentro da janela; identidades vivas continuam sujeitas ao teto de 8.192.
 
 Arquivo ausente apresenta “sem captura detalhada” com instrução; sinal com mais
 de 30 s fica “parado”, com idade e aviso. Não confunda atualização de `local.json`
