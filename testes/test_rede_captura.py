@@ -1432,5 +1432,162 @@ class TestRedeCaptura(unittest.TestCase):
         self.assertEqual(limitado["outros"]["conexoes"], 5)
 
 
+class DetalheE28(unittest.TestCase):
+    def test_resumo_sem_flag_igual_a_bytes_baseline_head_e2ef8d6(self):
+        import hashlib
+        ag = rc.Agregador()
+        e = ender('203.0.113.1', '192.0.2.2', 443, 1234)
+        ag.fechar_ciclo({(10, 7, e): 11, (11, 7, e): 22}, {7: 'claude_cli'}, 1)
+        self.assertIsNone(ag.detalhe)
+        resumo = rc.montar_resumo('ativo', None, 1700000010., 1700000000., ag.retrato(), .1, 5, 0, None)
+        with tempfile.TemporaryDirectory() as pasta:
+            self.assertTrue(rc.gravar_resumo(pasta, resumo))
+            with open(os.path.join(pasta, rc.ARQ_RESUMO), 'rb') as arquivo:
+                digest = hashlib.sha256(arquivo.read()).hexdigest()
+            self.assertEqual(digest, '7c82db49b892b2258378d152212fab9831fa4ed5607f480774042c5903541c66')
+            self.assertEqual(os.listdir(pasta), [rc.ARQ_RESUMO])
+
+    def test_fluxo_bidirecional_janela_total_identidade_e_resumo_igual(self):
+        ag, legado = rc.Agregador(detalhe=True), rc.Agregador()
+        e = ender('203.0.113.1', '192.0.2.2', 443, 1234)
+        for ciclo, bruto in [(1, {(10, 7, e): 11, (11, 7, e): 22}), (31, {})]:
+            ag.fechar_ciclo(bruto, {7: 'claude_cli'}, ciclo, {7: 123456})
+            legado.fechar_ciclo(bruto, {7: 'claude_cli'}, ciclo)
+            self.assertEqual(ag.retrato(), legado.retrato())
+            foto = ag.detalhe.retrato('ativo', BASE+62, BASE)
+            self.assertEqual(len(foto['fluxos']), 1)
+            self.assertEqual(foto['fluxos'][0]['janela'], [11, 22] if ciclo == 1 else [0, 0])
+            self.assertEqual(foto['fluxos'][0]['total'], [11, 22])
+            self.assertEqual(foto['pids'][0]['criado'], 123456)
+        # O mesmo PID com outra criação é outra identidade, nunca herda os bytes antigos.
+        ag.fechar_ciclo({(10, 7, e): 9}, {}, 32, {7: 999999})
+        self.assertEqual(len(ag.detalhe.pids), 1)
+        self.assertEqual(ag.detalhe.expirados['total'], [11, 22])
+
+    def test_udp_normaliza_envio_recepcao(self):
+        ag = rc.Agregador(True)
+        envio = ender('203.0.113.1', '192.0.2.2', 53, 1234)
+        recepcao = ender('192.0.2.2', '203.0.113.1', 1234, 53)
+        ag.fechar_ciclo({(42, 7, envio): 30, (43, 7, recepcao): 40}, {}, 1, {7: 10})
+        f = ag.detalhe.retrato('ativo', BASE, BASE)['fluxos']
+        self.assertEqual(len(f), 1)
+        self.assertEqual((f[0]['proto'], f[0]['total']), ('udp', [30, 40]))
+
+    def test_tetos_preservam_bytes_por_pid_e_agregado_desconhecido(self):
+        with patch.object(rc, 'MAX_FLUXOS_DETALHE', 1), patch.object(rc, 'MAX_PIDS_DETALHE', 1):
+            ag = rc.Agregador(True)
+            a = ender('203.0.113.1', '192.0.2.2', 443, 1234)
+            b = ender('203.0.113.2', '192.0.2.2', 443, 1235)
+            ag.fechar_ciclo({(10, 7, a): 10, (10, 7, b): 20, (11, 8, b): 30,
+                            (11, None, None): 40}, {}, 1, {7: 123})
+            foto = ag.detalhe.retrato('ativo', BASE, BASE)
+            self.assertEqual(len(foto['fluxos']), 1)
+            self.assertEqual(foto['pids'][0]['total'], [30, 0])
+            self.assertEqual(foto['nao_atribuidos']['total'], [0, 70])
+            self.assertEqual((foto['fluxos_omitidos'], foto['pids_omitidos']), (1, 2))
+            ag.fechar_ciclo({}, {}, 31)
+            foto = ag.detalhe.retrato('ativo', BASE+62, BASE)
+            self.assertEqual(foto['nao_atribuidos']['janela'], [0, 0])
+            self.assertEqual(foto['nao_atribuidos']['total'], [0, 70])
+
+    def test_gravacao_atomica_limite_e_falha_nao_substitui(self):
+        ag = rc.Agregador(True)
+        e = ender('203.0.113.1', '192.0.2.2', 443, 1234)
+        ag.fechar_ciclo({(10, 7, e): 10}, {}, 1, {7: 123})
+        with tempfile.TemporaryDirectory() as pasta:
+            foto = ag.detalhe.retrato('ativo', BASE, BASE)
+            self.assertTrue(rc.gravar_detalhe(pasta, foto))
+            caminho = os.path.join(pasta, rc.ARQ_SESSAO)
+            with open(caminho, 'rb') as arquivo: antes = arquivo.read()
+            with patch.object(rc.os, 'replace', side_effect=OSError('hostil')):
+                self.assertFalse(rc.gravar_detalhe(pasta, foto))
+            with open(caminho, 'rb') as arquivo: self.assertEqual(arquivo.read(), antes)
+            self.assertEqual(os.listdir(pasta), [rc.ARQ_SESSAO])
+            with patch.object(rc, 'MAX_DETALHE', len(antes)-1):
+                self.assertTrue(rc.gravar_detalhe(pasta, ag.detalhe.retrato('ativo', BASE, BASE)))
+            with open(caminho, 'r', encoding='ascii') as arquivo: cortado = json.load(arquivo)
+            self.assertEqual(cortado['fluxos'], [])
+            self.assertEqual(cortado['pids'][0]['total'], [10, 0])
+            self.assertEqual(cortado['fluxos_omitidos'], 1)
+
+
+class CorrecoesE29(unittest.TestCase):
+    def capturar(self, cena):
+        return rc.capturar(cena.pasta, cena.sessao, cena.listar, cena.tabela, cena.parar,
+            cena.relogio, cena.cpu, cena.dormir, cena.agora, cena.mutex, cena.evento, detalhe=True)
+
+    def test_c5_teto_libera_fluxos_e_identidades_ausentes_sem_perder_total(self):
+        ag = rc.Agregador(True)
+        bruto = {(10, 7, ender('203.0.113.1', '192.0.2.2', 443, porta)): 1
+                 for porta in range(4096)}
+        ag.fechar_ciclo(bruto, {}, 1, {7: 123})
+        self.assertEqual((len(ag.detalhe.pids), len(ag.detalhe.fluxos)), (1, 4096))
+        for ciclo in range(2, 31):
+            ag.fechar_ciclo({}, {}, ciclo, {}, {8: 456})
+        self.assertEqual(len(ag.detalhe.fluxos), 4096)  # Ainda há atividade na janela.
+        ag.fechar_ciclo({}, {}, 31, {}, {8: 456})
+        self.assertEqual((len(ag.detalhe.pids), len(ag.detalhe.fluxos)), (0, 0))
+        e = ender('203.0.113.2', '192.0.2.2', 443, 50000)
+        ag.fechar_ciclo({(11, 8, e): 9}, {}, 32, {8: 456})
+        foto = ag.detalhe.retrato('ativo', BASE+64, BASE)
+        self.assertEqual([f['pid'] for f in foto['fluxos']], [8])
+        self.assertEqual(foto['pids'][0]['total'], [0, 9])
+        self.assertEqual(foto['expirados']['total'], [4096, 0])
+        self.assertEqual(foto['expirados']['fluxos_total'], [4096, 0])
+
+    def test_c5_expirar_fluxo_antes_do_pid_nao_duplica_bytes(self):
+        ag = rc.Agregador(True)
+        a = ender('203.0.113.1', '192.0.2.2', 443, 1234)
+        b = ender('203.0.113.2', '192.0.2.2', 443, 1235)
+        ag.fechar_ciclo({(10, 7, a): 10}, {}, 1, {7: 123})
+        ag.fechar_ciclo({(10, 7, b): 20}, {}, 20, {7: 123})
+        ag.fechar_ciclo({}, {}, 31, {})
+        self.assertEqual(ag.detalhe.expirados['total'], [0, 0])
+        self.assertEqual(ag.detalhe.expirados['fluxos_total'], [10, 0])
+        self.assertEqual(ag.detalhe.pids[(7, 123)], [30, 0])
+        ag.fechar_ciclo({}, {}, 50, {})
+        self.assertEqual(ag.detalhe.expirados['total'], [30, 0])
+        self.assertEqual(ag.detalhe.expirados['fluxos_total'], [30, 0])
+        self.assertFalse(ag.detalhe.pids)
+        self.assertFalse(ag.detalhe.fluxos)
+
+    def test_c6_pid_zero_nao_invalida_documento(self):
+        from lib.fontes import rede_sessao
+        ag = rc.Agregador(True)
+        e = ender('203.0.113.1', '192.0.2.2', 443, 1234)
+        ag.fechar_ciclo({(10, 0, e): 7}, {}, 1, {})
+        foto = ag.detalhe.retrato('ativo', BASE+2, BASE)
+        self.assertEqual((foto['pids'], foto['fluxos']), ([], []))
+        saida = rede_sessao.montar(foto, {}, TABELA, BASE+2)
+        self.assertEqual(saida['outros']['total'], [7, 0])
+
+    def test_c6b_margem_de_dois_segundos_na_identidade_capturada(self):
+        self.assertEqual(rc.MARGEM_REUSO_PID_S, 2)
+        for idade, aceito in ((2, True), (1.875, False), (0, False)):
+            with self.subTest(idade=idade), tempfile.TemporaryDirectory() as pasta:
+                cena = Cena(pasta, ciclos=1)
+                criado = int((BASE - idade + 11644473600) * 10**7)
+                cena.processos = [dict(pid=7, criado=criado, caminho=CLAUDE)]
+                cena.ao_dormir = lambda c: chamar(c.retornos[-1], 10,
+                    carga(7, 9, ender('203.0.113.1', '192.0.2.2', 443, 1234)))
+                self.assertEqual(self.capturar(cena), 0)
+                with open(os.path.join(pasta, rc.ARQ_SESSAO), encoding='ascii') as f:
+                    foto = json.load(f)
+                self.assertEqual(foto['pids'][0]['criado'], criado if aceito else None)
+                self.assertEqual(foto['pids'][0]['total'], [9, 0])
+
+    def test_c6d_retrato_detalhado_que_levanta_nao_interrompe_resumo(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            cena = Cena(pasta, ciclos=4)
+            with patch.object(rc.Detalhe, 'retrato', side_effect=ValueError('falha sintética')) as retrato, \
+                    patch.object(rc, 'gravar_resumo', wraps=rc.gravar_resumo) as gravar:
+                self.assertEqual(self.capturar(cena), 0)
+            self.assertEqual(retrato.call_count, 3)
+            self.assertEqual([c.args[1]['estado'] for c in gravar.call_args_list],
+                             ['ativo', 'ativo', 'encerrado'])
+            self.assertFalse(os.path.exists(os.path.join(pasta, rc.ARQ_SESSAO)))
+            self.assertEqual(json.loads(cena.arquivo())['estado'], 'encerrado')
+
+
 if __name__ == "__main__":
     unittest.main()

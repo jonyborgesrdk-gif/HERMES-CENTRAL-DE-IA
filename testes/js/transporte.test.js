@@ -111,3 +111,74 @@ test('reset textual Claude não vira horário numérico inventado', () => {
   const reabre = vm.runInNewContext(codigo + '; reabre;', { numero: v => typeof v === 'number' && Number.isFinite(v) });
   assert.equal(reabre({ renova_texto: 'Oct 27, 1am', renova_epoch: null }, 1), 'reset Oct 27, 1am');
 });
+
+// E28: executa o script local completo num DOM que recusa sinks de marcação.
+async function paginaRedeE28(secao) {
+  class No {
+    constructor(tag) { this.tag = tag; this.children = []; this.events = {}; this.value = ''; this.textContent = ''; }
+    set innerHTML(_) { throw new Error('sink HTML proibido'); }
+    appendChild(n) { this.children.push(...(n.tag === 'fragment' ? n.children : [n])); return n; }
+    replaceChildren(...ns) { this.children = []; ns.forEach(n => this.appendChild(n)); }
+    addEventListener(e, fn) { this.events[e] = fn; }
+  }
+  const elementos = {}, timers = {};
+  let dados = {gerado_em_epoch: 2000, rede_sessao: secao};
+  class Relogio extends Date { static now() { return 2000000; } }
+  const contexto = {document: {getElementById: id => elementos[id] ||= new No(id),
+    createElement: tag => new No(tag), createDocumentFragment: () => new No('fragment')},
+    Date: Relogio, setInterval: (fn, ms) => {timers[ms] = fn;}, setTimeout, clearTimeout,
+    fetch: async (url, opts) => {
+      assert.equal(url, '/local.json'); assert.equal(opts.cache, 'no-store');
+      return {ok: true, json: async () => dados};
+    }};
+  vm.createContext(contexto);
+  const pagina = fs.readFileSync(path.join(__dirname, '../../publico_local/index.html'), 'utf8');
+  assert.doesNotMatch(pagina, /innerHTML|outerHTML|insertAdjacentHTML/);
+  vm.runInContext(pagina.match(/<script>([\s\S]*?)<\/script>/)[1], contexto);
+  await new Promise(resolve => setImmediate(resolve));
+  return {elementos, timers, atualizar: async novo => {
+    dados = {gerado_em_epoch: 2000, rede_sessao: novo};
+    await vm.runInContext('atualizar()', contexto);
+  }};
+}
+
+const secaoRedeE28 = () => ({estado: 'ativo', gerado_em_epoch: 1969, sessoes_omitidas: 2,
+  fluxos_omitidos: 3, pids_omitidos: 4,
+  sessoes: [{agente: '<img src=x onerror=boom>', pid_raiz: 99, inicio_epoch: 1900,
+    sessao: '<script>boom()</script>', processos: 3, janela: [10,20], total: [100,200], conexoes_omitidas: 5,
+    conexoes: [{proto: 'tcp', local_porta: 1234, remoto: '<svg onload=boom>', remoto_porta: 443,
+      processo: '<img src=x onerror=boom>', janela: [10,20], total: [100,200]}]}],
+  outros: {janela: [1,2], total: [3,4], nao_atribuidos: {total: [3,4]}}});
+
+test('E28: sessão e conexão hostis viram somente texto; detalhe é expandível', async () => {
+  const p = await paginaRedeE28(secaoRedeE28());
+  const linha = p.elementos['rede-sessoes'].children[0];
+  const detalhe = linha.children[0].children[0];
+  assert.equal(detalhe.tag, 'details');
+  assert.match(detalhe.children[0].textContent, /<img src=x onerror=boom>.*<script>boom/);
+  const conexao = detalhe.children[1].children[1].children[0];
+  assert.equal(conexao.children[2].textContent, '<svg onload=boom>');
+  assert.equal(conexao.children[4].textContent, '<img src=x onerror=boom>');
+  const todos = n => [n, ...n.children.flatMap(todos)];
+  assert.equal(todos(linha).some(n => ['img','svg','script'].includes(n.tag)), false);
+  assert.match(linha.children[2].textContent, /10 B \/ 20 B/);
+  assert.match(linha.children[3].textContent, /100 B \/ 200 B/);
+  assert.match(p.elementos['situacao-rede-sessao'].textContent, /idade: 31 s.*AVISO.*sessões omitidas: 2/);
+  assert.match(detalhe.children[2].textContent, /Conexões omitidas: 5/);
+  assert.match(p.elementos['rede-outros'].textContent, /sem vínculo confiável: 3 B \/ 4 B/);
+  detalhe.open = true; detalhe.events.toggle();
+  const nova = secaoRedeE28(); nova.sessoes[0].janela = [30,40];
+  await p.atualizar(nova);
+  assert.equal(p.elementos['rede-sessoes'].children[0].children[0].children[0].open, true);
+});
+
+test('E28: ausência e erro limpam sessões e instrução usa textContent', async () => {
+  const p = await paginaRedeE28(secaoRedeE28());
+  await p.atualizar({estado: 'sem captura detalhada', instrucao: '<img onerror=boom> --detalhe'});
+  assert.equal(p.elementos['rede-sessoes'].children.length, 0);
+  assert.match(p.elementos['situacao-rede-sessao'].textContent, /<img onerror=boom> --detalhe/);
+  await p.atualizar({estado: 'erro'});
+  assert.match(p.elementos['situacao-rede-sessao'].textContent, /erro/);
+  await p.atualizar(null);
+  assert.match(p.elementos['situacao-rede-sessao'].textContent, /Sem captura detalhada.*--detalhe/);
+});

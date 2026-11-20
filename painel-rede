@@ -15,7 +15,9 @@ Uso:
   painel-rede parar      pede à captura que pare e espera até 20 s; só num terminal de administrador
 
 O diretório de dados (PAINEL_IAS_DIR, ou %LOCALAPPDATA%\\painel-ias) precisa existir antes e não pode ser
-junção nem link; este comando não o cria. Nenhum endereço, porta, PID ou nome de processo é gravado.
+junção nem link; este comando não o cria. Sem opt-in nenhum endereço, porta ou PID é gravado.
+capturar --detalhe (ou PAINEL_REDE_SESSAO=1 no capturador) também grava rede-sessao.json protegido,
+para o canal local 7422; o nome ETW/mutex global permite apenas uma captura, mesmo com outra pasta.
 O painel não cria tarefa agendada nem serviço e nunca pede elevação por conta própria.
 """
 import argparse
@@ -115,7 +117,8 @@ def capturar(c):
             if numero is not None:
                 anteriores.append((numero, signal.signal(numero, tratador)))
         codigo = rede_captura.capturar(pasta, sessao, c["listar"], tabela, sinal.is_set, c["relogio"], c["cpu"],
-                                       c["dormir"], c["agora"], mutex, evento)
+                                       c["dormir"], c["agora"], mutex, evento,
+                                       **({'detalhe': True} if c.get('detalhe') else {}))
     finally:
         try:
             pasta.fechar()
@@ -197,13 +200,17 @@ def _executar(argv, c):
     analisador.add_argument("-h", "--help", "--ajuda", dest="ajuda", action="store_true")
     acoes = analisador.add_subparsers(dest="acao")
     for nome in ("capturar", "estado", "parar"):
-        acoes.add_parser(nome, add_help=False)
+        sub = acoes.add_parser(nome, add_help=False)
+        if nome == 'capturar':
+            sub.add_argument('--detalhe', action='store_true')
     args = analisador.parse_args(argv)
     if args.ajuda:
         print(__doc__.strip())
         return 0
     if args.acao is None:
         analisador.error("falta o subcomando: capturar, estado ou parar")
+    c['detalhe'] = (getattr(args, 'detalhe', False)
+                    or c['ambiente'].get('PAINEL_REDE_SESSAO') == '1')
     return {"capturar": capturar, "estado": estado, "parar": parar}[args.acao](c)
 
 

@@ -125,6 +125,44 @@ class PainelRedeTests(unittest.TestCase):
         self.assertFalse(self.rel.estourou, "teto de %d chamadas ao dormir falso estourado" % TETO_DORMIR)
         return codigo, saida.getvalue(), erro.getvalue()
 
+    def test_e28_opt_in_exato_sem_flag_nao_grava_nem_altera_detalhe(self):
+        alvo = self.dir / 'rede-sessao.json'
+        alvo.write_bytes(b'fixture-antiga')
+        referencia = None
+        for valor in ('', '0', 'true', 'sim', '01', ' 1', '1 '):
+            self.g.evento.sinalizado.return_value = True
+            self.assertEqual(self.rodar('capturar', ambiente={'PAINEL_REDE_SESSAO': valor})[0], 0)
+            self.assertEqual(alvo.read_bytes(), b'fixture-antiga')
+            if referencia is None: referencia = self.arquivo.read_bytes()
+            self.assertEqual(self.arquivo.read_bytes(), referencia)
+        self.assertEqual(set(p.name for p in self.dir.iterdir()), {'rede-resumo.json', 'rede-sessao.json'})
+        for args, ambiente in [(('capturar', '--detalhe'), {}),
+                               (('capturar',), {'PAINEL_REDE_SESSAO': '1'})]:
+            self.assertEqual(self.rodar(*args, ambiente=ambiente)[0], 0)
+            detalhe = json.loads(alvo.read_bytes())
+            self.assertEqual((detalhe['estado'], detalhe['pids']), ('encerrado', []))
+            self.assertEqual(self.arquivo.read_bytes(), referencia)
+
+    def test_e28_captura_sintetica_rejeita_reuso_entre_snapshots(self):
+        from testes.test_rede_captura import chamar, carga, ender
+        criacao = int((T0 - 10 + 11644473600) * 10 ** 7)
+        atual = [criacao]
+        def listar(pred):
+            return [{'pid': 7, 'criado': atual[0], 'caminho': 'outro.exe'}]
+        retorno = []
+        self.g.sessao.abrir.side_effect = lambda callback: retorno.append(callback)
+        def dormir(n):
+            chamar(retorno[0], 10, carga(7, 10, ender('203.0.113.1', '192.0.2.2', 443, 1234)))
+            if n == 1: atual[0] = criacao + 100000000
+            if n == 2: self.g.evento.sinalizado.return_value = True
+        self.rel.ao_dormir = dormir
+        self.assertEqual(self.rodar('capturar', '--detalhe', listar=listar)[0], 0)
+        detalhe = json.loads((self.dir / 'rede-sessao.json').read_bytes())
+        self.assertEqual(detalhe['pids'][0]['criado'], None)
+        self.assertEqual(detalhe['pids'][0]['total'], [10, 0])
+        self.assertEqual(detalhe['pids'][1]['criado'], atual[0])
+        self.assertEqual(detalhe['pids'][1]['total'], [10, 0])
+
     # 25
     def test_25_capturar_fora_do_windows(self):
         vivos = len(self.cmd._VIVOS)

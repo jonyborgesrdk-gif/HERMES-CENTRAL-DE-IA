@@ -4,10 +4,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Painel local — dados sensíveis</title>
 <style>
-  body { font: 1rem/1.6 system-ui, sans-serif; max-width: 48rem; margin: 3rem auto; padding: 0 1rem; }
+  body { font: 1rem/1.6 system-ui, sans-serif; max-width: 80rem; margin: 2rem auto; padding: 0 1rem; color: #182433; }
   .aviso { border: 2px solid #865500; padding: 1rem; background: #fff5da; color: #382400; }
   dt { font-weight: bold; }
   dd { margin: 0 0 1rem; overflow-wrap: anywhere; }
+  .filtros { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; }
+  label { display: grid; gap: .25rem; }
+  input, select { font: inherit; padding: .35rem; border: 1px solid #657384; border-radius: .25rem; }
+  .rolagem { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  caption { text-align: left; font-size: 1.2rem; font-weight: bold; margin: 1.5rem 0 .5rem; }
+  th, td { padding: .5rem; text-align: left; border-bottom: 1px solid #d4dce4; overflow-wrap: anywhere; }
+  th { background: #edf2f7; }
+  tbody tr:nth-child(even) { background: #f7f9fb; }
+  #situacao { min-height: 1.6em; }
+  code { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .selo { display: inline-block; border: 1px solid #657384; border-radius: .25rem; padding: 0 .35rem; margin: .15rem; }
 </style>
 <h1>Painel local — dados sensíveis</h1>
 <p class="aviso">Esta página só abre nesta máquina (127.0.0.1). Pode conter comandos, PIDs e endereços.</p>
@@ -15,11 +27,265 @@
   <dt>Gerado em</dt><dd id="gerado">sem leitura</dd>
   <dt>Chaves de topo presentes</dt><dd><ul id="chaves"></ul></dd>
 </dl>
+<p id="idade" role="status">Idade dos dados: sem leitura.</p>
+<section aria-labelledby="titulo-comando">
+  <h2 id="titulo-comando">Executando agora</h2>
+  <p class="aviso">O texto é mascarado, mas o mascaramento não é completo. Pode conter dados sensíveis.</p>
+  <p id="situacao-comando" role="status">Comandos: sem leitura ou coleta desativada. Cursor-agent: sem leitura.</p>
+  <div class="rolagem"><table>
+    <thead><tr><th scope="col">Agente</th><th scope="col">Sessão</th><th scope="col">Projeto</th>
+      <th scope="col">Ferramenta</th><th scope="col">Texto mascarado</th><th scope="col">Há quanto tempo</th>
+      <th scope="col">Estado</th><th scope="col">Tipo de tarefa</th></tr></thead>
+    <tbody id="comandos"></tbody>
+  </table></div>
+</section>
+<section aria-labelledby="titulo-rede-sessao">
+  <h2 id="titulo-rede-sessao">Rede por sessão de agente</h2>
+  <p>Bytes enviados / recebidos em 60 s e desde o início da captura. Expanda a sessão para ver suas conexões.</p>
+  <p id="situacao-rede-sessao" role="status">Sem captura detalhada.</p>
+  <div class="rolagem"><table>
+    <thead><tr><th scope="col">Sessão / conexões</th><th scope="col">Processos</th>
+      <th scope="col">60 s: envio / recepção</th><th scope="col">Total: envio / recepção</th></tr></thead>
+    <tbody id="rede-sessoes"></tbody>
+  </table></div>
+  <p id="rede-outros"></p>
+</section>
+<section aria-labelledby="titulo-conexoes">
+  <h2 id="titulo-conexoes">Conexões e portas</h2>
+  <p>Somente leitura. Portas abertas: TCP em LISTEN e endpoints UDP vinculados (podem ser usados só para envio).
+    As tabelas são ordenadas por processo. As contagens consideram até 5.000 conexões.</p>
+  <div class="filtros">
+    <label>Filtrar texto <input id="filtro" type="search" placeholder="Processo, PID, endereço ou porta"></label>
+    <label>Protocolo <select id="proto"><option value="">Todos</option><option value="tcp">TCP</option><option value="udp">UDP</option></select></label>
+  </div>
+  <p id="situacao" role="status">sem leitura</p>
+  <div class="rolagem"><table>
+    <caption>Portas abertas</caption>
+    <thead><tr><th scope="col">Proto</th><th scope="col">Endereço:porta</th><th scope="col">Processo</th><th scope="col">PID</th></tr></thead>
+    <tbody id="portas"></tbody>
+  </table></div>
+  <div class="rolagem"><table>
+    <caption>Conexões estabelecidas (TCP)</caption>
+    <thead><tr><th scope="col">Processo</th><th scope="col">PID</th><th scope="col">Local</th><th scope="col">Remoto</th><th scope="col">Estado</th></tr></thead>
+    <tbody id="estabelecidas"></tbody>
+  </table></div>
+</section>
 <script>
   'use strict';
   const gerado = document.getElementById('gerado');
   const chaves = document.getElementById('chaves');
+  const filtro = document.getElementById('filtro');
+  const proto = document.getElementById('proto');
+  const situacao = document.getElementById('situacao');
+  const portas = document.getElementById('portas');
+  const estabelecidas = document.getElementById('estabelecidas');
+  const idade = document.getElementById('idade');
+  const comandos = document.getElementById('comandos');
+  const situacaoComando = document.getElementById('situacao-comando');
+  const corpoRede = document.getElementById('rede-sessoes');
+  const situacaoRede = document.getElementById('situacao-rede-sessao');
+  const outrosRede = document.getElementById('rede-outros');
+  let redeSessao = null;
+  let assinaturaRede;
+  const expansoesRede = new Set();
+  let comando = null;
+  let conexoes = null;
+  let buscando = false;
+  let geradoEpoch = null;
+  let filtroTimer;
+  const lista = valor => Array.isArray(valor) ? valor : [];
+  const texto = valor => valor == null ? '' : String(valor);
+  const bytesRede = valor => lista(valor).map(n => typeof n === 'number' && Number.isFinite(n)
+    ? n.toLocaleString('pt-BR') + ' B' : '—').join(' / ') || '—';
+  function atualizarIdadeRede() {
+    const em = redeSessao && redeSessao.gerado_em_epoch;
+    const idade = typeof em === 'number' && Number.isFinite(em) ? Math.max(0, Math.floor(Date.now()/1000-em)) : null;
+    situacaoRede.textContent = redeSessao
+      ? texto(redeSessao.estado) + (idade === null ? '' : ' · idade: ' + idade + ' s')
+        + (idade !== null && idade > 30 ? ' · AVISO: captura sem sinal há mais de 30 s.' : '')
+        + (redeSessao.instrucao ? ' · ' + texto(redeSessao.instrucao) : '')
+        + ' · sessões omitidas: ' + texto(redeSessao.sessoes_omitidas || 0)
+        + ' · observações de fluxo omitidas: ' + texto(redeSessao.fluxos_omitidos || 0)
+        + ' · observações de PID omitidas: ' + texto(redeSessao.pids_omitidos || 0)
+      : 'Sem captura detalhada. Inicie painel-rede capturar --detalhe em terminal de administrador.';
+  }
+  function renderizarRede() {
+    atualizarIdadeRede();
+    const assinatura = JSON.stringify(redeSessao);
+    if (assinatura === assinaturaRede) return;
+    assinaturaRede = assinatura;
+    const fragmento = document.createDocumentFragment();
+    const adicionar = (pai, tag, valor) => {
+      const elemento = document.createElement(tag);
+      if (valor !== undefined) elemento.textContent = texto(valor);
+      pai.appendChild(elemento);
+      return elemento;
+    };
+    for (const s of lista(redeSessao && redeSessao.sessoes)) {
+      const linha = adicionar(fragmento, 'tr');
+      const celula = adicionar(linha, 'td');
+      const detalhe = adicionar(celula, 'details');
+      const chave = [s.agente, s.pid_raiz, s.inicio_epoch].join(':');
+      detalhe.open = expansoesRede.has(chave);
+      detalhe.addEventListener('toggle', () => {
+        if (detalhe.open) expansoesRede.add(chave); else expansoesRede.delete(chave);
+      });
+      adicionar(detalhe, 'summary', texto(s.agente) + ' · PID ' + texto(s.pid_raiz)
+        + ' · sessão ' + texto(s.sessao || 'sem identificador')
+        + ' · início ' + (typeof s.inicio_epoch === 'number'
+          ? new Date(s.inicio_epoch*1000).toLocaleString('pt-BR') : 'sem leitura'));
+      const tabela = adicionar(detalhe, 'table');
+      const cabeca = adicionar(adicionar(tabela, 'thead'), 'tr');
+      ['Proto', 'Porta local', 'Remoto', 'Porta remota', 'Processo', '60 s: env / rec', 'Total: env / rec']
+        .forEach(t => adicionar(cabeca, 'th', t));
+      const corpo = adicionar(tabela, 'tbody');
+      for (const c of lista(s.conexoes)) {
+        const l = adicionar(corpo, 'tr');
+        [c.proto, c.local_porta, c.remoto, c.remoto_porta, c.processo, bytesRede(c.janela), bytesRede(c.total)]
+          .forEach(v => adicionar(l, 'td', v));
+      }
+      adicionar(detalhe, 'p', 'Conexões omitidas: ' + texto(s.conexoes_omitidas || 0));
+      adicionar(linha, 'td', s.processos);
+      adicionar(linha, 'td', bytesRede(s.janela));
+      adicionar(linha, 'td', bytesRede(s.total));
+    }
+    corpoRede.replaceChildren(fragmento);
+    const outros = redeSessao && redeSessao.outros;
+    outrosRede.textContent = outros ? 'Outros programas / não atribuídos · 60 s: ' + bytesRede(outros.janela)
+      + ' · total: ' + bytesRede(outros.total) + ' · sem vínculo confiável: '
+      + bytesRede(outros.nao_atribuidos && outros.nao_atribuidos.total) : '';
+  }
+  const assinaturasTabelas = new WeakMap();
+  let assinaturaComando;
+  function atualizarTemposComando() {
+    lista(comando && comando.sessoes).forEach((item, indice) => {
+      const linha = comandos.children[indice];
+      if (!linha) return;
+      const valor = typeof item.desde_epoch === 'number' && Number.isFinite(item.desde_epoch)
+        ? Math.max(0, Math.floor(Date.now() / 1000 - item.desde_epoch)) + ' s' : 'sem leitura';
+      const celula = linha.children[5].children[0];
+      if (celula.textContent !== valor) celula.textContent = valor;
+    });
+  }
+  function renderizarComando() {
+    const situacaoTexto = comando
+      ? lista(comando.sessoes).length + ' sessões · Cursor-agent: sem leitura.'
+        + (lista(comando.sem_leitura).filter(a => a !== 'cursor-agent').length ? ' Há fontes sem leitura.' : '')
+      : 'Comandos: sem leitura ou coleta desativada. Cursor-agent: sem leitura.';
+    if (situacaoComando.textContent !== situacaoTexto) situacaoComando.textContent = situacaoTexto;
+    const assinatura = JSON.stringify(lista(comando && comando.sessoes));
+    if (assinatura === assinaturaComando) {
+      atualizarTemposComando();
+      return;
+    }
+    assinaturaComando = assinatura;
+    const fragmento = document.createDocumentFragment();
+    for (const item of lista(comando && comando.sessoes)) {
+      const linha = document.createElement('tr');
+      const segundos = typeof item.desde_epoch === 'number' && Number.isFinite(item.desde_epoch)
+        ? Math.max(0, Math.floor(Date.now() / 1000 - item.desde_epoch)) + ' s' : 'sem leitura';
+      const valores = [item.agente, item.sessao, item.projeto || '—', item.ferramenta, item.texto,
+        segundos, item.em_curso === true ? 'em curso' : 'última', item.tipo_tarefa];
+      valores.forEach((valor, indice) => {
+        const celula = document.createElement('td');
+        const conteudo = document.createElement(indice === 4 ? 'code' : 'span');
+        conteudo.textContent = texto(valor);
+        if (indice === 6) conteudo.className = 'selo';
+        celula.appendChild(conteudo);
+        if (indice === 6 && item.sem_resultado === true) {
+          const selo = document.createElement('span');
+          selo.className = 'selo';
+          selo.textContent = 'sem resultado';
+          celula.appendChild(selo);
+        }
+        if (indice === 7) {
+          const selo = document.createElement('span');
+          selo.className = 'selo';
+          selo.textContent = 'inferência';
+          celula.appendChild(selo);
+        }
+        linha.appendChild(celula);
+      });
+      fragmento.appendChild(linha);
+    }
+    comandos.replaceChildren(fragmento);
+  }
+  function atualizarIdade() {
+    if (geradoEpoch === null) {
+      idade.textContent = 'Idade dos dados: sem leitura.';
+      idade.className = '';
+      return;
+    }
+    const segundos = Math.max(0, Math.floor(Date.now() / 1000 - geradoEpoch));
+    idade.textContent = 'Dados de há ' + segundos + ' s.'
+      + (segundos > 30 ? ' Atenção: dados desatualizados (mais de 30 s).' : '');
+    idade.className = segundos > 30 ? 'aviso' : '';
+  }
+  function endereco(ip, porta) {
+    ip = texto(ip);
+    return (ip.includes(':') ? '[' + ip + ']' : ip) + ':' + texto(porta);
+  }
+  function ordem(a, b) {
+    return texto(a.processo).localeCompare(texto(b.processo), 'pt-BR', {sensitivity: 'base'}) || a.pid - b.pid;
+  }
+  function aceita(protocolo, campos) {
+    return (!proto.value || protocolo === proto.value)
+      && campos.map(texto).join(' ').toLocaleLowerCase('pt-BR').includes(filtro.value.trim().toLocaleLowerCase('pt-BR'));
+  }
+  function preencher(corpo, linhas, colunas) {
+    const assinatura = JSON.stringify(linhas.map(colunas));
+    if (assinaturasTabelas.get(corpo) === assinatura) return;
+    assinaturasTabelas.set(corpo, assinatura);
+    const fragmento = document.createDocumentFragment();
+    for (const item of linhas) {
+      const linha = document.createElement('tr');
+      for (const valor of colunas(item)) {
+        const celula = document.createElement('td');
+        celula.textContent = texto(valor);
+        linha.appendChild(celula);
+      }
+      fragmento.appendChild(linha);
+    }
+    if (!linhas.length) {
+      const linha = document.createElement('tr');
+      const celula = document.createElement('td');
+      celula.colSpan = corpo === portas ? 4 : 5;
+      celula.textContent = 'Nenhum resultado.';
+      linha.appendChild(celula);
+      fragmento.appendChild(linha);
+    }
+    corpo.replaceChildren(fragmento);
+  }
+  function renderizar() {
+    const abertas = [];
+    for (const porta of lista(conexoes && conexoes.portas_abertas)) {
+      for (const dono of lista(porta.processos)) abertas.push({...porta, ...dono});
+    }
+    const colunasPorta = item => [texto(item.proto).toUpperCase(), endereco(item.local_ip, item.porta), item.processo, item.pid];
+    preencher(portas, abertas.filter(item => aceita(item.proto, colunasPorta(item))).sort(ordem), colunasPorta);
+    const colunasConexao = item => [item.processo, item.pid, endereco(item.local_ip, item.local_porta),
+      endereco(item.remoto_ip, item.remoto_porta), item.estado];
+    const ativas = lista(conexoes && conexoes.itens).filter(item => item.proto === 'tcp' && item.estado === 'ESTABLISHED'
+      && aceita(item.proto, [...colunasConexao(item), item.proto])).sort(ordem);
+    preencher(estabelecidas, ativas, colunasConexao);
+    situacao.textContent = conexoes && conexoes.estado === 'ok'
+      ? lista(conexoes.itens).length + ' conexões · ' + lista(conexoes.processos).length + ' processos · '
+        + texto(conexoes.omitidas || 0) + ' omitidas · ' + abertas.length + ' portas/donos ('
+        + abertas.filter(item => aceita(item.proto, colunasPorta(item))).length + ' exibidos) · '
+        + ativas.length + ' estabelecidas exibidas'
+      : 'Conexões: sem leitura ou coleta desativada.';
+  }
+  filtro.addEventListener('input', () => {
+    clearTimeout(filtroTimer);
+    filtroTimer = setTimeout(renderizar, 200);
+  });
+  proto.addEventListener('change', () => {
+    clearTimeout(filtroTimer);
+    renderizar();
+  });
   async function atualizar() {
+    if (buscando) return;
+    buscando = true;
     try {
       const resposta = await fetch('/local.json', {cache: 'no-store'});
       if (!resposta.ok) throw new Error('sem leitura');
@@ -27,18 +293,35 @@
       if (!dados || typeof dados !== 'object' || Array.isArray(dados)) throw new Error('sem leitura');
       gerado.textContent = typeof dados.gerado_em === 'string' || typeof dados.gerado_em === 'number'
         ? String(dados.gerado_em) : 'sem leitura';
+      geradoEpoch = typeof dados.gerado_em_epoch === 'number' && Number.isFinite(dados.gerado_em_epoch)
+        && dados.gerado_em_epoch > 0 ? dados.gerado_em_epoch : null;
       chaves.replaceChildren();
       for (const chave of Object.keys(dados)) {
         const item = document.createElement('li');
         item.textContent = chave;
         chaves.appendChild(item);
       }
+      conexoes = dados.conexoes && dados.conexoes.estado === 'ok' ? dados.conexoes : null;
+      comando = dados.comando && dados.comando.estado === 'ok' ? dados.comando : null;
+      redeSessao = dados.rede_sessao && typeof dados.rede_sessao === 'object' ? dados.rede_sessao : null;
     } catch (_) {
       gerado.textContent = 'sem leitura';
       chaves.replaceChildren();
+      conexoes = null;
+      comando = null;
+      redeSessao = null;
+      geradoEpoch = null;
+    } finally {
+      buscando = false;
+      renderizar();
+      atualizarIdade();
+      renderizarComando();
+      renderizarRede();
     }
   }
   atualizar();
   setInterval(atualizar, 5000);
+  setInterval(() => { if (comando) atualizar(); }, 2000);
+  setInterval(() => { atualizarIdade(); renderizarComando(); atualizarIdadeRede(); }, 1000);
 </script>
 </html>
