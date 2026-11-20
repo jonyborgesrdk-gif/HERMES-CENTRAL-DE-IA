@@ -95,7 +95,7 @@ def achar_agente(nome, mapa):
 
 # ---------------------------------------------------------------- arquivos
 
-def gravar_atomico(caminho, texto):
+def gravar_atomico(caminho, texto, tentativas=1, espera=0.05):
     """Grava num temporário da mesma pasta e troca com rename: ninguém lê arquivo pela metade."""
     caminho = Path(caminho)
     caminho.parent.mkdir(parents=True, exist_ok=True)
@@ -106,7 +106,16 @@ def gravar_atomico(caminho, texto):
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, 0o644)
-        os.replace(tmp, str(caminho))
+        for tentativa in range(tentativas):
+            try:
+                os.replace(tmp, str(caminho))
+                break
+            except PermissionError:
+                if tentativa + 1 >= tentativas:
+                    raise
+                # Só opt-in: leitores no Windows podem impedir a troca por instantes.
+                import time
+                time.sleep(espera)
     except BaseException:
         try:
             os.unlink(tmp)

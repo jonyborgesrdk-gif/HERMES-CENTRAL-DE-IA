@@ -229,7 +229,7 @@ O painel não cria tarefa agendada nem serviço; iniciar a captura junto com o W
 No servidor, `PAINEL_CONEXOES=1`, `PAINEL_COMANDO=1` ou `PAINEL_REDE_SESSAO=1`
 habilita um segundo listener, sempre em `127.0.0.1`. Sem nenhuma delas exatamente
 `1`, nenhum socket ou log adicional é criado. Abra `http://127.0.0.1:7422/` na
-própria máquina; esta etapa mostra apenas `gerado_em` e as chaves de topo.
+própria máquina; com a E26, a página mostra também conexões e portas por processo.
 `PAINEL_PORTA_LOCAL` aceita inteiro de 1024 a 65535 diferente da porta principal;
 valor inválido usa 7422 com aviso constante. Se a porta resultante, inclusive o
 padrão 7422, coincidir com a principal, o listener local não sobe e registra
@@ -255,6 +255,47 @@ proxy/Tailscale. Para desligar, remova as três variáveis e inicie novamente o
 servidor sob seu controle; para desfazer o código, reverta o futuro commit E26a.
 Risco residual: o bind da porta principal (7421) mantém o comportamento de
 reutilização anterior; a exclusividade desta etapa vale só para a porta local.
+
+### Conexões e portas por programa (E26)
+
+Com `PAINEL_CONEXOES` exatamente `1` no coletor `--vivo` e no servidor, a página
+local mostra portas abertas (TCP em LISTEN e todos os endpoints UDP vinculados)
+e conexões TCP estabelecidas, com filtro por texto e protocolo e ordenação por
+processo. A coleta e a página atualizam a cada 5 s (a coleta depende da cadência
+do laço); o arquivo só é regravado quando há nova leitura, sem regravar o cache
+a cada passada. O filtro de texto espera 200 ms após a última tecla. A página
+mostra a idade dos dados e avisa quando passa de 30 s. UDP vinculado pode ser
+usado só para envio; não comprova um serviço recebendo tráfego. Não há ação
+sobre processos ou conexões.
+
+A fonte usa apenas ctypes (`GetExtendedTcpTable`/`GetExtendedUdpTable`, IPv4 e
+IPv6, com scope id em host order e portas em network order), sem subprocesso,
+DNS ou tráfego de rede. Estado TCP fora da lista conhecida vira `DESCONHECIDO`.
+O buffer tem folga de 25% e até três tentativas de cópia. O máximo é 5.000
+conexões por leitura; `omitidas` conta o restante. Portas são agrupadas por
+protocolo/endereço/porta, preservando todos os PIDs donos. As contagens por PID
+consideram somente as conexões incluídas. O executável é apenas o basename;
+acesso negado ou processo encerrado vira `sem leitura` (PID 0: `System Idle`;
+PID 4: `System`). PID pode ser reutilizado entre a leitura da tabela e do nome.
+
+O coletor grava atomicamente `diretorio(ctx)/local.json`, o mesmo diretório de
+dados da E26a, com `gerado_em`, `gerado_em_epoch` e seção `conexoes`. Recusa
+destinos dentro de `publico/` ou da saída pública configurada (`--saida`). O
+gravador mescla seções habilitadas (`conexoes`, `comando`, `rede_sessao`) para
+as próximas etapas, com um único escritor; uma seção desligada sai na próxima
+gravação de outra seção ativa. Sem a flag, não cria nem altera `local.json`:
+um arquivo anterior permanece no disco. `dados.json`/`dados.js` recebem só
+`fontes.conexoes` com `ok` e erro constante, sem conteúdo da fonte. Falha de
+leitura substitui a seção local por erro constante, sem reter conexões antigas.
+O JSON completo tem teto de 3,5 MiB (contando escapes ASCII); se necessário,
+corta conexões, soma o corte em `omitidas` e recalcula portas e contagens,
+preservando as outras seções. As etapas futuras precisam respeitar esse teto
+global. Arquivo anterior inválido ou maior que 4 MiB é descartado na mescla.
+Na troca atômica, `PermissionError` permite cinco novas tentativas de 50 ms;
+se persistir, mantém o último arquivo e registra aviso constante, sem marcar
+a fonte como erro. Outras falhas de gravação sinalizam erro no feed público.
+Fora do Windows a fonte retorna erro constante. Esta autorização de dados
+sensíveis vale apenas para o canal local; não encaminhe a 7422 pela tailnet.
 
 ## Solução de problemas
 

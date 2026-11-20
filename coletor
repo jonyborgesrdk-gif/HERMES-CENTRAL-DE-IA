@@ -37,6 +37,7 @@ isso e não inventa número: o que não leu fica vazio.
 import argparse
 import http.server
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -340,6 +341,92 @@ def gravar(dados, saida):
                          "window.__painelDados && window.__painelDados(%s);\n" % json.dumps(dados, ensure_ascii=True))
 
 
+SECOES_LOCAIS = {'conexoes': 'PAINEL_CONEXOES', 'comando': 'PAINEL_COMANDO',
+                 'rede_sessao': 'PAINEL_REDE_SESSAO'}
+ERRO_CONEXOES = "conexões: sem leitura"
+MAX_LOCAL_LIDO = 4 * 1024 * 1024
+MAX_LOCAL_GRAVADO = 7 * 1024 * 1024 // 2
+
+
+def serializar_local(local):
+    """Envelope de até 3,5 MiB em ASCII; corta um prefixo sem alterar o cache.
+
+    Busca binária preserva o maior prefixo que cabe e refaz todos os agregados.
+    Seções futuras também precisam respeitar o orçamento global do arquivo.
+    """
+    def serializar(valor):
+        return json.dumps(valor, ensure_ascii=True, separators=(',', ':'), allow_nan=False) + '\n'
+
+    texto = serializar(local)
+    if len(texto) <= MAX_LOCAL_GRAVADO:
+        return texto
+    from fontes.conexoes import agregar
+    secao = local.get('conexoes', {})
+    itens = secao.get('itens', [])
+
+    def cortar(quantidade):
+        conexoes = agregar(itens[:quantidade], secao.get('omitidas', 0) + len(itens) - quantidade)
+        return serializar(dict(local, conexoes=conexoes))
+
+    melhor = cortar(0)
+    if len(melhor) > MAX_LOCAL_GRAVADO:
+        raise ValueError('limite local')
+    inicio, fim = 1, len(itens) - 1
+    while inicio <= fim:
+        meio = (inicio + fim) // 2
+        candidato = cortar(meio)
+        if len(candidato) <= MAX_LOCAL_GRAVADO:
+            melhor, inicio = candidato, meio + 1
+        else:
+            fim = meio - 1
+    return melhor
+
+
+def gravar_local(secoes, ctx, saida):
+    """Um único escritor (coletor): mescla seções ativas; nunca escreve na saída pública.
+
+    Sem seção habilitada não lê nem altera o arquivo anterior. Flags desligadas
+    são retiradas na próxima gravação de alguma seção ativa; não há limpeza retroativa.
+    """
+    from fontes import diretorio
+    ativas = {nome for nome, flag in SECOES_LOCAIS.items() if os.environ.get(flag) == '1'}
+    if not ativas.intersection(secoes):
+        return
+    def resolver(caminho):
+        valor = str(Path(caminho).resolve())
+        # O prefixo estendido não pode esconder a relação com a raiz pública.
+        if valor.startswith('\\\\?\\UNC\\'):
+            valor = '\\\\' + valor[8:]
+        elif valor.startswith('\\\\?\\'):
+            valor = valor[4:]
+        return Path(valor)
+
+    destino = resolver(diretorio(ctx) / 'local.json')
+    for publica in (comum.PASTA_PUBLICA, Path(saida)):
+        raiz = resolver(publica)
+        if destino == raiz or raiz in destino.parents:
+            raise ValueError('diretório local dentro da saída pública')
+    try:
+        with destino.open('rb') as stream:
+            bruto = stream.read(MAX_LOCAL_LIDO + 1)
+        anterior = json.loads(bruto.decode('utf-8')) if len(bruto) <= MAX_LOCAL_LIDO else {}
+        if not isinstance(anterior, dict):
+            anterior = {}
+    except Exception:  # Arquivo auxiliar inválido nunca pode congelar o feed público.
+        anterior = {}
+    local = {nome: anterior[nome] for nome in ativas if nome in anterior}
+    local.update({nome: valor for nome, valor in secoes.items() if nome in ativas})
+    momento = comum.agora()
+    local.update(gerado_em=comum.iso(momento), gerado_em_epoch=int(momento.timestamp()))
+    texto = serializar_local(local)
+    try:
+        comum.gravar_atomico(destino, texto, tentativas=6, espera=0.05)
+    except PermissionError:
+        logging.getLogger('painel.coletor').warning('local.json: gravação adiada por arquivo ocupado')
+        return False
+    return True
+
+
 def resumo(dados):
     sem = [v["nome"] for v in dados["agentes"] if v["leitura"] != "ok"]
     trabalhando = sum(1 for v in dados["agentes"] if v["estado"] == "trabalhando")
@@ -448,6 +535,8 @@ def extras_ativos():
         extras += ("maquina",)
     if os.environ.get('PAINEL_CUSTO', '0') == '1':
         extras += ("custo_agentes",)
+    if os.environ.get('PAINEL_CONEXOES', '0') == '1':
+        extras += ("conexoes",)
     return extras
 
 
@@ -496,6 +585,9 @@ def fontes_vivas(sem_contas=False):
     if os.environ.get('PAINEL_CUSTO', '0') == '1':
         from fontes import custo_agentes
         fontes["custo_agentes"] = custo_agentes.ler
+    if os.environ.get('PAINEL_CONEXOES', '0') == '1':
+        from fontes import conexoes
+        fontes["conexoes"] = conexoes.ler
     return fontes
 
 
@@ -515,8 +607,9 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
                   "cota_codex_local": 120, "cota_grok_bot": 60, "cota_cursor": 120,
                   "vigilante2": 30, "erros_agentes": 60,
                   "sessoes_grok": 10, "sessoes_hermes": 30, "chat_cursor": 120,
-                  "rede_uso": 10, "maquina": 10, "custo_agentes": 300}
+                  "rede_uso": 10, "maquina": 10, "custo_agentes": 300, "conexoes": 5}
     extras = extras_ativos()
+    atualizadas = set()
     for nome in ("eventos_hooks", "sessoes_codex", "maestri_wire", "cota_claude", "processos", "servicos") + extras:
         anterior = cache.get(nome)
         # A cadência não pode estender a retenção das fontes opt-in além dos 300 s.
@@ -526,16 +619,19 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
             leituras[nome], situacao[nome] = anterior["dados"], anterior["situacao"]
             continue
         ultima_ok = anterior.get("ultima_leitura_ok") if anterior else None
+        atualizadas.add(nome)
         try:
             dado = fontes[nome](contexto) if nome in fontes else {}
             if not isinstance(dado, dict):
                 raise ValueError("resposta inválida")
             erro = texto_seguro(dado.get("erro"), 160)
+            if nome == 'conexoes':
+                erro = ERRO_CONEXOES if erro or not isinstance(dado.get('conexoes'), dict) else None
         except Exception as exc:
             dado = {}
-            erro = "falha na fonte (%s)" % type(exc).__name__
+            erro = ERRO_CONEXOES if nome == 'conexoes' else "falha na fonte (%s)" % type(exc).__name__
         retido = False
-        if erro and anterior:
+        if erro and anterior and nome != 'conexoes':
             # Tentativas ruins não rejuvenescem o último snapshot bom.
             retido = ultima_ok is not None and 0 <= agora - ultima_ok <= 300
             dado = anterior["dados"] if retido else {}
@@ -546,6 +642,18 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
         leituras[nome], situacao[nome] = dado, meta
         cache[nome] = {"hora": agora, "dados": dado, "situacao": meta,
                        "ultima_leitura_ok": ultima_ok}
+
+    if 'conexoes' in extras:
+        # Separação antes da montagem pública: conteúdo local nunca chega a vivo/montar.
+        local = leituras.pop('conexoes', {})
+        saude = situacao['conexoes']
+        secao = local.get('conexoes') if saude['ok'] else {'estado': 'erro', 'erro': ERRO_CONEXOES}
+        if 'conexoes' in atualizadas:
+            try:
+                gravar_local({'conexoes': secao}, contexto, args.saida)
+            except (OSError, ValueError):
+                saude = {'ok': False, 'erro': ERRO_CONEXOES}
+        situacao['conexoes'] = {'ok': saude['ok'], 'erro': saude['erro']}
 
     transcripts, erros = {}, []
     anteriores = cache.get("transcripts_claude", {}).get("dados", {})
@@ -601,7 +709,8 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
                  processos=leituras["processos"], fontes=situacao,
                  contas=vivo.montar_contas(leituras, agora, agentes, disponiveis=fontes, saude=situacao))
     for nome in extras:
-        dados[nome] = leituras[nome].get(nome, {"estado": "erro"})
+        if nome != 'conexoes':
+            dados[nome] = leituras[nome].get(nome, {"estado": "erro"})
     gravar(dados, args.saida)
     return dados
 
