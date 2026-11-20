@@ -29,8 +29,8 @@ _QUEBRAS_SEPARADORES = str.maketrans({'\n': ';', '\r': ';'})
 _USUARIO = re.compile(r'''[^\s;\&|<>"'\}\]]{0,256}''')
 # (programa, subcomando opcional): (flag exata, aceita valor junto à flag).
 SENHAS_PROGRAMA = {
-    ('docker', 'login'): (('-p', False), ('--password', False)),
-    ('az', 'login'): (('-p', False),),
+    ('docker', 'login'): (('-p', True), ('--password', False)),
+    ('az', 'login'): (('-p', True),),
     ('redis-cli', None): (('-a', False),),
     ('7z', None): (('-p', True),),
     ('zip', None): (('-P', False),),
@@ -38,9 +38,10 @@ SENHAS_PROGRAMA = {
     ('mysql', None): (('-p', True),),
     ('mariadb', None): (('-p', True),),
     ('sshpass', None): (('-p', True),),
-    ('sqlcmd', None): (('-P', False),),
-    ('ldapsearch', None): (('-w', False),),
-    ('ssh-keygen', None): (('-N', False),),
+    ('sqlcmd', None): (('-P', True),),
+    ('ldapsearch', None): (('-w', True),),
+    ('ldapmodify', None): (('-w', True),),
+    ('ssh-keygen', None): (('-N', True), ('-P', True)),
     ('openssl', None): (('-k', False), ('-pass', False)),
 }
 
@@ -121,7 +122,8 @@ def _senhas_programa(texto):
     """Um cursor por trecho e até quatro níveis de wrappers; nunca executa shell."""
     minusculo = texto.lower()
     if not any(p in minusculo for p in ('docker', 'az', 'redis-cli', '7z', 'zip', 'mysql',
-                                      'mariadb', 'sshpass', 'sqlcmd', 'ldapsearch', 'ssh-keygen', 'openssl', 'net')):
+                                      'mariadb', 'sshpass', 'sqlcmd', 'ldapsearch', 'ldapmodify',
+                                      'ssh-keygen', 'openssl', 'net')):
         return []
     intervalos = []
     fila = [(0, len(texto), 0)]
@@ -144,7 +146,8 @@ def _senhas_programa(texto):
                     intervalos.append((inicio, fim))
                     rede = 0
                     continue
-                programa = ntpath.basename(valor.lstrip('$&{').rstrip('}')).lower().removesuffix('.exe')
+                normal = valor.strip('$&{}%()`').lower().removeprefix('env:')
+                programa = ntpath.basename(normal).removesuffix('.exe')
                 if programa.startswith('mysql'):
                     programa = 'mysql'
                 elif programa.startswith('mariadb'):
@@ -157,8 +160,11 @@ def _senhas_programa(texto):
                 if programa == 'net' and sub == 'use':
                     rede = 1
                 if (programa, sub) in SENHAS_PROGRAMA or (programa, None) in SENHAS_PROGRAMA:
-                    regras = SENHAS_PROGRAMA.get((programa, sub), SENHAS_PROGRAMA.get((programa, None), ()))
-                    stdin_pipe = pipe if programa == 'docker' and sub == 'login' else None
+                    novas = SENHAS_PROGRAMA.get((programa, sub), SENHAS_PROGRAMA.get((programa, None), ()))
+                    # A tabela é fixa: reconhecer outro programa só acrescenta proteção.
+                    regras += tuple(regra for regra in novas if regra not in regras)
+                    if programa == 'docker' and sub == 'login' and pipe is not None:
+                        stdin_pipe = pipe
                 if valor == '--password-stdin' and stdin_pipe is not None:
                     intervalos.append((0, stdin_pipe))
                 for flag, junto in regras:

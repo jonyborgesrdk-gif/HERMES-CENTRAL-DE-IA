@@ -372,8 +372,12 @@ atribuições em dicionários e JSON escapado. **UUID, hash Git de 40 hex, camin
 longos sem pontos (ex.: `/usr/local/lib/python3/site-packages`) e `Basic usage`
 também podem ser mascarados**, deliberadamente.
 Há tabela de senhas por programa/flag para docker login, az login, redis-cli,
-7z, zip/unzip, mysql/mariadb, sshpass, sqlcmd, ldapsearch, ssh-keygen, openssl e
+7z, zip/unzip, mysql/mariadb, sshpass, sqlcmd, ldapsearch/ldapmodify, ssh-keygen, openssl e
 net use. Docker login com `--password-stdin` oculta o lado esquerdo do pipe.
+As regras se acumulam no trecho; reconhecer outro programa não substitui regras
+anteriores nem desliga a proteção de senha via pipe. Valores junto à flag são
+aceitos em docker/az login `-p`, ldapsearch/ldapmodify `-w`, ssh-keygen `-N/-P`
+e sqlcmd `-P`, inclusive entre aspas.
 Quebras de linha separam comandos numa cópia de mesmo comprimento para preservar
 os índices do texto exibido; após `\`, crase, `^`, `|` ou `&` (ignorando espaços
 e CR), a quebra vira espaço e mantém a continuação. Uma segunda passagem converte
@@ -383,21 +387,32 @@ basename, incluindo famílias mysql*/mariadb* e comandos após sudo, env, time,
 docker exec e kubectl exec. Comandos entre aspas em bash/sh -c/-lc, cmd /c e
 powershell -Command são tokenizados também (até quatro níveis). Net use aceita
 unidade, `*` e `/user:u` antes da senha.
-No reconhecimento, prefixos `$`, `&`, `{` e o sufixo `}` são retirados do token:
-`$MYSQL`, `${MYSQL}`, `& $mysql` e `$sqlcmd` preservam a família reconhecida,
+No reconhecimento, `$`, `&`, `{`, `}`, `%`, parênteses e crases nas pontas,
+além do prefixo `env:` (sem distinguir maiúsculas), são retirados do token:
+`$MYSQL`, `${MYSQL}`, `& $env:MYSQL`, `%SQLCMD%` e `$(which sshpass)` preservam a família reconhecida,
 sem consultar nem expandir variáveis. Outra cópia mantém todas as quebras como
 separadores e une suas ocultações às demais; a continuação só acrescenta intervalos.
 Tokens isolados de continuação (`\`, crase e `^`) viram espaços só na cópia,
 permitindo que uma flag leia o valor da linha seguinte sem deslocar índices.
-`docker run -p`, `ssh -p`, `mkdir -p`, a porta `mysql -P3306` e `find -print/-path`
-continuam visíveis. A inspeção do candidato `-u/--user` tem teto de 256 caracteres
+`docker run -p`, `ssh -p`, `mkdir -p` e a porta `mysql -P3306` continuam visíveis
+nos exemplos testados; `find -print/-path` pode ser ocultado se outro token do
+trecho ativar uma regra de senha `-p` (por exemplo, mysql*).
+A inspeção do candidato `-u/--user` tem teto de 256 caracteres
 e avanço do cursor, evitando varreduras repetidas até o fim do texto.
 Valores de `-u` entre aspas mantêm os espaços na inspeção limitada.
-Risco residual 1: um valor com nome de programa pode trocar as regras do trecho.
+N-1, N-2 e N-3 foram fechados na E27d (`7546993`); R-1, M-1 e M-2 foram fechados na E27e, com testes de regressão.
+Achados restantes seguem para a E29; esta é a última rodada da E27.
+Risco residual 1: continuação anexada à flag (`-p\` ou `--password=\` antes da quebra) pode ocultar só a barra e deixar a senha visível.
 Risco residual 2: argv em dict de ferramenta fora de `_SHELL` pode perder contexto na reserva JSON.
 Risco residual 3: em `-u`, dois-pontos após o limite de 256 caracteres pode impedir mascaramento.
 Risco residual 4: vigias `claude_projeto` continuam sem filtro de idade ou teto.
-Risco residual 5: aliases arbitrários como `m -p…` não são resolvidos.
+Risco residual 5 (item 1 da revisão E27e): aliases arbitrários como `m -p…` e variáveis/expressões com nome inexato (`$SqlCmdPath`, `$SSHPASS_BIN`, `(Get-Command sqlcmd).Source`, `"$env:SQLCMD_PATH"`) não são resolvidos; só mysql*/mariadb* têm família por prefixo, e a regressão estreita em relação à d38c2e4 é aceita como risco residual.
+Risco residual 6 (item 2 da revisão E27e, R-1b): uma flag sem valor de outro programa reconhecido consome o token seguinte e pode deixar a senha de `-k` visível (ex.: `openssl enc -in $MYSQL_DUMP ... -p -k x`, variantes com `%MYSQL_DUMP%` ou `$zip` e `-p` ou `-P`).
+Risco residual 7: programas fora da tabela podem expor senhas: `net user`, `schtasks /RP`, `psexec -p`, `bcp -P`, `podman/nerdctl/helm/oras login -p`, `sqlplus u/senha@db`, `smbclient -U u%senha`, `plink/pscp -pw`, `xfreerdp /p:`, `mongosh -p`, `htpasswd -b` e `rar/unrar/7za/7zr/7zz -p`.
+Risco residual 8: opções globais antes de `login` não são cobertas, como `docker --config d login -p` e `az --only-show-errors login -p`.
+Risco residual 9: senha por stdin sem `|` (here-string/heredoc) e pipes para programas que não são `docker login` podem vazar, como `docker login --password-stdin <<< x` e `echo x | sudo -S`.
+Risco residual 10 (falso positivo): um token com nome de programa da tabela (`--name mysql`, `/var/lib/mysql`, `mysql.sql` ou texto de commit) pode fazer `-p…` do mesmo trecho ser ocultado, inclusive `find -print/-path`.
+Ligar PAINEL_COMANDO só após a E29, com aceite explícito do usuário para os itens 1 e 2 ou sua correção.
 O mascaramento é conservador e incompleto: pode ocultar texto legítimo e deixar
 segredos de formatos não reconhecidos. O aviso fica visível na página local.
 A tabela é reconstruída somente quando o conteúdo muda; a idade é atualizada

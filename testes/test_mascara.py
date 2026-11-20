@@ -55,7 +55,9 @@ class Mascara(unittest.TestCase):
 
     def test_flags_sem_senha_permanecem_visiveis(self):
         for texto in ('docker run -p 8080:80', 'ssh -p 22', 'mkdir -p a/b',
-                      'mysql -P3306', 'echo mysql; find -print', 'echo mysql; find -path a/b'):
+                      'mysql -P3306', 'echo mysql; find -print', 'echo mysql; find -path a/b',
+                      '7z x a.zip -oC:/out', 'mysql -h db -P3306 -u root',
+                      'sqlcmd -S . -E', 'docker login -u u registry.io'):
             with self.subTest(entrada=texto):
                 self.assertEqual(mascarar(texto), texto)
 
@@ -231,6 +233,28 @@ _SENHAS_E27C = (
     'su -c "mysql -phunter2"',
     '${MYSQL} -uroot -phunter2',
     '& $sqlcmd -P hunter2',
+    # E27e: as 13 entradas exatas do probe_e27d, uma por teste gerado.
+    '7z x $zip -phunter2',
+    '7z x "${ZIP}" -phunter2',
+    'openssl enc -aes-256-cbc -in $zip -out a.enc -k hunter2',
+    'openssl enc -in $MYSQL_DUMP -out a.enc -k hunter2',
+    'echo hunter2 | docker login -u $MYSQL_USER --password-stdin',
+    '& $env:MYSQL -uroot -phunter2',
+    '%SQLCMD% -S . -U sa -P hunter2',
+    '$(which sshpass) -p hunter2 ssh h',
+    'docker login -u u -phunter2',
+    'az login -u u -phunter2',
+    'ldapsearch -x -whunter2',
+    'ssh-keygen -Nhunter2',
+    'sqlcmd -S . -U sa -Phunter2',
+    # Demais formas de M-1/M-2 não presentes no probe.
+    '& $EnV:MYSQL -phunter2',
+    '`mysql` -phunter2',
+    'ldapmodify -whunter2',
+    'ldapmodify -w hunter2',
+    'ssh-keygen -Phunter2',
+    "ssh-keygen -P'hunter2'",
+    'net use Z: ' + '\\\\srv\\share\\' + '\n' + "sqlcmd -S . -U sa -P'hunter2'",
 )
 
 
