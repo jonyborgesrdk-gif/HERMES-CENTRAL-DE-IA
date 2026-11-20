@@ -4,8 +4,10 @@ Só biblioteca padrão; nenhum outro módulo do repositório; sem processo filho
 Os transcripts só são abertos para leitura. Nenhum texto de erro, de comando ou de pasta é
 gravado: erros-ocorrencias.json guarda só valores de lista fixa, números e o ponteiro
 (arquivo, posição, chave) para o comando painel-erro achar o texto na máquina.
+E30: Grok (events.jsonl, mesma leitura incremental) e Hermes (state.db aberto só para leitura,
+como em fontes/sessoes_hermes, com cursor por id); agente sem leitura vai para "sem_leitura".
 """
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime
 import hashlib
 import json
@@ -13,6 +15,7 @@ import math
 import os
 from pathlib import Path
 import re
+import sqlite3
 import stat
 import tempfile
 import time
@@ -27,7 +30,7 @@ ARQ_OCORRENCIAS = "erros-ocorrencias.json"
 ARQ_REGISTRO = "erros-registro.json"
 ARQ_TRAVA = "erros-registro.trava"
 DIR_EVIDENCIAS = "erros-evidencias"
-AGENTES = ("claude", "codex")
+AGENTES = ("claude", "codex", "grok", "hermes")
 FERRAMENTAS = ("bash", "powershell", "read", "edit", "write", "grep", "glob", "agent", "web", "mcp",
                "comando", "arquivo", "nenhuma", "outra")
 CLASSES = ("permissao_negada", "interrompido", "codigo_saida", "edicao", "arquivo", "tempo_esgotado",
@@ -78,6 +81,22 @@ _MARCADOR_ERRO = "<tool_use_error>"
 _FERRAMENTAS_CLAUDE = {"Bash": "bash", "PowerShell": "powershell", "Read": "read", "Edit": "edit",
                        "NotebookEdit": "edit", "Write": "write", "Grep": "grep", "Glob": "glob",
                        "Agent": "agent", "Task": "agent", "WebFetch": "web", "WebSearch": "web"}
+_FILTRO_GROK = re.compile(rb'"(?:error|deny|cancelled|turn_started)"')
+_SONDA_GROK = 1024 * 1024
+_TIPOS_GROK = re.compile(rb'"type"\s*:\s*"(?:tool_completed|permission_resolved|turn_ended|tool_started|turn_started'
+                         rb'|permission_requested|phase_changed|loop_started|first_token|mcp_[a-z_]+)"')
+_FERRAMENTAS_GROK = {"run_terminal_command": "comando", "read_file": "read", "search_replace": "edit",
+                     "write": "write", "write_file": "write", "grep": "grep", "web_fetch": "web", "web_search": "web"}
+_MAX_ID_GROK = 200
+_FERRAMENTAS_HERMES = {"terminal": "comando", "execute_code": "comando", "read_file": "read", "write_file": "write",
+                       "patch": "edit", "search_files": "grep", "delegate_task": "agent", "web_search": "web",
+                       "browser_exec": "web"}
+_STATUS_ERRO_HERMES = ("error", "timeout", "blocked")
+_SQL_HERMES_FORMATO = "SELECT id, role, tool_name, content, timestamp FROM messages LIMIT 0"
+_SQL_HERMES_MAX = "SELECT COALESCE(MAX(id), 0) FROM messages"
+_SQL_HERMES = ("SELECT id, tool_name, content, timestamp FROM messages WHERE role = 'tool' AND id > ? "
+               "AND (timestamp IS NULL OR timestamp >= ?) "
+               "ORDER BY id LIMIT 20000")
 _REGISTRADOS = ("corrigido", "verificado")
 _BLOCO_DESCARTE = 1024 * 1024
 _TENTATIVAS_REPLACE = 5
@@ -267,9 +286,99 @@ def ocorrencias_codex(linha):
     return []
 
 
+def ferramenta_grok(nome):
+    return _FERRAMENTAS_GROK.get(nome, "outra") if isinstance(nome, str) else "outra"
+
+
+def ocorrencias_grok(linha):
+    """Ocorrências de uma linha do events.jsonl do Grok: [{"chave", "ferramenta", "classe", "codigo", "hora"}].
+
+    "chave" é só o sufixo ("#" + tool_call_id) ou None; varrer põe na frente o caminho relativo
+    do arquivo e, sem sufixo, usa "@" + posição da linha.
+    """
+    if not isinstance(linha, dict):
+        return []
+    tipo = linha.get("type")
+    hora = _epoch(linha.get("ts"))
+    if tipo == "tool_completed" and linha.get("outcome") == "error":
+        tcid = linha.get("tool_call_id")
+        chave = "#" + tcid if isinstance(tcid, str) and 0 < len(tcid) <= _MAX_ID_GROK else None
+        return [{"chave": chave, "ferramenta": ferramenta_grok(linha.get("tool_name")), "classe": "outra",
+                 "codigo": None, "hora": hora}]
+    if tipo == "permission_resolved":
+        decisao = linha.get("decision")
+        if decisao == "deny":
+            classe = "permissao_negada"
+        elif decisao == "cancelled":
+            classe = "interrompido"
+        else:
+            return []
+        return [{"chave": None, "ferramenta": ferramenta_grok(linha.get("tool_name")), "classe": classe,
+                 "codigo": None, "hora": hora}]
+    if tipo == "turn_ended" and linha.get("outcome") == "cancelled":
+        return [{"chave": None, "ferramenta": "nenhuma", "classe": "interrompido", "codigo": None, "hora": hora}]
+    return []
+
+
+def eco_grok(linha, pendente):
+    """(eco, pendente novo): o turn_ended cancelled logo após deny/cancelled é eco da permissão, não ocorrência."""
+    if not isinstance(linha, dict):
+        return False, pendente
+    tipo = linha.get("type")
+    if tipo == "permission_resolved" and linha.get("decision") in ("deny", "cancelled"):
+        return False, True
+    if tipo == "turn_started":
+        return False, False
+    if tipo == "turn_ended" and linha.get("outcome") == "cancelled" and pendente:
+        return True, False
+    return False, pendente
+
+
+def ferramenta_hermes(nome):
+    if not isinstance(nome, str):
+        return "outra"
+    if nome in _FERRAMENTAS_HERMES:
+        return _FERRAMENTAS_HERMES[nome]
+    return "mcp" if nome.startswith("mcp_") else "outra"
+
+
+def _vazio(valor):
+    return valor is None or valor is False or (isinstance(valor, (str, list, dict)) and len(valor) == 0)
+
+
+def ocorrencia_hermes(nome, conteudo, quando):
+    """Ocorrência de uma linha role='tool' do Hermes ({"chave", "ferramenta", "classe", "codigo", "hora"}) ou None.
+
+    Só os sinais exit_code, error, success, ok e status são olhados; nada do conteúdo é guardado.
+    """
+    if not isinstance(conteudo, str):
+        return None
+    obj = _decodificar(conteudo)
+    if not isinstance(obj, dict):
+        return None
+    saida = obj.get("exit_code")
+    status = obj.get("status") if isinstance(obj.get("status"), str) else None
+    saida_erro = _inteiro(saida) and saida != 0
+    if not (saida_erro or not _vazio(obj.get("error")) or obj.get("success") is False or obj.get("ok") is False
+            or status in _STATUS_ERRO_HERMES):
+        return None
+    if status == "blocked":
+        classe = "permissao_negada"
+    elif status == "timeout" or (saida_erro and saida == 124):
+        classe = "tempo_esgotado"
+    elif saida_erro:
+        classe = "codigo_saida"
+    else:
+        classe = "outra"
+    return {"chave": None, "ferramenta": ferramenta_hermes(nome), "classe": classe,
+            "codigo": saida if saida_erro and _codigo_valido(saida) else None, "hora": _epoch(quando)}
+
+
 def _passa_filtro(agente, bruto):
     if agente == "claude":
         return _FILTRO_CLAUDE.search(bruto) is not None
+    if agente == "grok":
+        return _FILTRO_GROK.search(bruto) is not None
     return b'"failed"' in bruto or b"turn_aborted" in bruto
 
 
@@ -281,7 +390,11 @@ def _decodificar(bruto):
 
 
 def _extrair(agente, obj):
-    return ocorrencias_claude(obj) if agente == "claude" else ocorrencias_codex(obj)
+    if agente == "claude":
+        return ocorrencias_claude(obj)
+    if agente == "grok":
+        return ocorrencias_grok(obj)
+    return ocorrencias_codex(obj)
 
 
 def _tool_use_em(janela, tool_use_id):
@@ -400,13 +513,20 @@ def carregar_ocorrencias(dir_dados):
             arquivos[caminho] = {"offset": entrada["offset"], "tam": entrada["tam"], "mtime": float(entrada["mtime"])}
             if "fim" in entrada:
                 arquivos[caminho]["fim"] = entrada["fim"]
+            if entrada.get("permissao_pendente") is True:
+                arquivos[caminho]["permissao_pendente"] = True
     ocorrencias = {}
     for ident, oc in obj["ocorrencias"].items():
         if _oc_valida(ident, oc):
             ocorrencias[ident] = {"id": ident, "agente": oc["agente"], "ferramenta": oc["ferramenta"],
                                   "classe": oc["classe"], "codigo": oc["codigo"], "hora": float(oc["hora"]),
                                   "arquivo": oc["arquivo"], "offset": oc["offset"], "chave": oc["chave"]}
-    return {"versao": VERSAO, "criado_em": float(obj["criado_em"]), "arquivos": arquivos, "ocorrencias": ocorrencias}
+    iniciados = {"claude", "codex"}
+    bruto = obj.get("agentes_iniciados")
+    if isinstance(bruto, list):
+        iniciados |= {a for a in bruto if isinstance(a, str) and a in AGENTES}
+    return {"versao": VERSAO, "criado_em": float(obj["criado_em"]), "arquivos": arquivos, "ocorrencias": ocorrencias,
+            "agentes_iniciados": sorted(iniciados)}
 
 
 def _registro_valido(registro):
@@ -492,6 +612,93 @@ def _listar(raiz_claude, raiz_codex, agora_s):
     return listados
 
 
+def _listar_grok(raiz_grok, agora_s):
+    """{caminho: (relativo, tam, mtime)} de raiz/<pasta>/<sessão>/events.jsonl na janela; None = sem leitura."""
+    raiz = Path(os.path.abspath(raiz_grok))
+    try:
+        with os.scandir(raiz):
+            pass
+        candidatos = [p for p in raiz.glob("*/*/events.jsonl") if p.name == "events.jsonl"]
+    except OSError:
+        return None
+    achados = {}
+    for p in candidatos:
+        caminho = str(p)
+        try:
+            info = os.stat(caminho)
+        except OSError:
+            continue
+        if not stat.S_ISREG(info.st_mode) or agora_s - info.st_mtime > JANELA_ARQUIVO_S:
+            continue
+        achados[caminho] = (p.relative_to(raiz).as_posix(), info.st_size, info.st_mtime)
+    return achados
+
+
+def _grok_formato_conhecido(achados):
+    """False só se há arquivo não vazio e nenhum deles mostra, no 1º MiB, um tipo de evento conhecido."""
+    examinou = False
+    for caminho, (_rel, tam, _mt) in sorted(achados.items(), key=lambda a: -a[1][2]):
+        if tam == 0:
+            continue
+        examinou = True
+        try:
+            with open(caminho, "rb") as f:
+                if _TIPOS_GROK.search(f.read(_SONDA_GROK)) is not None:
+                    return True
+        except OSError:
+            pass
+    return not examinou
+
+
+def _ler_hermes(banco, offset, primeira, corte=0.0):
+    """Lê o state.db do Hermes só para leitura (mesma abertura de fontes/sessoes_hermes, D18).
+
+    Devolve (último id processado, tam, mtime, [(id, ocorrência)]) ou None quando o banco não pode
+    ser lido (ausente, travado, corrompido, sem a tabela ou as colunas esperadas). Na primeira
+    passada só devolve MAX(id). Até 20.000 linhas e ORCAMENTO_BYTES de content por chamada.
+    """
+    caminho = os.path.abspath(banco)
+    if not os.path.isfile(caminho):
+        return None
+    achadas = []
+    try:
+        info = os.stat(caminho)
+        real = Path(caminho).resolve()
+        base = str(real)
+        modo = ("?mode=ro" if os.path.isfile(base + "-wal") and os.path.isfile(base + "-shm")
+                else "?mode=ro&immutable=1")
+        with closing(sqlite3.connect(real.as_uri() + modo, uri=True, timeout=1)) as db:
+            db.execute(_SQL_HERMES_FORMATO).fetchall()
+            maximo = db.execute(_SQL_HERMES_MAX).fetchone()[0]
+            maximo = max(0, maximo) if _inteiro(maximo) else 0
+            if primeira:
+                return maximo, info.st_size, info.st_mtime, achadas
+            if maximo < offset:
+                offset = 0                      # banco recriado: recomeça do início
+            restante = ORCAMENTO_BYTES
+            for ident, nome, conteudo, quando in db.execute(_SQL_HERMES, (offset, corte)):
+                if restante <= 0:
+                    break
+                if not _inteiro(ident) or ident < 0:
+                    continue
+                offset = ident
+                if isinstance(conteudo, str):
+                    tamanho = len(conteudo.encode("utf-8", "surrogatepass"))
+                elif isinstance(conteudo, bytes):
+                    tamanho = len(conteudo)
+                else:
+                    tamanho = 0
+                restante -= tamanho
+                if tamanho > MAX_LINHA:
+                    continue                    # gigante: o cursor avança, sem decodificar
+                oc = ocorrencia_hermes(nome, conteudo, quando)
+                if oc is not None:
+                    achadas.append((ident, oc))
+    except (sqlite3.Error, OSError, ValueError):
+        return None
+    return offset, info.st_size, info.st_mtime, achadas
+
+
 def _erros_leitura():
     erros = (OSError, EOFError)
     erro_zstd = getattr(zstd, "ZstdError", None) if zstd is not None else None
@@ -513,8 +720,11 @@ def _descartar_resto(f, limite=None):
     return lidos, False
 
 
-def _ler_jsonl(caminho, agente, offset, restante):
-    """Linhas completas a partir de offset; devolve (offset novo, restante, [(início da linha, ocorrência)])."""
+def _ler_jsonl(caminho, agente, offset, restante, pendente=False):
+    """Linhas completas a partir de offset; devolve (offset novo, restante, [(início da linha, ocorrência)], pendente).
+
+    pendente (só Grok): há deny/cancelled de permissão sem turn_started depois (o turn_ended cancelled seguinte é eco).
+    """
     achadas = []
     with open(caminho, "rb") as f:
         f.seek(offset)
@@ -535,9 +745,14 @@ def _ler_jsonl(caminho, agente, offset, restante):
             offset = f.tell()
             restante -= len(bruto)
             if _passa_filtro(agente, bruto):
-                for oc in _extrair(agente, _decodificar(bruto)):
-                    achadas.append((ini, oc))
-    return offset, restante, achadas
+                obj = _decodificar(bruto)
+                eco = False
+                if agente == "grok":
+                    eco, pendente = eco_grok(obj, pendente)
+                if not eco:
+                    for oc in _extrair(agente, obj):
+                        achadas.append((ini, oc))
+    return offset, restante, achadas, pendente
 
 
 def _ler_zst(caminho, agente, offset):
@@ -603,8 +818,12 @@ def _acolher(ocorrencias, agente, caminho, origem, ini, oc, agora_s, criado_em):
                           "chave": chave}
 
 
-def varrer(dir_dados, agora_s, raiz_claude=None, raiz_codex=None):
-    """Uma passada da captura; devolve (estado, erro). Só lê os transcripts; só grava em dir_dados."""
+def varrer(dir_dados, agora_s, raiz_claude=None, raiz_codex=None, raiz_grok=None, banco_hermes=None):
+    """Uma passada da captura; devolve (estado, erro). Só lê os transcripts e o banco; só grava em dir_dados.
+
+    raiz_grok ou banco_hermes None = agente não lido. Grok ou Hermes sem leitura nesta passada nunca
+    viram erro: entram em estado["sem_leitura"] (ordem de AGENTES), chave posta depois da gravação.
+    """
     dir_dados = Path(dir_dados)
     agora_s = float(agora_s)
     if raiz_claude is None:
@@ -619,22 +838,64 @@ def varrer(dir_dados, agora_s, raiz_claude=None, raiz_codex=None):
         listados = _listar(raiz_claude, raiz_codex, agora_s)
     except OSError:
         return None, ERRO_LISTAR
+    sem_leitura = []
+    rel_grok = {}
+    achados = None
+    if raiz_grok is not None:
+        achados = _listar_grok(raiz_grok, agora_s)
+        if achados is None:
+            sem_leitura.append("grok")
+        else:
+            if not _grok_formato_conhecido(achados):
+                sem_leitura.append("grok")      # arquivos não vazios sem nenhum tipo de evento conhecido
+            vistos = {c for c, _a, _t, _m in listados}
+            for c, (rel, tam, mt) in achados.items():
+                if c not in vistos:
+                    rel_grok[c] = rel
+                    listados.append((c, "grok", tam, mt))
+            listados.sort(key=lambda a: (-a[3], a[0]))
+    chave_hermes = str(banco_hermes) if banco_hermes is not None else None
     if estado is None:                          # primeira passada: só marca a posição (D6)
         marcados = {}
         for c, _a, tam, mt in listados:
             marcados[c] = {"offset": tam, "tam": tam, "mtime": mt}
             if c.endswith(".zst"):
                 marcados[c]["fim"] = True       # já processado: não é aberto enquanto não mudar
-        estado = {"versao": VERSAO, "criado_em": agora_s, "arquivos": marcados, "ocorrencias": {}}
+        iniciados = {"claude", "codex"}
+        if achados is not None:
+            iniciados.add("grok")
+        if chave_hermes is not None:
+            lido = _ler_hermes(banco_hermes, 0, True)
+            if lido is None:
+                sem_leitura.append("hermes")
+            else:
+                marcados[chave_hermes] = {"offset": lido[0], "tam": lido[1], "mtime": lido[2]}
+                iniciados.add("hermes")
+        estado = {"versao": VERSAO, "criado_em": agora_s, "arquivos": marcados, "ocorrencias": {},
+                  "agentes_iniciados": sorted(iniciados)}
         _gravar_ocorrencias(dir_dados, estado)
+        estado["sem_leitura"] = sem_leitura     # só no estado devolvido; nunca gravado
         return estado, None
     anteriores = estado["arquivos"]
     arquivos = {c: anteriores[c] for c, _a, _t, _m in listados if c in anteriores}
     ocorrencias = dict(estado["ocorrencias"])
     criado_em = estado["criado_em"]
+    iniciados = set(estado["agentes_iniciados"])
+    if raiz_grok is None:
+        iniciados.discard("grok")               # religar conta só a partir do religamento
+    if banco_hermes is None:
+        iniciados.discard("hermes")
+    marcar_grok = achados is not None and "grok" not in iniciados
+    if marcar_grok:
+        for caminho, agente, tam, mtime in listados:
+            if agente == "grok":
+                arquivos[caminho] = {"offset": tam, "tam": tam, "mtime": mtime}
+        iniciados.add("grok")                   # só marca a posição nesta passada (D6)
     erros_leitura = _erros_leitura()
     restante = ORCAMENTO_BYTES
     for caminho, agente, tam, mtime in listados:
+        if marcar_grok and agente == "grok":
+            continue
         if restante <= 0:
             break
         entrada = anteriores.get(caminho)
@@ -651,26 +912,59 @@ def varrer(dir_dados, agora_s, raiz_claude=None, raiz_codex=None):
             origem = caminho[:-len(".zst")]
         else:
             offset = entrada["offset"] if entrada is not None else 0
+            pendente = entrada is not None and entrada.get("permissao_pendente") is True
             if tam < offset:
                 offset = 0
+                pendente = False
             if tam == offset:
                 arquivos[caminho] = {"offset": offset, "tam": tam, "mtime": mtime}
+                if pendente:
+                    arquivos[caminho]["permissao_pendente"] = True
                 continue
             try:
-                offset, restante, achadas = _ler_jsonl(caminho, agente, offset, restante)
+                offset, restante, achadas, pendente = _ler_jsonl(caminho, agente, offset, restante, pendente)
             except erros_leitura:
                 continue                        # ignora nesta passada, sem mexer na entrada
             arquivos[caminho] = {"offset": offset, "tam": tam, "mtime": mtime}
+            if pendente:
+                arquivos[caminho]["permissao_pendente"] = True
             origem = caminho
         for ini, oc in achadas:
+            if agente == "grok":
+                oc["chave"] = rel_grok[caminho] + (oc["chave"] or "@%d" % ini)
             _acolher(ocorrencias, agente, caminho, origem, ini, oc, agora_s, criado_em)
+    if chave_hermes is not None and "hermes" not in iniciados:
+        entrada = anteriores.get(chave_hermes)
+        lido = _ler_hermes(banco_hermes, 0, True)   # só marca o cursor (MAX(id)), sem acolher
+        if lido is None:
+            sem_leitura.append("hermes")
+            if entrada is not None:
+                arquivos[chave_hermes] = entrada
+        else:
+            arquivos[chave_hermes] = {"offset": lido[0], "tam": lido[1], "mtime": lido[2]}
+            iniciados.add("hermes")
+    elif chave_hermes is not None:
+        entrada = anteriores.get(chave_hermes)
+        lido = _ler_hermes(banco_hermes, entrada["offset"] if entrada is not None else 0, False, criado_em)
+        if lido is None:
+            sem_leitura.append("hermes")
+            if entrada is not None:
+                arquivos[chave_hermes] = entrada   # sem leitura: o cursor fica onde estava
+        else:
+            cursor, tam, mt, achadas_hermes = lido
+            arquivos[chave_hermes] = {"offset": cursor, "tam": tam, "mtime": mt}
+            for ident, oc in achadas_hermes:
+                oc["chave"] = str(ident)
+                _acolher(ocorrencias, "hermes", chave_hermes, chave_hermes, ident, oc, agora_s, criado_em)
     for ident in [i for i, oc in ocorrencias.items() if agora_s - oc["hora"] > RETENCAO_S]:
         del ocorrencias[ident]
     if len(ocorrencias) > MAX_OCORRENCIAS:
         manter = sorted(ocorrencias.values(), key=lambda o: (o["hora"], o["id"]), reverse=True)[:MAX_OCORRENCIAS]
         ocorrencias = {o["id"]: o for o in manter}
-    estado = {"versao": VERSAO, "criado_em": criado_em, "arquivos": arquivos, "ocorrencias": ocorrencias}
+    estado = {"versao": VERSAO, "criado_em": criado_em, "arquivos": arquivos, "ocorrencias": ocorrencias,
+              "agentes_iniciados": sorted(iniciados)}
     _gravar_ocorrencias(dir_dados, estado)
+    estado["sem_leitura"] = sem_leitura         # só no estado devolvido; nunca gravado
     return estado, None
 
 
@@ -747,9 +1041,11 @@ def resumo_publico(estado, registros, agora_s):
     registrados.sort(key=lambda par: (par[0], par[1]["id"]), reverse=True)
     itens += [item for _instante_reg, item in registrados][:max(0, MAX_ITENS_PUBLICOS - len(itens))]
     desde = estado.get("criado_em") if isinstance(estado, dict) else None
+    bruto = estado.get("sem_leitura") if isinstance(estado, dict) else None
+    sem_leitura = [a for a in AGENTES if isinstance(bruto, list) and a in bruto]
     return {"estado": "ok", "desde": float(desde) if _numero(desde) else None,
             "contagens": contagens, "por_classe": por_classe, "por_agente": por_agente,
-            "ultimas_24h": ultimas, "itens": itens[:MAX_ITENS_PUBLICOS]}
+            "ultimas_24h": ultimas, "itens": itens[:MAX_ITENS_PUBLICOS], "sem_leitura": sem_leitura}
 
 
 def listar(dir_dados, agora_s):
@@ -868,7 +1164,9 @@ def ler_texto(oc):
     if not isinstance(oc, dict):
         return None
     agente, caminho, offset, chave = oc.get("agente"), oc.get("arquivo"), oc.get("offset"), oc.get("chave")
-    if agente not in AGENTES or not _texto(caminho) or not _inteiro(offset) or offset < 0 or not _texto(chave):
+    if agente not in ("claude", "codex"):       # Grok e Hermes: sem texto na máquina (E30, D7)
+        return None
+    if not _texto(caminho) or not _inteiro(offset) or offset < 0 or not _texto(chave):
         return None
     try:
         achado = _achar_linha(caminho, offset, agente, chave)

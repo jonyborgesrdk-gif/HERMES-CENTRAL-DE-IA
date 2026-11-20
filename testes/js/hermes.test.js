@@ -1599,7 +1599,7 @@ const lerLinhaErro = (tr) => {          // lê a linha pelo DOM: rótulo, detalh
            cls: st.className, estado: nb(st.textContent), sub: nb(ds.find((e) => e.classList.contains('status-sub')).textContent) };
 };
 test('errosDe: ausente, null, lista, estado "erro" e sem estado ficam inativos e zerados; a fixture dá 4 itens normalizados e as contagens', () => {
-  const vazio = { ativo: false, contagens: { aberto: 0, corrigido: 0, verificado: 0, sem_tratamento: 0, contado: 0 }, itens: [] };
+  const vazio = { ativo: false, contagens: { aberto: 0, corrigido: 0, verificado: 0, sem_tratamento: 0, contado: 0 }, itens: [], semLeitura: [] };
   const semEstado = clone(fixture); delete semEstado.erros_agentes.estado;
   [semErros(), { erros_agentes: null }, { erros_agentes: [] }, comErros({ estado: 'erro' }), semEstado, undefined, null]
     .forEach((d, i) => assert.deepEqual(Hermes.errosDe(d), vazio, 'caso ' + i));
@@ -1618,7 +1618,7 @@ test('errosDe: id, agente e estado ruins descartam o item; ferramenta, classe, c
   const de = (itens, contagens) => Hermes.errosDe({ erros_agentes: { estado: 'ok', contagens: contagens || {}, itens: itens } });
   const um = (extra) => { const r = de([item(extra)]).itens; assert.equal(r.length, 1, JSON.stringify(extra)); return r[0]; };
   assert.deepEqual(um({}), { id: 'aaaaaaaaaa', agente: 'claude', estado: 'aberto', ferramenta: 'bash', classe: 'codigo_saida', codigo: 2, hora: T0 - 60, evidencia: null });   // controle: o item-base passa
-  [{ id: '0A1B2C3D4E' }, { id: '0a1b2c3d4' }, { id: '0a1b2c3d4<' }, { agente: 'grok' }, { estado: 'contado' }, { estado: 'sem_tratamento' }, { estado: 'pendente' }]
+  [{ id: '0A1B2C3D4E' }, { id: '0a1b2c3d4' }, { id: '0a1b2c3d4<' }, { agente: 'cursor' }, { estado: 'contado' }, { estado: 'sem_tratamento' }, { estado: 'pendente' }]
     .forEach((extra) => assert.deepEqual(de([item(extra)]).itens, [], 'não descartou ' + JSON.stringify(extra)));
   const repetido = de([item({ codigo: 1 }), item({ codigo: 2 })]).itens;
   assert.equal(repetido.length, 1); assert.equal(repetido[0].codigo, 1);
@@ -1634,6 +1634,41 @@ test('errosDe: id, agente e estado ruins descartam o item; ferramenta, classe, c
   const muitos = Array.from({ length: 40 }, (_, i) => item({ id: i.toString(16).padStart(10, '0') }));
   const r = de(muitos).itens;
   assert.equal(r.length, 30); assert.deepEqual(r.map((x) => x.id), muitos.slice(0, 30).map((x) => x.id));
+});
+test('errosDe (E30): Grok e Hermes são agentes válidos; semLeitura só com agentes conhecidos, sem repetição, na ordem recebida', () => {
+  const de = (extra) => Hermes.errosDe({ erros_agentes: Object.assign({ estado: 'ok', contagens: {}, itens: [] }, extra) });
+  const item = (agente) => ({ id: 'abcdefabcd', agente, ferramenta: 'comando', classe: 'codigo_saida', codigo: 1, hora: T0 - 60, estado: 'aberto', evidencia: null });
+  assert.deepEqual(de({ itens: [item('grok')] }).itens.map((i) => i.agente), ['grok']);
+  assert.deepEqual(de({ itens: [item('hermes')] }).itens.map((i) => i.agente), ['hermes']);
+  [undefined, null, 'grok', { grok: true }, 7].forEach((v) => assert.deepEqual(de({ sem_leitura: v }).semLeitura, [], JSON.stringify(v)));
+  assert.deepEqual(de({ sem_leitura: ['hermes', 'cursor', 'grok', 'hermes', 'constructor', 7, null, 'claude'] }).semLeitura, ['hermes', 'grok', 'claude']);
+  assert.deepEqual(Hermes.errosDe(clone(fixture)).semLeitura, []);
+});
+test('erros de ferramenta (E30): linha "sem leitura" com rótulos fixos antes da nota, some com a lista vazia; itens do Grok e do Hermes com o rótulo', () => {
+  const { a, doc } = app();
+  const bloco = doc.getElementById('errors');
+  const linhaSem = () => bloco.descendentes().find((e) => e.tag === 'span' && /^sem leitura/.test(nb(e.textContent)));
+  a.receber(clone(fixture));
+  assert.equal(linhaSem(), undefined);
+  const itens = [{ id: 'abcdefabcd', agente: 'grok', ferramenta: 'comando', classe: 'outra', codigo: null, hora: T0 - 60, estado: 'aberto', evidencia: null },
+                 { id: 'bcdefabcde', agente: 'hermes', ferramenta: 'web', classe: 'tempo_esgotado', codigo: null, hora: T0 - 120, estado: 'aberto', evidencia: null }];
+  a.receber(comErros({ sem_leitura: ['grok', 'hermes', '<b>x</b>'], itens }));
+  const span = linhaSem();
+  assert.equal(nb(span.textContent), 'sem leitura: Grok, Hermes');
+  assert.equal(span.parentNode.hidden, false); assert.equal(span.parentNode.className, 'presence-head');
+  assert.equal(bloco.children.indexOf(span.parentNode), bloco.children.indexOf(doc.getElementById('errors-nota').parentNode) - 1);
+  assert.deepEqual(linhasErro(doc).map((tr) => lerLinhaErro(tr).detalhe), ['Grok · id abcdefabcd', 'Hermes · id bcdefabcde']);
+  assert.equal(bloco.descendentes().filter((e) => e.tag === 'b').length, 0); assert.ok(!/<b>/.test(nb(bloco.textContent)));
+  const nota = () => nb(doc.getElementById('errors-nota').textContent);        // N1: só itens de Grok e Hermes não prometem "painel-erro ver"
+  assert.match(nota(), /evidência anexada/); assert.doesNotMatch(nota(), /painel-erro ver/);
+  a.receber(comErros({ itens: itens.concat([{ id: 'cdefabcdef', agente: 'codex', ferramenta: 'comando', classe: 'codigo_saida', codigo: 1, hora: T0 - 30, estado: 'aberto', evidencia: null }]) }));
+  assert.match(nota(), /evidência anexada/); assert.match(nota(), /Claude Code e Codex fica só na máquina: painel-erro ver/);
+  a.receber(clone(fixture));
+  assert.equal(span.parentNode.hidden, true); assert.equal(nb(span.textContent), '');
+  a.receber(comErros({ sem_leitura: ['hermes'] }));
+  assert.equal(linhaSem(), span); assert.equal(nb(span.textContent), 'sem leitura: Hermes'); assert.equal(span.parentNode.hidden, false);
+  a.receber(semErros());
+  assert.equal(bloco.hidden, true); assert.equal(nb(span.textContent), ''); assert.equal(span.parentNode.hidden, true);
 });
 test('erros de ferramenta: com a fixture o bloco aparece logo depois do WSL, com 4 linhas de texto fixo, e o resto da seção de agentes não muda', () => {
   assert.match(html, /<div class="presence" id="errors" role="group" aria-label="Erros de ferramenta dos agentes" hidden><div class="presence-head"><span>Erros de ferramenta<\/span><span class="badge" id="errors-badge"><\/span>/);

@@ -405,7 +405,7 @@ function vigilanteDe(dados) {
            }) };
 }
 /* Erros de ferramenta (E20): bloco próprio na seção de agentes. Só listas fixas, números e o id curto; nenhum texto do transcript. */
-var AGENTES_ERRO = { claude: "Claude Code", codex: "Codex" };
+var AGENTES_ERRO = { claude: "Claude Code", codex: "Codex", grok: "Grok", hermes: "Hermes" };
 var FERRAMENTAS_ERRO = { bash: "Bash", powershell: "PowerShell", read: "Read", edit: "Edit", write: "Write", grep: "Grep", glob: "Glob", agent: "Agent", web: "Web", mcp: "MCP",
   comando: "comando", arquivo: "alteração de arquivo", nenhuma: "", outra: "outra ferramenta" };
 var CLASSES_ERRO = { permissao_negada: "permissão negada", interrompido: "interrompido", codigo_saida: "código de saída", edicao: "edição não aplicada", arquivo: "arquivo",
@@ -413,7 +413,7 @@ var CLASSES_ERRO = { permissao_negada: "permissão negada", interrompido: "inter
 var ESTADOS_ERRO = { aberto: "wait", corrigido: "idle", verificado: "good" };
 function errosDe(dados) {
   var e = dados && dados.erros_agentes;
-  var vazio = { ativo: false, contagens: { aberto: 0, corrigido: 0, verificado: 0, sem_tratamento: 0, contado: 0 }, itens: [] };
+  var vazio = { ativo: false, contagens: { aberto: 0, corrigido: 0, verificado: 0, sem_tratamento: 0, contado: 0 }, itens: [], semLeitura: [] };
   if (!e || typeof e !== "object" || Array.isArray(e) || e.estado !== "ok") return vazio;
   var tem = function (mapa, k) { return typeof k === "string" && Object.prototype.hasOwnProperty.call(mapa, k); };
   var conta = function (x) { return numero(x) && x >= 0 ? Math.floor(x) : 0; };
@@ -432,7 +432,9 @@ function errosDe(dados) {
                  hora: numero(i.hora) && i.hora > 0 ? i.hora : null,
                  evidencia: (ev.tipo === "teste" || ev.tipo === "comando") && inteiro(ev.codigo) ? { tipo: ev.tipo, codigo: ev.codigo } : null });
   });
-  return { ativo: true, itens: itens,
+  var semLeitura = [];      // E30: agentes sem leitura nesta passada (só chaves de AGENTES_ERRO, sem repetição, na ordem recebida)
+  lista(e.sem_leitura).forEach(function (a) { if (tem(AGENTES_ERRO, a) && semLeitura.indexOf(a) < 0) semLeitura.push(a); });
+  return { ativo: true, itens: itens, semLeitura: semLeitura,
            contagens: { aberto: conta(c.aberto), corrigido: conta(c.corrigido), verificado: conta(c.verificado), sem_tratamento: conta(c.sem_tratamento), contado: conta(c.contado) } };
 }
 /* Outros agentes (E21): sessões do Grok e do Hermes e último chat do cursor-agent. Só listas fixas, números, modelo filtrado e a chave curta. */
@@ -950,8 +952,18 @@ function criarApp(doc, win, opcoes) {
     setTxt($("errors-resumo"), !e.ativo ? "" : "Em 30 dias: " + [plural(c.aberto, "aberto", "abertos"), plural(c.corrigido, "corrigido", "corrigidos"),
       plural(c.verificado, "verificado", "verificados"), c.sem_tratamento + " sem tratamento",
       c.contado + " só contados (permissão negada, interrupção, erro de API)"].join(" · "));
-    setTxt($("errors-nota"), !e.ativo ? "" : "\"Verificado\" quer dizer evidência anexada pelo agente; o painel não confere a evidência. O texto do erro fica só na máquina: painel-erro ver <id>.");
+    setTxt($("errors-nota"), !e.ativo ? "" : "\"Verificado\" quer dizer evidência anexada pelo agente; o painel não confere a evidência." +
+      (e.itens.some(function (i) { return i.agente === "claude" || i.agente === "codex"; }) ? " O texto do erro de Claude Code e Codex fica só na máquina: painel-erro ver <id>." : ""));
+    var sem = e.ativo ? e.semLeitura.map(function (a) { return AGENTES_ERRO[a]; }).join(", ") : "";
+    if (sem && !linhaSemLeitura) {      // E30: criada na primeira vez que precisa, logo antes da nota (mesma classe das linhas do bloco)
+      var caixa = el(doc, "div", "presence-head");
+      linhaSemLeitura = el(doc, "span");
+      caixa.appendChild(linhaSemLeitura);
+      $("errors").insertBefore(caixa, $("errors-nota").parentNode);
+    }
+    if (linhaSemLeitura) { setTxt(linhaSemLeitura, sem ? "sem leitura: " + sem : ""); linhaSemLeitura.parentNode.hidden = !sem; }
   }
+  var linhaSemLeitura = null;
   function atualizarLinhaExtra(tr, item) {
     var r = tr._r, agora = agoraS();
     if (r.agente !== item.ferramenta) { r.agente = item.ferramenta; r.logo.replaceChildren(icone(doc, iconeDoAgente(item.ferramenta))); }
