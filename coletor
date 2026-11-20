@@ -345,6 +345,7 @@ SECOES_LOCAIS = {'conexoes': 'PAINEL_CONEXOES', 'comando': 'PAINEL_COMANDO',
                  'rede_sessao': 'PAINEL_REDE_SESSAO'}
 ERRO_CONEXOES = "conexões: sem leitura"
 ERRO_COMANDO = "comando atual: sem leitura"
+ERRO_REDE_SESSAO = "rede por sessão: sem leitura"
 MAX_LOCAL_LIDO = 4 * 1024 * 1024
 MAX_LOCAL_GRAVADO = 7 * 1024 * 1024 // 2
 
@@ -540,6 +541,8 @@ def extras_ativos():
         extras += ("conexoes",)
     if os.environ.get('PAINEL_COMANDO', '0') == '1':
         extras += ("comando_atual",)
+    if os.environ.get('PAINEL_REDE_SESSAO', '0') == '1':
+        extras += ("rede_sessao",)
     return extras
 
 
@@ -594,6 +597,9 @@ def fontes_vivas(sem_contas=False):
     if os.environ.get('PAINEL_COMANDO', '0') == '1':
         from fontes import comando_atual
         fontes["comando_atual"] = comando_atual.ler
+    if os.environ.get('PAINEL_REDE_SESSAO', '0') == '1':
+        from fontes import rede_sessao
+        fontes["rede_sessao"] = rede_sessao.ler
     return fontes
 
 
@@ -614,9 +620,10 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
                   "vigilante2": 30, "erros_agentes": 60,
                   "sessoes_grok": 10, "sessoes_hermes": 30, "chat_cursor": 120,
                   "rede_uso": 10, "maquina": 10, "custo_agentes": 300, "conexoes": 5,
-                  "comando_atual": 2}
+                  "comando_atual": 2, "rede_sessao": 5}
     extras = extras_ativos()
     locais = {'conexoes': ('conexoes', ERRO_CONEXOES), 'comando_atual': ('comando', ERRO_COMANDO)}
+    locais['rede_sessao'] = ('rede_sessao', ERRO_REDE_SESSAO)
     if 'comando_atual' in extras:
         contexto['comando_cache'] = cache.setdefault('_comando_estado', {})
     atualizadas = set()

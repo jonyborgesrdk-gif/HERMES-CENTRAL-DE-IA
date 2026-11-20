@@ -497,3 +497,58 @@ Os arquivos gerados (`publico/dados.*`, `quadro.json`, `estado.json`) e o seu `a
   licença original. O que mudou está em `cotas/ORIGEM.txt`.
 - O card em cápsula, a tarja de privacidade e o `publico/cartao-apoio.js` foram contribuição de fbtostadev.
 - Licença deste repositório: MIT (`LICENSE`).
+# Rede por sessão de agente (E28, opt-in local)
+
+`PAINEL_REDE_SESSAO=1` habilita a fonte no coletor (cadência de 5 s) e o listener
+local existente em `http://127.0.0.1:7422`. Somente o valor literal `1` liga a
+variável. O padrão é desligado; a ativação em produção continua condicionada à
+E29. Esta implementação não altera variáveis, serviços nem tarefas agendadas.
+
+A captura precisa de opt-in próprio: em um terminal de administrador use
+`py -3.14 -I -B painel-rede capturar --detalhe`, ou defina
+`PAINEL_REDE_SESSAO=1` apenas no ambiente desse processo de captura. A pasta de
+dados (`PAINEL_IAS_DIR`, padrão `%LOCALAPPDATA%\painel-ias`) deve existir e cumprir
+as proteções já exigidas por `painel-rede`. A sessão ETW, o mutex e o evento de
+parada têm nomes globais fixos: **não é possível rodar uma segunda captura só
+mudando a pasta**. Planeje a substituição da captura existente em uma janela
+autorizada; não inicie nem pare a tarefa de produção para experimentar esta função.
+
+O opt-in grava `rede-sessao.json` atomicamente na mesma pasta protegida de
+`rede-resumo.json`, nunca em `publico/`. O resumo público permanece igual.
+Na página local, “Rede por sessão de agente” mostra Claude Code, Codex, Grok,
+Hermes e cursor-agent: PID raiz, início do processo, quantidade de processos,
+bytes enviados/recebidos em 60 s e desde o início da captura. Cada sessão pode
+ser expandida para ver protocolo, porta local, endereço/porta remotos, basename
+do processo e os mesmos contadores. Esses bytes ETW TCP/UDP não incluem ICMP,
+outros protocolos nem todos os cabeçalhos de interface.
+
+A atribuição exige identidade PID + criação Win32 estável durante o ciclo e
+ancestrais vivos, com criação anterior à do filho; ciclos e cadeias de mais de
+64 processos são recusados. Sem uma ligação determinística a um transcript,
+o identificador de sessão é `null`: horário/produto não bastam. Processos sem
+criação legível, reutilizados, encerrados ou sem raiz verificável entram em
+“Outros programas / não atribuídos”; a parcela sem vínculo confiável fica
+explícita. Históricos de raízes mortas também deixam de ser atribuídos a uma
+sessão viva. Não há leitura de cmdline, ambiente ou transcript para descobrir IDs.
+
+Limites: 8.192 identidades de PID e 4.096 fluxos por captura, janela de 30
+ciclos de 2 s, arquivo/leitura de até 2 MiB; 100 sessões, 100 conexões por sessão
+e 2.000 conexões exibidas no total. Fluxos conservados mantêm totais após sair da
+janela. Cortes de conexões não reduzem os totais por PID; após o teto de PIDs,
+os bytes vão ao agregado não atribuído. Os contadores de descarte da captura
+contam observações de fluxo/PID por ciclo (podem repetir uma conexão), e os
+omitidos da página contam linhas. Valores são saturados em 10^15 bytes por direção.
+
+Arquivo ausente apresenta “sem captura detalhada” com instrução; sinal com mais
+de 30 s fica “parado”, com idade e aviso. Não confunda atualização de `local.json`
+com atualização do sinal da captura. Arquivos inválidos ou maiores que o limite
+geram apenas erro constante no feed público. Endereços, portas e PIDs ficam no
+arquivo protegido e em `local.json`, servidos **somente em 127.0.0.1:7422**;
+não publique essa porta com proxy/Tailscale. A página usa DOM/textContent e o
+mesmo mecanismo CSP do listener local.
+
+Para desfazer: remova `PAINEL_REDE_SESSAO` dos ambientes do coletor/servidor e
+da captura; em uma janela autorizada, reinicie a captura sem `--detalhe`.
+Sem opt-in não há novas gravações de detalhe; arquivos antigos podem permanecer
+na pasta protegida e ser removidos manualmente conforme a política local.
+Não há remoção automática de dados ou alteração da tarefa agendada.

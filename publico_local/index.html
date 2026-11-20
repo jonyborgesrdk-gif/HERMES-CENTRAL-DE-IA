@@ -39,6 +39,17 @@
     <tbody id="comandos"></tbody>
   </table></div>
 </section>
+<section aria-labelledby="titulo-rede-sessao">
+  <h2 id="titulo-rede-sessao">Rede por sessão de agente</h2>
+  <p>Bytes enviados / recebidos em 60 s e desde o início da captura. Expanda a sessão para ver suas conexões.</p>
+  <p id="situacao-rede-sessao" role="status">Sem captura detalhada.</p>
+  <div class="rolagem"><table>
+    <thead><tr><th scope="col">Sessão / conexões</th><th scope="col">Processos</th>
+      <th scope="col">60 s: envio / recepção</th><th scope="col">Total: envio / recepção</th></tr></thead>
+    <tbody id="rede-sessoes"></tbody>
+  </table></div>
+  <p id="rede-outros"></p>
+</section>
 <section aria-labelledby="titulo-conexoes">
   <h2 id="titulo-conexoes">Conexões e portas</h2>
   <p>Somente leitura. Portas abertas: TCP em LISTEN e endpoints UDP vinculados (podem ser usados só para envio).
@@ -71,6 +82,12 @@
   const idade = document.getElementById('idade');
   const comandos = document.getElementById('comandos');
   const situacaoComando = document.getElementById('situacao-comando');
+  const corpoRede = document.getElementById('rede-sessoes');
+  const situacaoRede = document.getElementById('situacao-rede-sessao');
+  const outrosRede = document.getElementById('rede-outros');
+  let redeSessao = null;
+  let assinaturaRede;
+  const expansoesRede = new Set();
   let comando = null;
   let conexoes = null;
   let buscando = false;
@@ -78,6 +95,66 @@
   let filtroTimer;
   const lista = valor => Array.isArray(valor) ? valor : [];
   const texto = valor => valor == null ? '' : String(valor);
+  const bytesRede = valor => lista(valor).map(n => typeof n === 'number' && Number.isFinite(n)
+    ? n.toLocaleString('pt-BR') + ' B' : '—').join(' / ') || '—';
+  function atualizarIdadeRede() {
+    const em = redeSessao && redeSessao.gerado_em_epoch;
+    const idade = typeof em === 'number' && Number.isFinite(em) ? Math.max(0, Math.floor(Date.now()/1000-em)) : null;
+    situacaoRede.textContent = redeSessao
+      ? texto(redeSessao.estado) + (idade === null ? '' : ' · idade: ' + idade + ' s')
+        + (idade !== null && idade > 30 ? ' · AVISO: captura sem sinal há mais de 30 s.' : '')
+        + (redeSessao.instrucao ? ' · ' + texto(redeSessao.instrucao) : '')
+        + ' · sessões omitidas: ' + texto(redeSessao.sessoes_omitidas || 0)
+        + ' · observações de fluxo omitidas: ' + texto(redeSessao.fluxos_omitidos || 0)
+        + ' · observações de PID omitidas: ' + texto(redeSessao.pids_omitidos || 0)
+      : 'Sem captura detalhada. Inicie painel-rede capturar --detalhe em terminal de administrador.';
+  }
+  function renderizarRede() {
+    atualizarIdadeRede();
+    const assinatura = JSON.stringify(redeSessao);
+    if (assinatura === assinaturaRede) return;
+    assinaturaRede = assinatura;
+    const fragmento = document.createDocumentFragment();
+    const adicionar = (pai, tag, valor) => {
+      const elemento = document.createElement(tag);
+      if (valor !== undefined) elemento.textContent = texto(valor);
+      pai.appendChild(elemento);
+      return elemento;
+    };
+    for (const s of lista(redeSessao && redeSessao.sessoes)) {
+      const linha = adicionar(fragmento, 'tr');
+      const celula = adicionar(linha, 'td');
+      const detalhe = adicionar(celula, 'details');
+      const chave = [s.agente, s.pid_raiz, s.inicio_epoch].join(':');
+      detalhe.open = expansoesRede.has(chave);
+      detalhe.addEventListener('toggle', () => {
+        if (detalhe.open) expansoesRede.add(chave); else expansoesRede.delete(chave);
+      });
+      adicionar(detalhe, 'summary', texto(s.agente) + ' · PID ' + texto(s.pid_raiz)
+        + ' · sessão ' + texto(s.sessao || 'sem identificador')
+        + ' · início ' + (typeof s.inicio_epoch === 'number'
+          ? new Date(s.inicio_epoch*1000).toLocaleString('pt-BR') : 'sem leitura'));
+      const tabela = adicionar(detalhe, 'table');
+      const cabeca = adicionar(adicionar(tabela, 'thead'), 'tr');
+      ['Proto', 'Porta local', 'Remoto', 'Porta remota', 'Processo', '60 s: env / rec', 'Total: env / rec']
+        .forEach(t => adicionar(cabeca, 'th', t));
+      const corpo = adicionar(tabela, 'tbody');
+      for (const c of lista(s.conexoes)) {
+        const l = adicionar(corpo, 'tr');
+        [c.proto, c.local_porta, c.remoto, c.remoto_porta, c.processo, bytesRede(c.janela), bytesRede(c.total)]
+          .forEach(v => adicionar(l, 'td', v));
+      }
+      adicionar(detalhe, 'p', 'Conexões omitidas: ' + texto(s.conexoes_omitidas || 0));
+      adicionar(linha, 'td', s.processos);
+      adicionar(linha, 'td', bytesRede(s.janela));
+      adicionar(linha, 'td', bytesRede(s.total));
+    }
+    corpoRede.replaceChildren(fragmento);
+    const outros = redeSessao && redeSessao.outros;
+    outrosRede.textContent = outros ? 'Outros programas / não atribuídos · 60 s: ' + bytesRede(outros.janela)
+      + ' · total: ' + bytesRede(outros.total) + ' · sem vínculo confiável: '
+      + bytesRede(outros.nao_atribuidos && outros.nao_atribuidos.total) : '';
+  }
   const assinaturasTabelas = new WeakMap();
   let assinaturaComando;
   function atualizarTemposComando() {
@@ -226,22 +303,25 @@
       }
       conexoes = dados.conexoes && dados.conexoes.estado === 'ok' ? dados.conexoes : null;
       comando = dados.comando && dados.comando.estado === 'ok' ? dados.comando : null;
+      redeSessao = dados.rede_sessao && typeof dados.rede_sessao === 'object' ? dados.rede_sessao : null;
     } catch (_) {
       gerado.textContent = 'sem leitura';
       chaves.replaceChildren();
       conexoes = null;
       comando = null;
+      redeSessao = null;
       geradoEpoch = null;
     } finally {
       buscando = false;
       renderizar();
       atualizarIdade();
       renderizarComando();
+      renderizarRede();
     }
   }
   atualizar();
   setInterval(atualizar, 5000);
   setInterval(() => { if (comando) atualizar(); }, 2000);
-  setInterval(() => { atualizarIdade(); renderizarComando(); }, 1000);
+  setInterval(() => { atualizarIdade(); renderizarComando(); atualizarIdadeRede(); }, 1000);
 </script>
 </html>

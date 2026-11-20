@@ -97,6 +97,34 @@ class LocalJson(unittest.TestCase):
         self.assertEqual(self.arquivo.read_bytes(), antes)
         self.fonte.assert_not_called()
 
+    def test_e28_opt_in_cadencia_mescla_e_saude_publica_constante(self):
+        secao = {'estado': 'ativo', 'sessoes': [{'pid_raiz': 456789,
+            'conexoes': [{'remoto': '203.0.113.234', 'processo': 'LOCAL_EXE_FIXTURE.exe'}]}]}
+        fonte = Mock(return_value={'rede_sessao': secao})
+        fontes = {'rede_sessao': fonte}
+        for valor in ('', '0', 'true', '01', ' 1', '1 '):
+            with patch.dict(os.environ, PAINEL_REDE_SESSAO=valor):
+                self.assertNotIn('rede_sessao', self.coletor.extras_ativos())
+                self.assertNotIn('rede_sessao', self.coletor.fontes_vivas(True))
+                self.coletor.passada_viva(self.args, fontes=fontes, ctx={'dir': self.dir, 'agora': 1000})
+        fonte.assert_not_called()
+        self.assertFalse(self.arquivo.exists())
+        with patch.dict(os.environ, PAINEL_REDE_SESSAO='1', PAINEL_COMANDO='1'):
+            self.assertEqual(self.coletor.fontes_vivas(True)['rede_sessao'].__module__, 'fontes.rede_sessao')
+            self.anterior({'comando': {'estado': 'ok', 'fixture': 'preservada'}})
+            for hora in (1000, 1002, 1005):
+                dados = self.coletor.passada_viva(self.args, fontes=fontes,
+                    ctx={'dir': self.dir, 'agora': hora}, cache=self.cache)
+                self.assertEqual(dados['fontes']['rede_sessao'], {'ok': True, 'erro': None})
+                self.conferir_publico(dados)
+            self.assertEqual(fonte.call_count, 2)
+            self.assertEqual(self.ler()['rede_sessao'], secao)
+            fonte.side_effect = OSError('456789 203.0.113.234 LOCAL_EXE_FIXTURE.exe')
+            dados = self.coletor.passada_viva(self.args, fontes=fontes,
+                ctx={'dir': self.dir, 'agora': 1010}, cache=self.cache)
+            self.assertEqual(dados['fontes']['rede_sessao'], {'ok': False, 'erro': self.coletor.ERRO_REDE_SESSAO})
+            self.conferir_publico(dados)
+
     def test_1_registra_fonte_grava_local_e_publica_so_saude(self):
         with patch.dict(os.environ, PAINEL_CONEXOES='1'):
             self.assertEqual(self.coletor.extras_ativos(), ('conexoes',))
