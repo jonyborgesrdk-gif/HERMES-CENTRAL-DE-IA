@@ -40,6 +40,19 @@ class Mascara(unittest.TestCase):
                 self.assertNotIn(';', saida)
         self.assertEqual(_continuacoes_comandos('cd /app\nmysql'), 'cd /app;mysql')
 
+    def test_continuacao_isolada_vira_espaco_sem_apagar_caminho(self):
+        for char in ('\\', '`', '^'):
+            for quebra in ('\n', '\r\n'):
+                entrada = 'sqlcmd -P ' + char + '  ' + quebra + 'hunter2'
+                saida = _continuacoes_comandos(entrada)
+                self.assertEqual(len(saida), len(entrada))
+                self.assertEqual(saida[len('sqlcmd -P ')], ' ')
+                self.assertEqual(saida.index('hunter2'), entrada.index('hunter2'))
+                self.assertNotIn('hunter2', mascarar(entrada))
+        entrada = 'net use Z: ' + '\\\\srv\\share\\' + '\nmysql -phunter2'
+        saida = _continuacoes_comandos(entrada)
+        self.assertEqual(saida[entrada.index('\n') - 1], '\\')
+
     def test_flags_sem_senha_permanecem_visiveis(self):
         for texto in ('docker run -p 8080:80', 'ssh -p 22', 'mkdir -p a/b',
                       'mysql -P3306', 'echo mysql; find -print', 'echo mysql; find -path a/b'):
@@ -205,6 +218,19 @@ _SENHAS_E27C = (
     "# don't\nmysql -uroot -phunter2",
     ('bash -lc "mysql -phunter2; ' + 'x ' * 4000 + '"')[:8000],
     'sqlcmd -S . -U sa -P"hunter2"',
+    'net use Z: ' + '\\\\srv\\share\\' + '\n' + 'mysql -uroot -phunter2',
+    'MYSQL="mysql -h db"\n$MYSQL -uroot -phunter2',
+    '$mysql = "C:\\mysql.exe"\n& $mysql -uroot -phunter2',
+    '$sqlcmd -S . -U sa -P hunter2',
+    'docker login -u u -p ' + '\\' + '\n' + 'hunter2',
+    'sshpass -p ' + '\\' + '\n' + 'hunter2 ssh h',
+    'sqlcmd -S . -U sa -P ' + '`' + '\n' + 'hunter2',
+    'sqlcmd -P\'hunter2\'',
+    'bash -l -c "mysql -phunter2"',
+    'bash -ec "mysql -phunter2"',
+    'su -c "mysql -phunter2"',
+    '${MYSQL} -uroot -phunter2',
+    '& $sqlcmd -P hunter2',
 )
 
 

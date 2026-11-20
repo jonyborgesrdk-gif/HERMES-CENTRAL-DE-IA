@@ -383,6 +383,12 @@ basename, incluindo famílias mysql*/mariadb* e comandos após sudo, env, time,
 docker exec e kubectl exec. Comandos entre aspas em bash/sh -c/-lc, cmd /c e
 powershell -Command são tokenizados também (até quatro níveis). Net use aceita
 unidade, `*` e `/user:u` antes da senha.
+No reconhecimento, prefixos `$`, `&`, `{` e o sufixo `}` são retirados do token:
+`$MYSQL`, `${MYSQL}`, `& $mysql` e `$sqlcmd` preservam a família reconhecida,
+sem consultar nem expandir variáveis. Outra cópia mantém todas as quebras como
+separadores e une suas ocultações às demais; a continuação só acrescenta intervalos.
+Tokens isolados de continuação (`\`, crase e `^`) viram espaços só na cópia,
+permitindo que uma flag leia o valor da linha seguinte sem deslocar índices.
 `docker run -p`, `ssh -p`, `mkdir -p`, a porta `mysql -P3306` e `find -print/-path`
 continuam visíveis. A inspeção do candidato `-u/--user` tem teto de 256 caracteres
 e avanço do cursor, evitando varreduras repetidas até o fim do texto.
@@ -391,6 +397,7 @@ Risco residual 1: um valor com nome de programa pode trocar as regras do trecho.
 Risco residual 2: argv em dict de ferramenta fora de `_SHELL` pode perder contexto na reserva JSON.
 Risco residual 3: em `-u`, dois-pontos após o limite de 256 caracteres pode impedir mascaramento.
 Risco residual 4: vigias `claude_projeto` continuam sem filtro de idade ou teto.
+Risco residual 5: aliases arbitrários como `m -p…` não são resolvidos.
 O mascaramento é conservador e incompleto: pode ocultar texto legítimo e deixar
 segredos de formatos não reconhecidos. O aviso fica visível na página local.
 A tabela é reconstruída somente quando o conteúdo muda; a idade é atualizada

@@ -25,6 +25,7 @@ _CONTROLES.update({c: ' ' for c in (9, 10, 11, 12, 13)})
 _CONTROLES_COMANDOS = dict(_CONTROLES)
 _CONTROLES_COMANDOS.update({10: '\n', 13: '\r'})
 _ASPAS_ESPACOS = str.maketrans({'"': ' ', "'": ' '})
+_QUEBRAS_SEPARADORES = str.maketrans({'\n': ';', '\r': ';'})
 _USUARIO = re.compile(r'''[^\s;\&|<>"'\}\]]{0,256}''')
 # (programa, subcomando opcional): (flag exata, aceita valor junto à flag).
 SENHAS_PROGRAMA = {
@@ -143,7 +144,7 @@ def _senhas_programa(texto):
                     intervalos.append((inicio, fim))
                     rede = 0
                     continue
-                programa = ntpath.basename(valor).lower().removesuffix('.exe')
+                programa = ntpath.basename(valor.lstrip('$&{').rstrip('}')).lower().removesuffix('.exe')
                 if programa.startswith('mysql'):
                     programa = 'mysql'
                 elif programa.startswith('mariadb'):
@@ -179,27 +180,32 @@ def _senhas_programa(texto):
 
 def _continuacoes_comandos(texto):
     """Cópia de mesmo comprimento: uma passagem, sem procurar prefixos de novo."""
-    caracteres, ultimo = list(texto), None
+    caracteres, ultimo, ultimo_pos = list(texto), None, None
     for pos, char in enumerate(texto):
         if char in ('\n', '\r'):
             if char == '\r' and texto[pos + 1:pos + 2] == '\n':
                 caracteres[pos] = ' '  # CR de CRLF não encerra a linha antes do LF.
                 continue
             caracteres[pos] = ' ' if ultimo in ('\\', '`', '^', '|', '&') else ';'
-            ultimo = char
+            if ultimo in ('\\', '`', '^') and (ultimo_pos == 0
+                    or texto[ultimo_pos - 1].isspace() or texto[ultimo_pos - 1] in '|;&'):
+                caracteres[ultimo_pos] = ' '  # Token isolado; não apagar a barra de um caminho.
+            ultimo, ultimo_pos = char, pos
         elif not char.isspace():
-            ultimo = char
+            ultimo, ultimo_pos = char, pos
     return ''.join(caracteres)
 
 
 def _mascarar_texto(texto, sequencias_longas=True):
     # Só apresentação: nenhuma destas strings é executada pelo painel.
     comandos = texto.translate(_CONTROLES_COMANDOS).replace('\\"', '"').replace("\\'", "'")
+    separados = comandos.translate(_QUEBRAS_SEPARADORES)
     comandos = _continuacoes_comandos(comandos)
     texto = limpar_exibicao(texto)
     texto = texto.replace('\\"', '"').replace("\\'", "'")
     intervalos, pos = _senhas_programa(comandos), 0
     intervalos.extend(_senhas_programa(comandos.translate(_ASPAS_ESPACOS)))
+    intervalos.extend(_senhas_programa(separados))  # Preserva as ocultações sem continuação.
     while True:
         inicio = texto.find('-----BEGIN ', pos)
         if inicio < 0:
