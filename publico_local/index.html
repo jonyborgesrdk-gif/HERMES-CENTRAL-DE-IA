@@ -18,6 +18,8 @@
   th { background: #edf2f7; }
   tbody tr:nth-child(even) { background: #f7f9fb; }
   #situacao { min-height: 1.6em; }
+  code { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .selo { display: inline-block; border: 1px solid #657384; border-radius: .25rem; padding: 0 .35rem; margin: .15rem; }
 </style>
 <h1>Painel local — dados sensíveis</h1>
 <p class="aviso">Esta página só abre nesta máquina (127.0.0.1). Pode conter comandos, PIDs e endereços.</p>
@@ -26,6 +28,17 @@
   <dt>Chaves de topo presentes</dt><dd><ul id="chaves"></ul></dd>
 </dl>
 <p id="idade" role="status">Idade dos dados: sem leitura.</p>
+<section aria-labelledby="titulo-comando">
+  <h2 id="titulo-comando">Executando agora</h2>
+  <p class="aviso">O texto é mascarado, mas o mascaramento não é completo. Pode conter dados sensíveis.</p>
+  <p id="situacao-comando" role="status">Comandos: sem leitura ou coleta desativada. Cursor-agent: sem leitura.</p>
+  <div class="rolagem"><table>
+    <thead><tr><th scope="col">Agente</th><th scope="col">Sessão</th><th scope="col">Projeto</th>
+      <th scope="col">Ferramenta</th><th scope="col">Texto mascarado</th><th scope="col">Há quanto tempo</th>
+      <th scope="col">Estado</th><th scope="col">Tipo de tarefa</th></tr></thead>
+    <tbody id="comandos"></tbody>
+  </table></div>
+</section>
 <section aria-labelledby="titulo-conexoes">
   <h2 id="titulo-conexoes">Conexões e portas</h2>
   <p>Somente leitura. Portas abertas: TCP em LISTEN e endpoints UDP vinculados (podem ser usados só para envio).
@@ -56,12 +69,70 @@
   const portas = document.getElementById('portas');
   const estabelecidas = document.getElementById('estabelecidas');
   const idade = document.getElementById('idade');
+  const comandos = document.getElementById('comandos');
+  const situacaoComando = document.getElementById('situacao-comando');
+  let comando = null;
   let conexoes = null;
   let buscando = false;
   let geradoEpoch = null;
   let filtroTimer;
   const lista = valor => Array.isArray(valor) ? valor : [];
   const texto = valor => valor == null ? '' : String(valor);
+  const assinaturasTabelas = new WeakMap();
+  let assinaturaComando;
+  function atualizarTemposComando() {
+    lista(comando && comando.sessoes).forEach((item, indice) => {
+      const linha = comandos.children[indice];
+      if (!linha) return;
+      const valor = typeof item.desde_epoch === 'number' && Number.isFinite(item.desde_epoch)
+        ? Math.max(0, Math.floor(Date.now() / 1000 - item.desde_epoch)) + ' s' : 'sem leitura';
+      const celula = linha.children[5].children[0];
+      if (celula.textContent !== valor) celula.textContent = valor;
+    });
+  }
+  function renderizarComando() {
+    const situacaoTexto = comando
+      ? lista(comando.sessoes).length + ' sessões · Cursor-agent: sem leitura.'
+        + (lista(comando.sem_leitura).filter(a => a !== 'cursor-agent').length ? ' Há fontes sem leitura.' : '')
+      : 'Comandos: sem leitura ou coleta desativada. Cursor-agent: sem leitura.';
+    if (situacaoComando.textContent !== situacaoTexto) situacaoComando.textContent = situacaoTexto;
+    const assinatura = JSON.stringify(lista(comando && comando.sessoes));
+    if (assinatura === assinaturaComando) {
+      atualizarTemposComando();
+      return;
+    }
+    assinaturaComando = assinatura;
+    const fragmento = document.createDocumentFragment();
+    for (const item of lista(comando && comando.sessoes)) {
+      const linha = document.createElement('tr');
+      const segundos = typeof item.desde_epoch === 'number' && Number.isFinite(item.desde_epoch)
+        ? Math.max(0, Math.floor(Date.now() / 1000 - item.desde_epoch)) + ' s' : 'sem leitura';
+      const valores = [item.agente, item.sessao, item.projeto || '—', item.ferramenta, item.texto,
+        segundos, item.em_curso === true ? 'em curso' : 'última', item.tipo_tarefa];
+      valores.forEach((valor, indice) => {
+        const celula = document.createElement('td');
+        const conteudo = document.createElement(indice === 4 ? 'code' : 'span');
+        conteudo.textContent = texto(valor);
+        if (indice === 6) conteudo.className = 'selo';
+        celula.appendChild(conteudo);
+        if (indice === 6 && item.sem_resultado === true) {
+          const selo = document.createElement('span');
+          selo.className = 'selo';
+          selo.textContent = 'sem resultado';
+          celula.appendChild(selo);
+        }
+        if (indice === 7) {
+          const selo = document.createElement('span');
+          selo.className = 'selo';
+          selo.textContent = 'inferência';
+          celula.appendChild(selo);
+        }
+        linha.appendChild(celula);
+      });
+      fragmento.appendChild(linha);
+    }
+    comandos.replaceChildren(fragmento);
+  }
   function atualizarIdade() {
     if (geradoEpoch === null) {
       idade.textContent = 'Idade dos dados: sem leitura.';
@@ -85,6 +156,9 @@
       && campos.map(texto).join(' ').toLocaleLowerCase('pt-BR').includes(filtro.value.trim().toLocaleLowerCase('pt-BR'));
   }
   function preencher(corpo, linhas, colunas) {
+    const assinatura = JSON.stringify(linhas.map(colunas));
+    if (assinaturasTabelas.get(corpo) === assinatura) return;
+    assinaturasTabelas.set(corpo, assinatura);
     const fragmento = document.createDocumentFragment();
     for (const item of linhas) {
       const linha = document.createElement('tr');
@@ -151,19 +225,23 @@
         chaves.appendChild(item);
       }
       conexoes = dados.conexoes && dados.conexoes.estado === 'ok' ? dados.conexoes : null;
+      comando = dados.comando && dados.comando.estado === 'ok' ? dados.comando : null;
     } catch (_) {
       gerado.textContent = 'sem leitura';
       chaves.replaceChildren();
       conexoes = null;
+      comando = null;
       geradoEpoch = null;
     } finally {
       buscando = false;
       renderizar();
       atualizarIdade();
+      renderizarComando();
     }
   }
   atualizar();
   setInterval(atualizar, 5000);
-  setInterval(atualizarIdade, 1000);
+  setInterval(() => { if (comando) atualizar(); }, 2000);
+  setInterval(() => { atualizarIdade(); renderizarComando(); }, 1000);
 </script>
 </html>

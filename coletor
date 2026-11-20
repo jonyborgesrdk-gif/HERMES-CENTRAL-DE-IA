@@ -344,6 +344,7 @@ def gravar(dados, saida):
 SECOES_LOCAIS = {'conexoes': 'PAINEL_CONEXOES', 'comando': 'PAINEL_COMANDO',
                  'rede_sessao': 'PAINEL_REDE_SESSAO'}
 ERRO_CONEXOES = "conexões: sem leitura"
+ERRO_COMANDO = "comando atual: sem leitura"
 MAX_LOCAL_LIDO = 4 * 1024 * 1024
 MAX_LOCAL_GRAVADO = 7 * 1024 * 1024 // 2
 
@@ -537,6 +538,8 @@ def extras_ativos():
         extras += ("custo_agentes",)
     if os.environ.get('PAINEL_CONEXOES', '0') == '1':
         extras += ("conexoes",)
+    if os.environ.get('PAINEL_COMANDO', '0') == '1':
+        extras += ("comando_atual",)
     return extras
 
 
@@ -588,6 +591,9 @@ def fontes_vivas(sem_contas=False):
     if os.environ.get('PAINEL_CONEXOES', '0') == '1':
         from fontes import conexoes
         fontes["conexoes"] = conexoes.ler
+    if os.environ.get('PAINEL_COMANDO', '0') == '1':
+        from fontes import comando_atual
+        fontes["comando_atual"] = comando_atual.ler
     return fontes
 
 
@@ -607,8 +613,12 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
                   "cota_codex_local": 120, "cota_grok_bot": 60, "cota_cursor": 120,
                   "vigilante2": 30, "erros_agentes": 60,
                   "sessoes_grok": 10, "sessoes_hermes": 30, "chat_cursor": 120,
-                  "rede_uso": 10, "maquina": 10, "custo_agentes": 300, "conexoes": 5}
+                  "rede_uso": 10, "maquina": 10, "custo_agentes": 300, "conexoes": 5,
+                  "comando_atual": 2}
     extras = extras_ativos()
+    locais = {'conexoes': ('conexoes', ERRO_CONEXOES), 'comando_atual': ('comando', ERRO_COMANDO)}
+    if 'comando_atual' in extras:
+        contexto['comando_cache'] = cache.setdefault('_comando_estado', {})
     atualizadas = set()
     for nome in ("eventos_hooks", "sessoes_codex", "maestri_wire", "cota_claude", "processos", "servicos") + extras:
         anterior = cache.get(nome)
@@ -624,14 +634,16 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
             dado = fontes[nome](contexto) if nome in fontes else {}
             if not isinstance(dado, dict):
                 raise ValueError("resposta inválida")
-            erro = texto_seguro(dado.get("erro"), 160)
-            if nome == 'conexoes':
-                erro = ERRO_CONEXOES if erro or not isinstance(dado.get('conexoes'), dict) else None
+            if nome in locais:
+                secao, constante = locais[nome]
+                erro = constante if dado.get('erro') or not isinstance(dado.get(secao), dict) else None
+            else:
+                erro = texto_seguro(dado.get("erro"), 160)
         except Exception as exc:
             dado = {}
-            erro = ERRO_CONEXOES if nome == 'conexoes' else "falha na fonte (%s)" % type(exc).__name__
+            erro = locais[nome][1] if nome in locais else "falha na fonte (%s)" % type(exc).__name__
         retido = False
-        if erro and anterior and nome != 'conexoes':
+        if erro and anterior and nome not in locais:
             # Tentativas ruins não rejuvenescem o último snapshot bom.
             retido = ultima_ok is not None and 0 <= agora - ultima_ok <= 300
             dado = anterior["dados"] if retido else {}
@@ -643,17 +655,23 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
         cache[nome] = {"hora": agora, "dados": dado, "situacao": meta,
                        "ultima_leitura_ok": ultima_ok}
 
-    if 'conexoes' in extras:
+    secoes = {}
+    for nome, (chave, constante) in locais.items():
+        if nome not in extras:
+            continue
         # Separação antes da montagem pública: conteúdo local nunca chega a vivo/montar.
-        local = leituras.pop('conexoes', {})
-        saude = situacao['conexoes']
-        secao = local.get('conexoes') if saude['ok'] else {'estado': 'erro', 'erro': ERRO_CONEXOES}
-        if 'conexoes' in atualizadas:
-            try:
-                gravar_local({'conexoes': secao}, contexto, args.saida)
-            except (OSError, ValueError):
-                saude = {'ok': False, 'erro': ERRO_CONEXOES}
-        situacao['conexoes'] = {'ok': saude['ok'], 'erro': saude['erro']}
+        local = leituras.pop(nome, {})
+        saude = situacao[nome]
+        if nome in atualizadas:
+            secoes[chave] = local.get(chave) if saude['ok'] else {'estado': 'erro', 'erro': constante}
+        situacao[nome] = {'ok': saude['ok'], 'erro': saude['erro']}
+    if secoes:
+        try:
+            gravar_local(secoes, contexto, args.saida)
+        except (OSError, ValueError):
+            for nome, (chave, constante) in locais.items():
+                if chave in secoes:
+                    situacao[nome] = {'ok': False, 'erro': constante}
 
     transcripts, erros = {}, []
     anteriores = cache.get("transcripts_claude", {}).get("dados", {})
@@ -709,7 +727,7 @@ def passada_viva(args, estado_prs=None, fontes=None, ctx=None, cache=None, overr
                  processos=leituras["processos"], fontes=situacao,
                  contas=vivo.montar_contas(leituras, agora, agentes, disponiveis=fontes, saude=situacao))
     for nome in extras:
-        if nome != 'conexoes':
+        if nome not in locais:
             dados[nome] = leituras[nome].get(nome, {"estado": "erro"})
     gravar(dados, args.saida)
     return dados

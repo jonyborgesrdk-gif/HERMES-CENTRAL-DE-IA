@@ -108,6 +108,108 @@ class LocalJson(unittest.TestCase):
         self.assertEqual(dados['fontes']['conexoes'], {'ok': True, 'erro': None})
         self.conferir_publico(dados)
 
+    def test_e27_opt_in_exato_feed_identico_sem_leitura(self):
+        comando = Mock(return_value={'comando': {'estado': 'ok', 'sessoes': []}})
+        referencia = self.passada()
+        bytes_antes = (self.saida / 'dados.json').read_bytes()
+        for valor in ('', '0', 'true', '01', ' 1', '1 '):
+            with self.subTest(valor=valor), patch.dict(os.environ, PAINEL_COMANDO=valor):
+                dados = self.coletor.passada_viva(self.args, fontes={'comando_atual': comando},
+                    ctx={'dir': self.dir, 'agora': 1000}, cache=self.cache)
+                self.assertEqual(dados, referencia)
+                self.assertEqual((self.saida / 'dados.json').read_bytes(), bytes_antes)
+                self.assertNotIn('comando_atual', self.coletor.extras_ativos())
+                self.assertNotIn('comando_atual', self.coletor.fontes_vivas(True))
+                self.assertFalse(self.arquivo.exists())
+        comando.assert_not_called()
+        with patch.dict(os.environ, PAINEL_COMANDO='1'):
+            self.assertIn('comando_atual', self.coletor.extras_ativos())
+            self.assertEqual(self.coletor.fontes_vivas(True)['comando_atual'].__module__, 'fontes.comando_atual')
+
+    def test_e27_cadencia_mescla_unica_e_falha_constante(self):
+        comando = Mock(return_value={'comando': {'estado': 'ok', 'sessoes': []}})
+        with patch.dict(os.environ, PAINEL_CONEXOES='1', PAINEL_COMANDO='1'), \
+                patch.object(self.coletor, 'gravar_local', wraps=self.coletor.gravar_local) as gravar:
+            for hora, chamadas in ((1000, 1), (1001, 1), (1002, 2), (1003, 2), (1004, 3)):
+                dados = self.coletor.passada_viva(self.args,
+                    fontes={'conexoes': self.fonte, 'comando_atual': comando},
+                    ctx={'dir': self.dir, 'agora': hora}, cache=self.cache)
+                self.assertEqual(comando.call_count, chamadas)
+                self.assertEqual(gravar.call_count, chamadas)
+                self.assertEqual(dados['fontes']['comando_atual'], {'ok': True, 'erro': None})
+            self.assertEqual(set(gravar.call_args_list[0].args[0]), {'conexoes', 'comando'})
+            self.assertEqual(self.ler()['conexoes'], SECAO)
+            for retorno in ({'erro': 'SEGREDO_E27'}, {}, None, OSError('SEGREDO_E27')):
+                self.cache.clear()
+                if isinstance(retorno, Exception):
+                    comando.side_effect = retorno
+                else:
+                    comando.side_effect, comando.return_value = None, retorno
+                dados = self.coletor.passada_viva(self.args, fontes={'comando_atual': comando},
+                    ctx={'dir': self.dir, 'agora': 1006}, cache=self.cache)
+                self.assertEqual(dados['fontes']['comando_atual'], {'ok': False, 'erro': self.coletor.ERRO_COMANDO})
+                self.assertEqual(self.ler()['comando'], {'estado': 'erro', 'erro': self.coletor.ERRO_COMANDO})
+                self.assertNotIn('SEGREDO_E27', json.dumps(dados))
+
+    def test_e27_quatro_agentes_token_nao_vaza_em_local_log_ou_publico(self):
+        from testes.test_fontes_comando_atual import FontesComando, TOKEN, TOKENS_FORMATOS, claude, codex, grok
+        from lib.fontes import comando_atual
+        fixture = FontesComando()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        texto_fixture = 'echo ' + ' '.join((TOKEN,) + TOKENS_FORMATOS)
+        fixture.arquivo('claude', [claude(argumentos={'command': texto_fixture})])
+        fixture.arquivo('codex', [codex(argumentos={'cmd': texto_fixture})])
+        fixture.arquivo('grok', [grok(argumentos={'command': texto_fixture})])
+        fixture.banco([{'id': 'h', 'function': {'name': 'terminal',
+                       'arguments': json.dumps({'command': texto_fixture})}}])
+        ctx = dict(fixture.ctx, dir=self.dir)
+        montar = self.coletor.vivo.montar_agentes
+        def verificar(leituras, *args):
+            self.assertNotIn('comando_atual', leituras)
+            self.assertNotIn(TOKEN, json.dumps(leituras))
+            return montar(leituras, *args)
+        with patch.dict(os.environ, PAINEL_COMANDO='1'), patch('logging.Logger.handle') as logs, \
+                patch.object(self.coletor.vivo, 'montar_agentes', side_effect=verificar):
+            dados = self.coletor.passada_viva(self.args, fontes={'comando_atual': comando_atual.ler}, ctx=ctx)
+        itens = self.ler()['comando']['sessoes']
+        self.assertEqual({i['agente'] for i in itens}, {'claude', 'codex', 'grok', 'hermes'})
+        self.assertNotIn(TOKEN, self.arquivo.read_text(encoding='utf-8'))
+        artefatos = [self.arquivo.read_text(encoding='utf-8'), json.dumps(itens),
+                     repr(logs.call_args_list), json.dumps(dados)]
+        for caminho in (self.saida / 'dados.json', self.saida / 'dados.js'):
+            artefatos.append(caminho.read_text(encoding='utf-8'))
+        for bruto in artefatos:
+            for token in TOKENS_FORMATOS + ('E27CORPOFALSO',):
+                self.assertNotIn(token, bruto)
+                self.assertNotIn(json.dumps(token)[1:-1], bruto)
+        for caminho in (self.saida / 'dados.json', self.saida / 'dados.js'):
+            bruto = caminho.read_text(encoding='utf-8')
+            for proibido in (TOKEN, 'echo ', 'desde_epoch', 'tipo_tarefa', 'hermes-1', 'claude-1'):
+                self.assertNotIn(proibido, bruto)
+        self.assertNotIn(TOKEN, repr(logs.call_args_list))
+        self.assertNotIn('comando', dados)
+        self.assertNotIn('comando_atual', {k: v for k, v in dados.items() if k != 'fontes'})
+        self.assertEqual(dados['fontes']['comando_atual'], {'ok': True, 'erro': None})
+
+    def test_e27_falha_de_gravacao_e_teto_conjunto_unicode(self):
+        secao = {'estado': 'ok', 'sessoes': [dict(agente='claude', sessao='12345678', projeto='漢' * 128,
+            ferramenta='f' * 64, texto='漢' * 1999 + '…', em_curso=True, desde_epoch=1000,
+            tipo_tarefa='outro', tipo_tarefa_inferido=True) for _ in range(30)]}
+        comando = Mock(return_value={'comando': secao})
+        with patch.dict(os.environ, PAINEL_COMANDO='1'), \
+                patch.object(self.coletor, 'gravar_local', side_effect=OSError('SEGREDO_E27')):
+            dados = self.coletor.passada_viva(self.args, fontes={'comando_atual': comando},
+                                            ctx={'dir': self.dir, 'agora': 1000})
+        self.assertEqual(dados['fontes']['comando_atual'], {'ok': False, 'erro': self.coletor.ERRO_COMANDO})
+        from lib.fontes.conexoes import agregar
+        conexoes = agregar([dict(ITEM, processo='漢' * 200, pid=i) for i in range(5000)], 0)
+        with patch.dict(os.environ, PAINEL_COMANDO='1', PAINEL_CONEXOES='1'):
+            self.coletor.gravar_local({'comando': secao, 'conexoes': conexoes}, {'dir': self.dir}, self.saida)
+        self.assertLessEqual(self.arquivo.stat().st_size, self.coletor.MAX_LOCAL_GRAVADO)
+        self.assertEqual(self.ler()['comando'], secao)
+        self.assertGreater(self.ler()['conexoes']['omitidas'], 0)
+
     def test_cadencia_5_segundos(self):
         with patch.dict(os.environ, PAINEL_CONEXOES='1'), \
                 patch.object(self.coletor, 'gravar_local', wraps=self.coletor.gravar_local) as gravar:
@@ -372,7 +474,10 @@ const document = {getElementById: id => elementos[id] ||= new Elemento(id),
   createElement: tag => new Elemento(tag), createDocumentFragment: () => new Elemento('fragment')};
 const linha = (processo, pid, proto = 'tcp') => ({processo, pid, proto, familia: 6,
   local_ip: 'fe80::1%7', local_porta: 49152, remoto_ip: '::1', remoto_porta: 443, estado: 'ESTABLISHED'});
-let dados = {gerado_em: 'agora', gerado_em_epoch: 2000, conexoes: {estado: 'ok', omitidas: 2, processos: [{}, {}],
+let dados = {gerado_em: 'agora', gerado_em_epoch: 2000,
+  comando: {estado: 'ok', sessoes: [{agente: 'codex', sessao: '12345678', projeto: 'painel', ferramenta: 'exec_command',
+    texto: '<img src=x onerror=boom>', desde_epoch: 1990, em_curso: true, tipo_tarefa: 'testes', tipo_tarefa_inferido: true}]},
+  conexoes: {estado: 'ok', omitidas: 2, processos: [{}, {}],
   itens: [linha('z.exe', 10), linha('<img src=x onerror=boom>', 11)],
   portas_abertas: [{proto: 'tcp', local_ip: '::', porta: 443, processos: [{processo: 'z.exe', pid: 10}]},
     {proto: 'udp', local_ip: '::1', porta: 49152, processos: [{processo: 'a.exe', pid: 12}]}]}};
@@ -388,7 +493,7 @@ function avancar(ms) {
 const contexto = {document, fetch: async (url, opts) => {
   assert.equal(url, '/local.json'); assert.equal(opts.cache, 'no-store');
   return {ok: !falha, json: async () => dados};
-}, setInterval: (fn, tempo) => {assert.ok([1000, 5000].includes(tempo)); intervalos[tempo] = fn;},
+}, setInterval: (fn, tempo) => {assert.ok([1000, 2000, 5000].includes(tempo)); intervalos[tempo] = fn;},
   Date: {now: () => agoraMs},
   setTimeout: (fn, ms) => {assert.equal(ms, 200); const id = ++proximoTimer; timers.set(id, {fn, ate: agoraMs + ms}); return id;},
   clearTimeout: id => timers.delete(id)};
@@ -396,6 +501,33 @@ vm.createContext(contexto);
 vm.runInContext(SCRIPT, contexto);
 (async () => {
   await new Promise(resolve => setImmediate(resolve));
+  const comando = elementos.comandos.children[0];
+  assert.equal(comando.children[4].children[0].tag, 'code');
+  assert.equal(comando.children[4].children[0].textContent, '<img src=x onerror=boom>');
+  assert.equal(comando.children[4].children[0].children.length, 0);
+  assert.equal(comando.children[5].children[0].textContent, '10 s');
+  assert.equal(comando.children[6].children[0].textContent, 'em curso');
+  assert.equal(comando.children[7].children[1].textContent, 'inferência');
+  assert.match(elementos['situacao-comando'].textContent, /Cursor-agent: sem leitura/);
+  const codigoSelecionado = comando.children[4].children[0];
+  const portasAntes = elementos.portas.children[0];
+  await vm.runInContext('atualizar()', contexto);
+  assert.equal(elementos.comandos.children[0], comando);
+  assert.equal(elementos.portas.children[0], portasAntes);
+  dados.comando.sem_leitura = ['cursor-agent', 'hermes'];
+  await vm.runInContext('atualizar()', contexto);
+  assert.equal(elementos.comandos.children[0], comando);
+  assert.match(elementos['situacao-comando'].textContent, /Há fontes sem leitura/);
+  agoraMs += 1000; intervalos[1000]();
+  assert.equal(elementos.comandos.children[0].children[4].children[0], codigoSelecionado);
+  assert.equal(comando.children[5].children[0].textContent, '11 s');
+  agoraMs -= 1000; intervalos[1000]();
+  dados.comando.sessoes[0].em_curso = false;
+  dados.comando.sessoes[0].sem_resultado = true;
+  await intervalos[2000]();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(elementos.comandos.children[0].children[6].children[0].textContent, 'última');
+  assert.equal(elementos.comandos.children[0].children[6].children[1].textContent, 'sem resultado');
   assert.equal(elementos.portas.children[0].children[2].textContent, 'a.exe');
   assert.equal(elementos.estabelecidas.children[0].children[0].textContent, '<img src=x onerror=boom>');
   assert.equal(elementos.estabelecidas.children[0].children[0].children.length, 0);
@@ -432,6 +564,7 @@ vm.runInContext(SCRIPT, contexto);
   assert.equal(elementos.idade.textContent, 'Dados de há 0 s.');
   assert.equal(elementos.idade.className, '');
   falha = true; await vm.runInContext('atualizar()', contexto);
+  assert.equal(elementos.comandos.children.length, 0);
   assert.equal(elementos.portas.children[0].children[0].textContent, 'Nenhum resultado.');
   assert.equal(elementos.gerado.textContent, 'sem leitura');
   assert.equal(elementos.idade.textContent, 'Idade dos dados: sem leitura.');

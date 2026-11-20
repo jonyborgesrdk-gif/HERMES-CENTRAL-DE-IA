@@ -297,6 +297,73 @@ a fonte como erro. Outras falhas de gravação sinalizam erro no feed público.
 Fora do Windows a fonte retorna erro constante. Esta autorização de dados
 sensíveis vale apenas para o canal local; não encaminhe a 7422 pela tailnet.
 
+### Executando agora (E27)
+
+Com `PAINEL_COMANDO` exatamente `1` no coletor `--vivo` e no servidor, a página
+local 7422 mostra a ferramenta em curso de cada sessão recente de Claude Code,
+Codex, Grok e Hermes; sem chamada pendente, mostra a última. Uma concluída mais
+nova prevalece sobre pendências antigas. Uma pendência já observada, sem
+atividade no arquivo por mais de dez minutos, fica como **última / sem resultado**
+enquanto o arquivo existir entre os candidatos, sujeita ao limite de sessões.
+Cursor-agent tem
+indicação fixa de **sem leitura**. A fonte roda a cada 2 s e a página consulta
+a cada 2 s enquanto a seção está disponível (5 s sem a seção). O orquestrador
+confere a latência ao vivo; essa cadência não garante um prazo sob carga.
+
+Sessão viva significa arquivo/banco com atividade nos últimos **10 minutos**,
+até **30 sessões** no total, ordenadas por atividade; não prova processo vivo.
+Claude vem dos pares `tool_use`/`tool_result` do transcript, sem alterar hooks.
+Codex aceita chamadas custom/function e eventos exec_command. Grok usa
+`chat_history.jsonl` ou `events.jsonl`, escolhendo o início de ferramenta mais
+novo (no empate, histórico). Eventos fornecem só nome; sem ID, recebem chaves
+distintas e resultados são pareados por ordem/nome, uma inferência limitada.
+Hermes consulta somente sessões abertas/recentes e até 128 mensagens por sessão,
+com `length(tool_calls) <= 65536`; só reprocessa quando `max(id)` muda, em banco
+aberto como a fonte de sessões existente (somente leitura; em WAL, pode atualizar
+a marca de leitura no `-shm` já existente; não cria auxiliares).
+
+O glob e o filtro de descoberta são refeitos no máximo a cada **30 s**; entre
+eles, só os candidatos recebem `stat`. Arquivos novos podem demorar até essa
+próxima descoberta; o prazo de 4 s deve ser conferido em sessões já descobertas.
+O limite de 30 sessões é aplicado depois de filtrar fontes sem ferramenta.
+JSONL é lido pela cauda inicial de até 256 KiB e depois por bytes novos; saltos
+maiores e truncamentos reiniciam os pares observados. Chamadas/resultados fora
+da janela inicial podem faltar. Até 256 chamadas pendentes ficam em memória
+por arquivo. `.jsonl.zst` usa `compression.zstd` da stdlib (Python 3.14), cursor e
+descompressor em memória, no máximo 256 KiB comprimidos e descomprimidos por
+passada. Arquivo comprimido grande requer aquecimento incremental e só aparece
+quando alcança o fim; não é descomprimido inteiro novamente a cada leitura.
+Nas versões anteriores do Python, arquivos `.zst` ficam sem leitura.
+
+Editores exibem somente caminhos: apply_patch/V4A extraem as linhas de
+Add/Update/Delete File; corpo sem caminho vira `sem caminho`. A entrada principal
+é limitada a **8.000 caracteres antes** do mascarador para limitar custo; depois
+há corte para 2.000 caracteres (com `…` no corte). Regex usam limites explícitos,
+sem repetição aninhada; valores longos usam cursores. O projeto é só o basename conhecido; a sessão, só os oito
+primeiros caracteres do ID; a ferramenta também é mascarada e fica limitada a 64
+caracteres. Controles, DEL/C1 e caracteres bidi são removidos. O tipo
+de tarefa usa vocabulário fixo e leva selo **inferência**, sem executar comandos.
+O mascarador oculta variáveis, flags, campos e headers sensíveis, credenciais em
+URLs, formatos conhecidos de tokens, PEM e sequências base64/hex isoladas de
+32 caracteres ou mais. Inclui PASS/PASSPHRASE/PASSWD/PIN, SIG/SIGNATURE, flags
+PowerShell, curl user:pass, mysql/sshpass/sqlcmd, setx, SetEnvironmentVariable,
+atribuições em dicionários e JSON escapado. **UUID, hash Git de 40 hex, caminhos
+longos sem pontos (ex.: `/usr/local/lib/python3/site-packages`) e `Basic usage`
+também podem ser mascarados**, deliberadamente.
+O mascaramento é conservador e incompleto: pode ocultar texto legítimo e deixar
+segredos de formatos não reconhecidos. O aviso fica visível na página local.
+A tabela é reconstruída somente quando o conteúdo muda; a idade é atualizada
+separadamente, preservando a seleção do comando nas atualizações sem mudança.
+
+Só `local.json` recebe `comando`, pelo mesmo gravador/mescla/teto da E26.
+`dados.json`/`dados.js` recebem apenas `fontes.comando_atual` com `ok` e erro
+constante; nenhum comando, argumento, projeto ou identificador. Falhas parciais
+aparecem como agente sem leitura localmente; falha global substitui a seção por
+erro constante. Não há subprocesso, rede, log de conteúdo ou estado persistido
+pela fonte. Sem a flag, ela não é registrada e o feed público fica idêntico.
+Desligar a flag impede novas leituras; se nenhuma outra seção gravar, um
+`local.json` anterior permanece no disco, conforme a E26.
+
 ## Solução de problemas
 
 - **A página diz que os dados estão velhos.** O `./painel.sh` não está rodando. Suba de novo.
