@@ -322,9 +322,23 @@ com `length(tool_calls) <= 65536`; só reprocessa quando `max(id)` muda, em banc
 aberto como a fonte de sessões existente (somente leitura; em WAL, pode atualizar
 a marca de leitura no `-shm` já existente; não cria auxiliares).
 
-O glob e o filtro de descoberta são refeitos no máximo a cada **30 s**; entre
-eles, só os candidatos recebem `stat`. Arquivos novos podem demorar até essa
-próxima descoberta; o prazo de 4 s deve ser conferido em sessões já descobertas.
+O glob completo reconcilia a cada **30 s**. Entre reconciliações, vigias usam
+`os.stat(caminho)` diretamente nos diretórios a cada 2 s; nunca o `DirEntry.stat()`
+em cache da listagem do pai. Só diretório alterado recebe `scandir` não recursivo:
+Claude projects/ e projetos; Codex sessions/ e dias de hoje/ontem em data local
+e UTC; Grok sessions/, projetos e subpastas de sessão com mtime de até 24 h.
+Arquivos vistos no scandir são filtrados pelo mtime de `entrada.stat()` em cache
+antes de entrar na lista; a assinatura do diretório segue sendo lida com
+`os.stat` direto. Subpastas ilegíveis são ignoradas; só falha de listagem numa
+raiz marca o agente como sem leitura. Diretórios
+novos são examinados na mesma passada. Arquivos com mtime das últimas 24 h
+continuam no `stat` de 2 s, permitindo detectar retomadas sem mudança no pai;
+a janela de exibição continua em 10 min. Sessão nova nesses diretórios pode ser
+detectada na próxima passada (até 2 s + 2 s da página, sob operação normal).
+Subagentes Claude em pastas profundas e mudanças não observadas pelos vigias
+continuam cobertos pela reconciliação de 30 s. A medição inicial no sandbox não
+observou mudança do horário do pai; o orquestrador confirmou em duas rodadas
+fora do sandbox que `os.stat` muda e `DirEntry.stat` pode permanecer antigo.
 O limite de 30 sessões é aplicado depois de filtrar fontes sem ferramenta.
 JSONL é lido pela cauda inicial de até 256 KiB e depois por bytes novos; saltos
 maiores e truncamentos reiniciam os pares observados. Chamadas/resultados fora
@@ -336,12 +350,19 @@ quando alcança o fim; não é descomprimido inteiro novamente a cada leitura.
 Nas versões anteriores do Python, arquivos `.zst` ficam sem leitura.
 
 Editores exibem somente caminhos: apply_patch/V4A extraem as linhas de
-Add/Update/Delete File; corpo sem caminho vira `sem caminho`. A entrada principal
+Add/Update/Delete File; corpo sem caminho vira `sem caminho`. Isso inclui patch
+pelo shell (`command` string/lista, `cmd` em heredoc e exec_command_begin em lista)
+quando alguma string contém `*** Begin Patch`. A entrada principal
+tem ainda uma defesa final contra o marcador, inclusive em reservas JSON e
+campos desconhecidos/aninhados. Listas de strings são juntadas com espaço antes
+do mascaramento para preservar a relação entre programa, flag e valor. Ela
 é limitada a **8.000 caracteres antes** do mascarador para limitar custo; depois
 há corte para 2.000 caracteres (com `…` no corte). Regex usam limites explícitos,
 sem repetição aninhada; valores longos usam cursores. O projeto é só o basename conhecido; a sessão, só os oito
 primeiros caracteres do ID; a ferramenta também é mascarada e fica limitada a 64
-caracteres. Controles, DEL/C1 e caracteres bidi são removidos. O tipo
+caracteres, mas seu nome não usa a heurística de sequências longas: nomes MCP
+legítimos permanecem visíveis. O FIFO do Grok compara nomes originais em memória.
+Controles, DEL/C1 e caracteres bidi são removidos. O tipo
 de tarefa usa vocabulário fixo e leva selo **inferência**, sem executar comandos.
 O mascarador oculta variáveis, flags, campos e headers sensíveis, credenciais em
 URLs, formatos conhecidos de tokens, PEM e sequências base64/hex isoladas de
@@ -350,6 +371,26 @@ PowerShell, curl user:pass, mysql/sshpass/sqlcmd, setx, SetEnvironmentVariable,
 atribuições em dicionários e JSON escapado. **UUID, hash Git de 40 hex, caminhos
 longos sem pontos (ex.: `/usr/local/lib/python3/site-packages`) e `Basic usage`
 também podem ser mascarados**, deliberadamente.
+Há tabela de senhas por programa/flag para docker login, az login, redis-cli,
+7z, zip/unzip, mysql/mariadb, sshpass, sqlcmd, ldapsearch, ssh-keygen, openssl e
+net use. Docker login com `--password-stdin` oculta o lado esquerdo do pipe.
+Quebras de linha separam comandos numa cópia de mesmo comprimento para preservar
+os índices do texto exibido; após `\`, crase, `^`, `|` ou `&` (ignorando espaços
+e CR), a quebra vira espaço e mantém a continuação. Uma segunda passagem converte
+aspas simples/duplas em espaços, sem mudar posições, e une os intervalos ocultos
+das duas passagens. O programa é reconhecido em qualquer token por
+basename, incluindo famílias mysql*/mariadb* e comandos após sudo, env, time,
+docker exec e kubectl exec. Comandos entre aspas em bash/sh -c/-lc, cmd /c e
+powershell -Command são tokenizados também (até quatro níveis). Net use aceita
+unidade, `*` e `/user:u` antes da senha.
+`docker run -p`, `ssh -p`, `mkdir -p`, a porta `mysql -P3306` e `find -print/-path`
+continuam visíveis. A inspeção do candidato `-u/--user` tem teto de 256 caracteres
+e avanço do cursor, evitando varreduras repetidas até o fim do texto.
+Valores de `-u` entre aspas mantêm os espaços na inspeção limitada.
+Risco residual 1: um valor com nome de programa pode trocar as regras do trecho.
+Risco residual 2: argv em dict de ferramenta fora de `_SHELL` pode perder contexto na reserva JSON.
+Risco residual 3: em `-u`, dois-pontos após o limite de 256 caracteres pode impedir mascaramento.
+Risco residual 4: vigias `claude_projeto` continuam sem filtro de idade ou teto.
 O mascaramento é conservador e incompleto: pode ocultar texto legítimo e deixar
 segredos de formatos não reconhecidos. O aviso fica visível na página local.
 A tabela é reconstruída somente quando o conteúdo muda; a idade é atualizada

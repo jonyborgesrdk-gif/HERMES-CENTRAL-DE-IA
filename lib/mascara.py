@@ -5,6 +5,7 @@ Valores/tokens/PEM longos são percorridos por cursores, nunca por backtracking.
 Falsos positivos deliberados: UUID, hash Git, caminho longo sem pontos e Basic usage.
 """
 import json
+import ntpath
 import re
 
 OCULTO = '‹oculto›'
@@ -21,6 +22,26 @@ _CONTROLES = dict.fromkeys(list(range(32)) + list(range(127, 160))
                            + list(range(0x202A, 0x202F)) + list(range(0x2066, 0x206A))
                            + [0x200E, 0x200F])
 _CONTROLES.update({c: ' ' for c in (9, 10, 11, 12, 13)})
+_CONTROLES_COMANDOS = dict(_CONTROLES)
+_CONTROLES_COMANDOS.update({10: '\n', 13: '\r'})
+_ASPAS_ESPACOS = str.maketrans({'"': ' ', "'": ' '})
+_USUARIO = re.compile(r'''[^\s;\&|<>"'\}\]]{0,256}''')
+# (programa, subcomando opcional): (flag exata, aceita valor junto à flag).
+SENHAS_PROGRAMA = {
+    ('docker', 'login'): (('-p', False), ('--password', False)),
+    ('az', 'login'): (('-p', False),),
+    ('redis-cli', None): (('-a', False),),
+    ('7z', None): (('-p', True),),
+    ('zip', None): (('-P', False),),
+    ('unzip', None): (('-P', False),),
+    ('mysql', None): (('-p', True),),
+    ('mariadb', None): (('-p', True),),
+    ('sshpass', None): (('-p', True),),
+    ('sqlcmd', None): (('-P', False),),
+    ('ldapsearch', None): (('-w', False),),
+    ('ssh-keygen', None): (('-N', False),),
+    ('openssl', None): (('-k', False), ('-pass', False)),
+}
 
 
 def limpar_exibicao(texto):
@@ -70,11 +91,115 @@ def _aplicar(texto, intervalos):
     return ''.join(partes)
 
 
-def _mascarar_texto(texto):
+def _segmentos_shell(texto, inicio, limite):
+    """Intervalos relativos ao texto original; aspas não são removidas do texto."""
+    tokens, pos, pipe = [], inicio, None
+    while pos < limite:
+        if texto[pos].isspace():
+            pos += 1
+            continue
+        if texto[pos] in '|;&':
+            yield tokens, pipe
+            tokens = []
+            pipe = pos if texto[pos] == '|' else None
+            pos += 1
+            continue
+        inicio, aspas = pos, None
+        while pos < limite:
+            char = texto[pos]
+            if char in ('"', "'"):
+                aspas = None if char == aspas else char if aspas is None else aspas
+            elif aspas is None and (char.isspace() or char in '|;&'):
+                break
+            pos += 1
+        tokens.append((inicio, pos, texto[inicio:pos].strip('\"\'')))
+    yield tokens, pipe
+
+
+def _senhas_programa(texto):
+    """Um cursor por trecho e até quatro níveis de wrappers; nunca executa shell."""
+    minusculo = texto.lower()
+    if not any(p in minusculo for p in ('docker', 'az', 'redis-cli', '7z', 'zip', 'mysql',
+                                      'mariadb', 'sshpass', 'sqlcmd', 'ldapsearch', 'ssh-keygen', 'openssl', 'net')):
+        return []
+    intervalos = []
+    fila = [(0, len(texto), 0)]
+    wrappers = {'bash': ('-c', '-lc'), 'sh': ('-c', '-lc'), 'cmd': ('/c',),
+                'powershell': ('-command',)}
+    while fila:
+        inicio_trecho, fim_trecho, nivel = fila.pop()
+        for tokens, pipe in _segmentos_shell(texto, inicio_trecho, fim_trecho):
+            regras, stdin_pipe, rede, oculto_ate = (), None, 0, -1
+            for indice, (inicio, fim, valor) in enumerate(tokens):
+                if inicio < oculto_ate:
+                    continue
+                # net use: unidade e opções podem anteceder a senha, após o UNC.
+                if rede == 1 and valor.startswith('\\'):
+                    rede = 2
+                    continue
+                if rede == 2:
+                    if valor.startswith('/'):
+                        continue
+                    intervalos.append((inicio, fim))
+                    rede = 0
+                    continue
+                programa = ntpath.basename(valor).lower().removesuffix('.exe')
+                if programa.startswith('mysql'):
+                    programa = 'mysql'
+                elif programa.startswith('mariadb'):
+                    programa = 'mariadb'
+                sub = tokens[indice + 1][2].lower() if indice + 1 < len(tokens) else None
+                if programa in wrappers and sub in wrappers[programa] and indice + 2 < len(tokens) and nivel < 4:
+                    a, b, _ = tokens[indice + 2]
+                    if b - a >= 2 and texto[a] in ('"', "'") and texto[b - 1] == texto[a]:
+                        fila.append((a + 1, b - 1, nivel + 1))
+                if programa == 'net' and sub == 'use':
+                    rede = 1
+                if (programa, sub) in SENHAS_PROGRAMA or (programa, None) in SENHAS_PROGRAMA:
+                    regras = SENHAS_PROGRAMA.get((programa, sub), SENHAS_PROGRAMA.get((programa, None), ()))
+                    stdin_pipe = pipe if programa == 'docker' and sub == 'login' else None
+                if valor == '--password-stdin' and stdin_pipe is not None:
+                    intervalos.append((0, stdin_pipe))
+                for flag, junto in regras:
+                    if valor == flag or valor.startswith(flag + '='):
+                        if valor.startswith(flag + '='):
+                            intervalo = _valor(texto, inicio + len(flag) + 1)
+                        elif indice + 1 < len(tokens):
+                            intervalo = (tokens[indice + 1][0], tokens[indice + 1][1])
+                        else:
+                            continue
+                        intervalos.append(intervalo)
+                        oculto_ate = intervalo[1]
+                        break
+                    if junto and valor.startswith(flag) and len(valor) > len(flag):
+                        intervalos.append((inicio + len(flag), fim))
+                        break
+    return intervalos
+
+
+def _continuacoes_comandos(texto):
+    """Cópia de mesmo comprimento: uma passagem, sem procurar prefixos de novo."""
+    caracteres, ultimo = list(texto), None
+    for pos, char in enumerate(texto):
+        if char in ('\n', '\r'):
+            if char == '\r' and texto[pos + 1:pos + 2] == '\n':
+                caracteres[pos] = ' '  # CR de CRLF não encerra a linha antes do LF.
+                continue
+            caracteres[pos] = ' ' if ultimo in ('\\', '`', '^', '|', '&') else ';'
+            ultimo = char
+        elif not char.isspace():
+            ultimo = char
+    return ''.join(caracteres)
+
+
+def _mascarar_texto(texto, sequencias_longas=True):
     # Só apresentação: nenhuma destas strings é executada pelo painel.
+    comandos = texto.translate(_CONTROLES_COMANDOS).replace('\\"', '"').replace("\\'", "'")
+    comandos = _continuacoes_comandos(comandos)
     texto = limpar_exibicao(texto)
     texto = texto.replace('\\"', '"').replace("\\'", "'")
-    intervalos, pos = [], 0
+    intervalos, pos = _senhas_programa(comandos), 0
+    intervalos.extend(_senhas_programa(comandos.translate(_ASPAS_ESPACOS)))
     while True:
         inicio = texto.find('-----BEGIN ', pos)
         if inicio < 0:
@@ -98,7 +223,7 @@ def _mascarar_texto(texto):
 
     maiusculo = texto.upper()
     tem_nome = any(parte in maiusculo for parte in NOMES_SENSIVEIS + ('BEARER', 'BASIC', 'SECURESTRING'))
-    especiais = any(parte in maiusculo for parte in (' -U ', ' --USER ', 'MYSQL', 'SSHPASS', 'SQLCMD'))
+    especiais = any(parte in maiusculo for parte in ('-U ', '--USER '))
     if (tem_nome or especiais) and any(c in texto for c in ('=', ':', ' ', '\t', '\n')):
         oculto_ate = -1
         for match in _IDENT.finditer(texto):
@@ -126,13 +251,19 @@ def _mascarar_texto(texto):
             elif normal in ('BEARER', 'BASIC', 'CONVERTTO-SECURESTRING'):
                 intervalo = _valor(texto, pos)
             elif normal in ('-U', '--USER'):
-                candidato = _valor(texto, pos)
+                inicio = _espacos(texto, pos)
+                if texto[inicio:inicio + 1] in ('"', "'"):
+                    aspas = texto[inicio]
+                    inicio += 1
+                    limite = min(len(texto), inicio + 256)
+                    fim = texto.find(aspas, inicio, limite)
+                    candidato = (inicio, limite if fim < 0 else fim)
+                else:
+                    candidato = (inicio, _USUARIO.match(texto, inicio).end())
                 if ':' in texto[candidato[0]:candidato[1]]:
-                    intervalo = candidato
-            elif normal.startswith('-P') and 'MYSQL' in maiusculo and len(nome) > 2:
-                intervalo = _valor(texto, match.start() + 2)
-            elif nome == '-p' and 'SSHPASS' in maiusculo or nome == '-P' and 'SQLCMD' in maiusculo:
-                intervalo = _valor(texto, pos)
+                    intervalo = _valor(texto, pos)
+                # Mesmo candidato recusado tem custo limitado e o cursor avança.
+                oculto_ate = match.end()
             elif sensivel(nome):
                 anterior = texto[match.start() - 1:match.start()] if match.start() else ''
                 pos = _espacos(texto, pos)
@@ -149,7 +280,7 @@ def _mascarar_texto(texto):
             if intervalo and intervalo[1] > intervalo[0]:
                 intervalos.append(intervalo)
                 oculto_ate = intervalo[1]
-    for padrao in (_LONGO, _CONHECIDO, _JWT):
+    for padrao in ((_LONGO, _CONHECIDO, _JWT) if sequencias_longas else (_CONHECIDO, _JWT)):
         oculto_ate = -1
         for match in padrao.finditer(texto):
             if match.start() < oculto_ate:
@@ -162,15 +293,17 @@ def _mascarar_texto(texto):
     return limpar_exibicao(_aplicar(texto, intervalos))
 
 
-def mascarar(texto):
+def mascarar(texto, *, sequencias_longas=True):
     """Recebe/devolve str; JSON válido é percorrido para tratar campos aninhados."""
+    if isinstance(texto, list) and all(isinstance(item, str) for item in texto):
+        texto = ' '.join(texto)  # Forma argv; mantém o contexto entre programa, flag e valor.
     def limpar(valor):
         if isinstance(valor, dict):
-            return {_mascarar_texto(chave): OCULTO if sensivel(chave) else limpar(item)
+            return {_mascarar_texto(chave, sequencias_longas): OCULTO if sensivel(chave) else limpar(item)
                     for chave, item in valor.items()}
         if isinstance(valor, list):
             return [limpar(item) for item in valor]
-        return _mascarar_texto(valor) if isinstance(valor, str) else valor
+        return _mascarar_texto(valor, sequencias_longas) if isinstance(valor, str) else valor
 
     if texto.lstrip()[:1] in ('{', '['):
         try:
@@ -178,4 +311,4 @@ def mascarar(texto):
             return json.dumps(limpar(valor), ensure_ascii=False, separators=(',', ':'))
         except (ValueError, RecursionError):
             pass
-    return _mascarar_texto(texto)
+    return _mascarar_texto(texto, sequencias_longas)

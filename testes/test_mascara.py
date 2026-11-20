@@ -3,7 +3,7 @@ import json
 import time
 import unittest
 
-from lib.mascara import OCULTO, mascarar
+from lib.mascara import OCULTO, _continuacoes_comandos, mascarar
 
 
 class Mascara(unittest.TestCase):
@@ -18,6 +18,41 @@ class Mascara(unittest.TestCase):
                 self.assertLess(ms, 200, 'mascaramento hostil ultrapassou 200 ms')
                 if nome == 'base64':
                     self.assertEqual(saida, OCULTO)
+        inicio = time.perf_counter()
+        mascarar('a -u ' + '-u,' * 2665)
+        self.assertLess((time.perf_counter() - inicio) * 1000, 50)
+        for texto in (('mysql\n' * 1334)[:8000], ('mysql ' * 1334)[:8000]):
+            inicio = time.perf_counter()
+            mascarar(texto)
+            self.assertLess((time.perf_counter() - inicio) * 1000, 50)
+        hostil = ('mysql "' + '\\' + '\n') * 1000
+        inicio = time.perf_counter()
+        mascarar(hostil[:8000])
+        self.assertLess((time.perf_counter() - inicio) * 1000, 50)
+
+    def test_continuacoes_preservam_comprimento_e_indices(self):
+        for ultimo in ('\\', '`', '^', '|', '&'):
+            for quebra in ('\n', '\r\n'):
+                entrada = 'mysql ' + ultimo + '  ' + quebra + '-psegredo'
+                saida = _continuacoes_comandos(entrada)
+                self.assertEqual(len(saida), len(entrada))
+                self.assertEqual(saida.index('-psegredo'), entrada.index('-psegredo'))
+                self.assertNotIn(';', saida)
+        self.assertEqual(_continuacoes_comandos('cd /app\nmysql'), 'cd /app;mysql')
+
+    def test_flags_sem_senha_permanecem_visiveis(self):
+        for texto in ('docker run -p 8080:80', 'ssh -p 22', 'mkdir -p a/b',
+                      'mysql -P3306', 'echo mysql; find -print', 'echo mysql; find -path a/b'):
+            with self.subTest(entrada=texto):
+                self.assertEqual(mascarar(texto), texto)
+
+    def test_nome_mcp_sem_longo_mas_tokens_conhecidos_ocultos(self):
+        nome = 'mcp__hindsight__hindsight_search_pages'
+        self.assertEqual(mascarar(nome, sequencias_longas=False), nome)
+        self.assertEqual(mascarar('sk-tokenFalso123', sequencias_longas=False), OCULTO)
+
+    def test_argv_direto_do_probe_mantem_contexto(self):
+        self.assertNotIn('hunter2', mascarar(['docker', 'login', '-p', 'hunter2']))
 
     def test_controles_bidi_e_falsos_positivos_documentados(self):
         self.assertEqual(mascarar('echo a\x1b\x00\x7fb\u202e\u2066\u200ec'), 'echo abc')
@@ -130,6 +165,49 @@ _REVISAO = (
 )
 
 
+_SENHAS_E27C = (
+    'docker login -p hunter2', 'docker login --password hunter2',
+    'az login -u a -p hunter2', 'echo hunter2 | docker login --password-stdin',
+    'redis-cli -a hunter2', '7z x -phunter2 a.7z', 'zip -P hunter2 a.zip',
+    'unzip -P hunter2 a.zip', 'mariadb -phunter2', 'sshpass -phunter2 ssh h',
+    'ldapsearch -w hunter2', 'ssh-keygen -N hunter2', 'openssl enc -k hunter2',
+    'openssl enc -pass pass:hunter2', r'net use \\s\x hunter2 /user:u',
+    'Open-MySqlConnection -Password hunter2',
+    'cd /app\nmysql -uroot -phunter2',
+    'docker exec -it sql1 sqlcmd -S localhost -U sa -P hunter2',
+    'docker exec -it sql1 /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "hunter2"',
+    'mysqldump -uroot -phunter2 db',
+    'mysqladmin -uroot -phunter2',
+    'sudo mysql -phunter2',
+    'kubectl exec p -- mysql -phunter2',
+    r'net use Z: \\s\x hunter2 /user:u',
+    r'net use * \\s\x hunter2',
+    r'net use \\s\x /user:u hunter2',
+    r'net use Z: \\s\x /user:u hunter2',
+    'bash -c "sshpass -phunter2 ssh h"',
+    'bash -c "sshpass -p hunter2 ssh h"',
+    'bash -lc "cd /app\nmysql -phunter2"',
+    'sh -c "mysql -phunter2"',
+    'cmd /c "mysql -phunter2"',
+    'powershell -Command "mysql -phunter2"',
+    'env mysql -phunter2',
+    'time mariadb-dump -phunter2',
+    'echo a; docker login -p hunter2 r',
+    'curl -u "john doe:hunter2"',
+    'mysql -h db ' + '\\' + '\n' + '  -uroot -phunter2',
+    'sqlcmd -S . -U sa ' + '`' + '\n' + ' -P hunter2',
+    'docker login r ' + '\\' + '\n' + ' -u u ' + '\\' + '\n' + ' -p hunter2',
+    'echo hunter2 |' + '\n' + 'docker login -u u --password-stdin',
+    'ssh db "mysql -uroot -phunter2"',
+    'powershell -NoProfile -Command "sqlcmd -S . -U sa -P hunter2"',
+    'pwsh -c "mysql -phunter2"',
+    'bash -c "echo ' + '\\' + '"a b' + '\\' + '"; mysql -phunter2"',
+    "# don't\nmysql -uroot -phunter2",
+    ('bash -lc "mysql -phunter2; ' + 'x ' * 4000 + '"')[:8000],
+    'sqlcmd -S . -U sa -P"hunter2"',
+)
+
+
 def _teste_entrada(entrada, segredo):
     def testar(self):
         resultado = mascarar(entrada)
@@ -143,6 +221,8 @@ def _teste_entrada(entrada, segredo):
 
 for _i, (_entrada, _segredo) in enumerate(_REVISAO, 1):
     setattr(Mascara, 'test_revisor_entrada_%02d' % _i, _teste_entrada(_entrada, _segredo))
+for _i, _entrada in enumerate(_SENHAS_E27C, 1):
+    setattr(Mascara, 'test_e27c_senha_%02d' % _i, _teste_entrada(_entrada, 'hunter2'))
 
 
 if __name__ == '__main__':

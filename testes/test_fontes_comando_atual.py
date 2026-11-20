@@ -265,7 +265,7 @@ class FontesComando(unittest.TestCase):
         self.assertEqual(len(itens), 30)
         for item in itens:
             self.assertLessEqual(len(item['sessao']), 8)
-            self.assertEqual(item['ferramenta'], OCULTO)  # Nome cru também passa pela máscara.
+            self.assertEqual(len(item['ferramenta']), 64)  # Nomes não usam a heurística _LONGO.
             self.assertEqual(len(item['texto']), 2000)
             self.assertTrue(item['texto'].endswith('…'))
             self.assertTrue(item['tipo_tarefa_inferido'])
@@ -368,16 +368,17 @@ class FontesComando(unittest.TestCase):
         self.arquivo('claude', [claude()])
         antigo = self.arquivo('claude', [claude()], 'antigo.jsonl')
         os.utime(antigo, (8000, 8000))
+        os.utime(antigo.parent, (10000, 10000))
         self.ler()
         self.ctx['agora'] = 10029
         with patch.object(Path, 'glob', side_effect=AssertionError('redescoberta antecipada')):
             self.assertEqual(len(self.ler()['sessoes']), 1)
-        # Um arquivo novo só aparece na próxima fotografia, sem invalidar o cache à mão.
+        # Arquivo novo aparece pelo vigia, sem invalidar o cache nem fazer glob.
         novo = antigo.parent / 'novo.jsonl'
         novo.write_text(json.dumps(claude()) + '\n', encoding='utf-8')
         os.utime(novo, (10029, 10029))
         with patch.object(Path, 'glob', side_effect=AssertionError('redescoberta antecipada')):
-            self.assertEqual(len(self.ler()['sessoes']), 1)
+            self.assertEqual(len(self.ler()['sessoes']), 2)
         self.ctx['agora'] = 10030
         self.assertEqual(len(self.ler()['sessoes']), 2)
 
@@ -412,6 +413,186 @@ class FontesComando(unittest.TestCase):
             db.execute("INSERT INTO sessions VALUES(CAST(x'ff' AS TEXT),9999,NULL)")
             db.execute("INSERT INTO sessions VALUES('ruim','data invalida',NULL)")
         self.assertEqual(len(self.ler()['sessoes']), 1)
+
+    def test_e27c_patch_shell_lista_nao_mostra_corpo(self):
+        corpo = '*** Begin Patch\n*** Update File: lista.py\n+CORPO\n*** End Patch'
+        self.arquivo('codex', [codex(nome='shell', argumentos={'command': ['apply_patch', corpo]})])
+        item = self.ler()['sessoes'][0]
+        self.assertEqual(item['texto'], 'lista.py')
+        self.assertNotIn('CORPO', json.dumps(item))
+
+    def test_e27c_patch_shell_string_heredoc_nao_mostra_corpo(self):
+        comando = "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: string.py\n+CORPO\n*** End Patch\nEOF"
+        self.arquivo('codex', [codex(nome='shell', argumentos={'command': comando})])
+        item = self.ler()['sessoes'][0]
+        self.assertEqual(item['texto'], 'string.py')
+        self.assertNotIn('CORPO', json.dumps(item))
+
+    def test_e27c_patch_exec_command_cmd_nao_mostra_corpo(self):
+        comando = "apply_patch <<'EOF'\n*** Begin Patch\n*** Delete File: cmd.py\n+CORPO\n*** End Patch\nEOF"
+        self.arquivo('codex', [codex(argumentos={'cmd': comando})])
+        item = self.ler()['sessoes'][0]
+        self.assertEqual(item['texto'], 'cmd.py')
+        self.assertNotIn('CORPO', json.dumps(item))
+
+    def test_e27c_patch_exec_command_begin_lista_nao_mostra_corpo(self):
+        corpo = '*** Begin Patch\n*** Update File: begin.py\n+CORPO\n*** End Patch'
+        self.arquivo('codex', [{'type': 'event_msg', 'payload': {'type': 'exec_command_begin',
+                               'call_id': 'a', 'command': ['apply_patch', corpo]}}])
+        item = self.ler()['sessoes'][0]
+        self.assertEqual(item['texto'], 'begin.py')
+        self.assertNotIn('CORPO', json.dumps(item))
+
+    def test_e27c_nome_mcp_preservado_e_fifo_cru_com_cru(self):
+        nome = 'mcp__hindsight__hindsight_search_pages'
+        caminho = self.arquivo('grok', [{'type': 'tool_started', 'tool_name': nome, 'ts': 9900}], 'events.jsonl')
+        self.assertEqual(self.ler()['sessoes'][0]['ferramenta'], nome)
+        self.adicionar(caminho, [{'type': 'tool_completed', 'tool_name': nome, 'ts': 9901}])
+        self.assertFalse(self.ler()['sessoes'][0]['em_curso'])
+
+    def test_e27c_fifo_nome_mascarado_compara_original(self):
+        nome = 'sk-FIFOtokenFalso123456'
+        caminho = self.arquivo('grok', [{'type': 'tool_started', 'tool_name': nome, 'ts': 9900}], 'events.jsonl')
+        self.assertEqual(self.ler()['sessoes'][0]['ferramenta'], OCULTO)
+        self.adicionar(caminho, [{'type': 'tool_completed', 'tool_name': nome, 'ts': 9901}])
+        self.assertFalse(self.ler()['sessoes'][0]['em_curso'])
+        self.assertNotIn('_nome_cru', self.ler()['sessoes'][0])
+
+    def test_e27c_vigia_stat_direto_detecta_novo_com_direntry_em_cache(self):
+        caminho = self.arquivo('claude', [claude()])
+        pasta = caminho.parent
+        os.utime(pasta, (10000, 10000))  # Evita colisão no mesmo tick da criação do diretório.
+        with os.scandir(pasta.parent) as entradas:
+            entrada = next(e for e in entradas if e.name == pasta.name)
+        antigo = entrada.stat().st_mtime_ns
+        self.ler()
+        novo = pasta / 'novo-vigiado.jsonl'
+        novo.write_text(json.dumps(claude()) + '\n', encoding='utf-8')
+        os.utime(novo, (10002, 10002))
+        self.assertEqual(entrada.stat().st_mtime_ns, antigo)  # Snapshot do PAI continua antigo.
+        self.assertNotEqual(os.stat(pasta).st_mtime_ns, antigo)
+        self.ctx['agora'] = 10002
+        stat_direto = os.stat
+        with patch.object(Path, 'glob', side_effect=AssertionError('reconciliação antecipada')), \
+                patch.object(fonte.os, 'stat', wraps=stat_direto) as consultar:
+            self.assertEqual(len(self.ler()['sessoes']), 2)
+        self.assertTrue(any(Path(c.args[0]) == pasta for c in consultar.call_args_list))
+        self.assertEqual(self.ctx['comando_cache']['_descoberta']['em'], 10000)
+
+    def test_e27c_vigia_codex_dia_novo_detecta_sem_reconciliar(self):
+        self.ler()
+        dia = fonte.datetime.fromtimestamp(10000, fonte.timezone.utc).strftime('%Y/%m/%d')
+        caminho = self.ctx['sessoes_dir'] / dia / 'dia-novo.jsonl'
+        caminho.parent.mkdir(parents=True)
+        caminho.write_text(json.dumps(codex()) + '\n', encoding='utf-8')
+        os.utime(caminho, (10002, 10002))
+        self.ctx['agora'] = 10002
+        with patch.object(Path, 'glob', side_effect=AssertionError('reconciliação antecipada')):
+            self.assertEqual(len(self.ler()['sessoes']), 1)
+        self.assertEqual(self.ctx['comando_cache']['_descoberta']['em'], 10000)
+
+    def test_e27c_vigia_grok_subpasta_nova_lida_na_mesma_passada(self):
+        projeto = self.ctx['grok_dir'] / 'sessions/projeto'
+        projeto.mkdir(parents=True)
+        os.utime(projeto, (10000, 10000))
+        self.ler()
+        caminho = projeto / 'nova-sessao' / 'chat_history.jsonl'
+        caminho.parent.mkdir()
+        caminho.write_text(json.dumps(grok()) + '\n', encoding='utf-8')
+        os.utime(caminho, (10002, 10002))
+        os.utime(caminho.parent, (10002, 10002))
+        self.ctx['agora'] = 10002
+        with patch.object(Path, 'glob', side_effect=AssertionError('reconciliação antecipada')):
+            self.assertEqual(len(self.ler()['sessoes']), 1)
+
+    def test_e27c_arquivo_24_h_retomado_detectado_so_com_stat(self):
+        caminho = self.arquivo('claude', [claude()])
+        os.utime(caminho, (9000, 9000))
+        self.assertEqual(self.ler()['sessoes'], [])
+        self.adicionar(caminho, [claude('b')])
+        os.utime(caminho, (10002, 10002))
+        self.ctx['agora'] = 10002
+        with patch.object(Path, 'glob', side_effect=AssertionError('reconciliação antecipada')), \
+                patch.object(fonte.os, 'scandir', side_effect=AssertionError('diretório sem mudança')):
+            self.assertEqual(len(self.ler()['sessoes']), 1)
+
+    def test_e27c_argv_shell_juntado_antes_de_mascarar(self):
+        argumentos = {'command': ['docker', 'login', '-p', 'hunter2']}
+        self.assertEqual(fonte._principal('shell', argumentos), 'docker login -p hunter2')
+        self.arquivo('codex', [codex(nome='shell', argumentos=argumentos)])
+        self.assertNotIn('hunter2', json.dumps(self.ler()))
+        self.assertEqual(fonte._principal('exec_command', ['docker', 'login', '-p', 'hunter2']),
+                         'docker login -p hunter2')
+
+    def test_e27c_defesa_final_patch_em_campos_desconhecidos(self):
+        corpo = '*** Begin Patch\n*** Update File: defesa.py\n+CORPO\n*** End Patch'
+        for argumentos in ({'script': corpo}, {'code': corpo}, {'args': [corpo]},
+                            {'action': {'command': corpo}}, {'input': corpo}):
+            with self.subTest(campo=next(iter(argumentos))):
+                principal = fonte._principal('custom', argumentos)
+                self.assertNotIn('CORPO', principal)
+                self.assertNotIn('*** Begin Patch', principal)
+
+    def test_e27c_grok_so_cria_vigia_de_sessao_com_menos_de_24_h(self):
+        self.ctx['agora'] = 100000
+        projeto = self.ctx['grok_dir'] / 'sessions/projeto'
+        for nome, instante in (('recente', 100000), ('antiga', 10000)):
+            pasta = projeto / nome
+            pasta.mkdir(parents=True)
+            arquivo = pasta / 'chat_history.jsonl'
+            arquivo.write_text(json.dumps(grok()) + '\n', encoding='utf-8')
+            os.utime(arquivo, (instante, instante))
+            os.utime(pasta, (instante, instante))
+        self.assertEqual(len(self.ler()['sessoes']), 1)
+        vigias = self.ctx['comando_cache']['_descoberta']['vigias']
+        self.assertIn(projeto / 'recente', vigias)
+        self.assertNotIn(projeto / 'antiga', vigias)
+
+    def test_e27c_scandir_nao_acrescenta_arquivo_mais_antigo_que_24_h(self):
+        self.ctx['agora'] = 100000
+        caminho = self.arquivo('claude', [claude()])
+        os.utime(caminho, (100000, 100000))
+        os.utime(caminho.parent, (100000, 100000))
+        self.ler()
+        antigo = caminho.parent / 'antigo-novo.jsonl'
+        antigo.write_text(json.dumps(claude()) + '\n', encoding='utf-8')
+        os.utime(antigo, (10000, 10000))
+        novo = caminho.parent / 'recente-novo.jsonl'
+        novo.write_text(json.dumps(claude()) + '\n', encoding='utf-8')
+        os.utime(novo, (100002, 100002))
+        self.ctx['agora'] = 100002
+        consultar = os.stat
+        with patch.object(Path, 'glob', side_effect=AssertionError('reconciliação antecipada')), \
+                patch.object(fonte.os, 'stat', wraps=consultar) as chamadas:
+            self.assertEqual(len(self.ler()['sessoes']), 2)
+        self.assertFalse(any(Path(c.args[0]) == antigo for c in chamadas.call_args_list))
+        self.assertNotIn(('claude', antigo), self.ctx['comando_cache']['_descoberta']['caminhos'])
+
+    def test_e27c_scandir_subpasta_ilegivel_nao_marca_agente_inteiro(self):
+        caminho = self.arquivo('claude', [claude()])
+        negada = self.ctx['claude_dir'] / 'negada'
+        negada.mkdir()
+        scandir = os.scandir
+        def listar(pasta):
+            if Path(pasta) == negada:
+                raise PermissionError('fixture')
+            return scandir(pasta)
+        def arquivos(raiz, padrao):
+            return iter([caminho]) if raiz == self.ctx['claude_dir'] else iter([])
+        with patch.object(Path, 'glob', arquivos), patch.object(fonte.os, 'scandir', listar):
+            secao = self.ler()
+        self.assertEqual(len(secao['sessoes']), 1)
+        self.assertNotIn('claude', secao['sem_leitura'])
+
+    def test_e27c_scandir_raiz_ilegivel_marca_sem_leitura(self):
+        self.ctx['claude_dir'].mkdir()
+        scandir = os.scandir
+        def listar(pasta):
+            if Path(pasta) == self.ctx['claude_dir']:
+                raise PermissionError('fixture')
+            return scandir(pasta)
+        with patch.object(Path, 'glob', return_value=iter([])), patch.object(fonte.os, 'scandir', listar):
+            self.assertIn('claude', self.ler()['sem_leitura'])
 
 
 if __name__ == '__main__':

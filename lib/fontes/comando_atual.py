@@ -6,6 +6,7 @@ por passada. Não publica um prefixo ainda em aquecimento como se fosse atual.
 Não grava estado. IDs completos/caminhos só existem na memória privada da fonte.
 """
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 import json
 import math
 import ntpath
@@ -37,6 +38,7 @@ MAX_MENSAGENS = 128
 MAX_TEXTO = 2000
 MAX_ENTRADA = 4 * MAX_TEXTO
 INTERVALO_DESCOBERTA = 30
+JANELA_STAT_S = 24 * 60 * 60
 MAX_TOOL_CALLS = 65536
 ERRO = 'comando atual: sem leitura'
 _CACHE = {}
@@ -116,12 +118,25 @@ def _caminhos(argumentos):
     return '; '.join(dict.fromkeys(caminhos)) if caminhos else 'sem caminho'
 
 
-def _principal(nome, argumentos):
+def _tem_patch(valor):
+    if isinstance(valor, str):
+        return '*** Begin Patch' in valor
+    return isinstance(valor, list) and any(_tem_patch(v) for v in valor)
+
+
+def _principal_bruto(nome, argumentos):
     if isinstance(argumentos, str):
         decodificado = _json(argumentos)
         if decodificado is None:
-            return _caminhos(argumentos) if _e_edicao(nome) else argumentos
+            return _caminhos(argumentos) if _e_edicao(nome) or _tem_patch(argumentos) else argumentos
         argumentos = decodificado
+    comando = argumentos
+    if isinstance(argumentos, dict):
+        for campo in ('command', 'cmd'):
+            if _tem_patch(argumentos.get(campo)):
+                return _caminhos(argumentos[campo])
+    elif _tem_patch(comando):
+        return _caminhos(comando)
     corpo_com_caminho = isinstance(argumentos, dict) and any(
         k in argumentos for k in ('file_path', 'path', 'file', 'target_file')) and any(
         k in argumentos for k in ('content', 'contents', 'new_text', 'file_content', 'body', 'code'))
@@ -136,7 +151,17 @@ def _principal(nome, argumentos):
         for campo in campos:
             if isinstance(argumentos.get(campo), str):
                 return argumentos[campo]
+            if isinstance(argumentos.get(campo), list) and all(isinstance(x, str) for x in argumentos[campo]):
+                return ' '.join(argumentos[campo])
+    if isinstance(argumentos, list) and all(isinstance(x, str) for x in argumentos):
+        return ' '.join(argumentos)
     return json.dumps(argumentos, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
+
+
+def _principal(nome, argumentos):
+    principal = _principal_bruto(nome, argumentos)
+    # Defesa final para reservas JSON e campos desconhecidos/aninhados.
+    return _caminhos(argumentos) if '*** Begin Patch' in principal else principal
 
 
 def tipo_tarefa(nome, texto):
@@ -180,7 +205,8 @@ def _chamada(estado, ident, nome, argumentos, quando):
     except (ValueError, TypeError, RecursionError):
         texto = 'sem leitura'
     estado['sequencia'] += 1
-    chamada = {'ferramenta': _cortar(mascarar(nome[:MAX_ENTRADA]), 64), 'texto': _cortar(texto, MAX_TEXTO),
+    chamada = {'ferramenta': _cortar(mascarar(nome[:MAX_ENTRADA], sequencias_longas=False), 64),
+               '_nome_cru': nome, 'texto': _cortar(texto, MAX_TEXTO),
                'desde_epoch': quando, 'tipo_tarefa': tipo_tarefa(nome, texto),
                'tipo_tarefa_inferido': True, 'em_curso': True, '_ordem': estado['sequencia']}
     # Ausência de id não pode fazer todas as chamadas se sobrescreverem.
@@ -268,7 +294,7 @@ def _interpretar(estado, linha, agente, mtime):
                 # Sem id, pareia FIFO e prefere o nome se o evento o informar.
                 nome = linha.get('tool_name')
                 ident = next((k for k, c in estado['chamadas'].items()
-                              if not nome or c['ferramenta'] == nome), None)
+                              if not nome or c['_nome_cru'] == nome), None)
             _resultado(estado, ident)
     if isinstance(pasta, str) and pasta:
         estado['projeto'] = _cortar(mascarar(ntpath.basename(pasta.rstrip('/\\'))[:MAX_ENTRADA]), 128) or None
@@ -440,42 +466,113 @@ def _hermes(caminho, agora_s, cache):
     return itens
 
 
+def _preparar_vigias(raizes, agora_s, vigias):
+    for agente, raiz, _ in raizes:
+        nivel = {'claude': 'claude_raiz', 'grok': 'grok_raiz'}.get(agente, 'codex')
+        vigias.setdefault(raiz, [agente, nivel, ()])
+        if agente == 'codex':
+            dias = {datetime.fromtimestamp(agora_s).date(),
+                    datetime.fromtimestamp(agora_s, timezone.utc).date()}
+            dias |= {dia - timedelta(days=1) for dia in dias}
+            for dia in dias:
+                pasta = raiz / ('%04d' % dia.year) / ('%02d' % dia.month) / ('%02d' % dia.day)
+                vigias.setdefault(pasta, [agente, 'codex', ()])
+
+
+def _examinar_vigias(lista, reconciliar, agora_s):
+    """Stat DIRETO; nunca aproveitar o DirEntry.stat em cache da listagem do pai."""
+    vigias = lista['vigias']
+    fila = list(vigias)
+    filhos = {'claude_raiz': 'claude_projeto', 'grok_raiz': 'grok_projeto',
+              'grok_projeto': 'grok_sessao'}
+    for pasta in fila:
+        agente, nivel, anterior = vigias[pasta]
+        try:
+            info = os.stat(pasta)
+            assinatura = (info.st_mtime_ns, info.st_ino)
+        except OSError:
+            vigias[pasta][2] = None
+            continue
+        if nivel == 'grok_sessao' and not 0 <= agora_s - info.st_mtime <= JANELA_STAT_S:
+            del vigias[pasta]
+            continue
+        if not stat.S_ISDIR(info.st_mode) or not reconciliar and assinatura == anterior:
+            continue
+        # Registrar ANTES do scandir permite observar mudanças durante a listagem.
+        vigias[pasta][2] = assinatura
+        try:
+            with os.scandir(pasta) as entradas:
+                for entrada in entradas:
+                    caminho = Path(entrada.path)
+                    if entrada.is_dir(follow_symlinks=False) and nivel in filhos:
+                        if filhos[nivel] == 'grok_sessao':
+                            try:
+                                idade = agora_s - entrada.stat(follow_symlinks=False).st_mtime
+                            except OSError:
+                                continue
+                            if not 0 <= idade <= JANELA_STAT_S:
+                                continue
+                        if caminho not in vigias:
+                            vigias[caminho] = [agente, filhos[nivel], ()]
+                            fila.append(caminho)
+                    elif entrada.is_file(follow_symlinks=False):
+                        nome = entrada.name
+                        aceito = (nome in ('chat_history.jsonl', 'events.jsonl') if agente == 'grok'
+                                  else nome.endswith('.jsonl') or agente == 'codex' and nome.endswith('.jsonl.zst'))
+                        if aceito:
+                            try:
+                                idade = agora_s - entrada.stat(follow_symlinks=False).st_mtime
+                            except OSError:
+                                continue
+                            if 0 <= idade <= JANELA_STAT_S:
+                                lista['caminhos'].add((agente, caminho))
+        except OSError:
+            if any(str(pasta) == raiz for _, raiz, _ in lista['raizes']):
+                lista['falhas'].append(agente)
+
+
 def _candidatos(raizes, agora_s, cache):
-    """Descobre no máximo a cada 30 s; passadas intermediárias só stat das candidatas."""
+    """Reconcilia a cada 30 s; vigias e arquivos das últimas 24 h recebem stat a cada 2 s."""
     assinatura = tuple((a, str(r), p) for a, r, p in raizes)
     lista = cache.get('_descoberta')
-    if (lista is None or lista['raizes'] != assinatura
-            or not 0 <= agora_s - lista['em'] < INTERVALO_DESCOBERTA):
-        caminhos, falhas = [], []
+    reconciliar = (lista is None or lista['raizes'] != assinatura
+                   or not 0 <= agora_s - lista['em'] < INTERVALO_DESCOBERTA)
+    if reconciliar:
+        caminhos, falhas = set(), []
         for agente, raiz, padroes in raizes:
             try:
                 for padrao in padroes:
                     for caminho in raiz.glob(padrao):
                         try:
                             info = caminho.stat()
-                            recente = 0 <= agora_s - info.st_mtime <= LIMITE_ATIVIDADE_S
+                            recente = 0 <= agora_s - info.st_mtime <= JANELA_STAT_S
                             conhecido = cache.get(str(caminho))
                             pendente = conhecido and conhecido['chamadas']
                             if stat.S_ISREG(info.st_mode) and (recente or pendente):
-                                caminhos.append((agente, caminho))
+                                caminhos.add((agente, caminho))
                         except OSError:
                             continue
             except OSError:
                 falhas.append(agente)
-        lista = {'raizes': assinatura, 'em': agora_s, 'caminhos': caminhos, 'falhas': falhas}
+        lista = {'raizes': assinatura, 'em': agora_s, 'caminhos': caminhos, 'falhas': falhas, 'vigias': {}}
         cache['_descoberta'] = lista
-    candidatos = []
+    _preparar_vigias(raizes, agora_s, lista['vigias'])
+    _examinar_vigias(lista, reconciliar, agora_s)
+    candidatos, mantidos = [], set()
     for agente, caminho in lista['caminhos']:
         try:
             info = caminho.stat()
             recente = 0 <= agora_s - info.st_mtime <= LIMITE_ATIVIDADE_S
             conhecido = cache.get(str(caminho))
             pendente = conhecido and conhecido['chamadas']
+            if stat.S_ISREG(info.st_mode) and (0 <= agora_s - info.st_mtime <= JANELA_STAT_S or pendente):
+                mantidos.add((agente, caminho))
             if stat.S_ISREG(info.st_mode) and (recente or pendente):
                 candidatos.append((info.st_mtime, agente, caminho, info))
         except OSError:
             continue
     candidatos.sort(key=lambda c: (-c[0], str(c[2])))
+    lista['caminhos'] = mantidos
     return candidatos, list(lista['falhas'])
 
 
