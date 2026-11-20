@@ -11,7 +11,7 @@ import re
 OCULTO = '‹oculto›'
 NOMES_SENSIVEIS = ('KEY', 'TOKEN', 'SECRET', 'PASSWORD', 'PASSPHRASE', 'PASSWD',
                     'PASS', 'PWD', 'PIN', 'AUTH', 'COOKIE', 'SESSION', 'CREDENTIAL',
-                    'SIGNATURE', 'SIG')
+                    'SIGNATURE', 'SIG', 'SENHA', 'CHAVE', 'SEGREDO', 'CREDENCIA')
 _IDENT = re.compile(r'[\w.-]{1,64}')
 _URL = re.compile(r'[A-Za-z][A-Za-z0-9+.-]{0,31}://')
 _LONGO = re.compile(r'[A-Za-z0-9_+/-]{32,64}')
@@ -43,6 +43,8 @@ SENHAS_PROGRAMA = {
     ('ldapmodify', None): (('-w', True),),
     ('ssh-keygen', None): (('-N', True), ('-P', True)),
     ('openssl', None): (('-k', False), ('-pass', False)),
+    ('schtasks', None): (('/rp', False),),
+    ('psexec', None): (('-p', False),),
 }
 
 
@@ -123,7 +125,7 @@ def _senhas_programa(texto):
     minusculo = texto.lower()
     if not any(p in minusculo for p in ('docker', 'az', 'redis-cli', '7z', 'zip', 'mysql',
                                       'mariadb', 'sshpass', 'sqlcmd', 'ldapsearch', 'ldapmodify',
-                                      'ssh-keygen', 'openssl', 'net')):
+                                      'ssh-keygen', 'openssl', 'net', 'schtasks', 'psexec')):
         return []
     intervalos = []
     fila = [(0, len(texto), 0)]
@@ -133,8 +135,12 @@ def _senhas_programa(texto):
         inicio_trecho, fim_trecho, nivel = fila.pop()
         for tokens, pipe in _segmentos_shell(texto, inicio_trecho, fim_trecho):
             regras, stdin_pipe, rede, oculto_ate = (), None, 0, -1
+            senha_usuario = -1
             for indice, (inicio, fim, valor) in enumerate(tokens):
                 if inicio < oculto_ate:
+                    continue
+                if indice == senha_usuario and not valor.startswith('/'):
+                    intervalos.append((inicio, fim))
                     continue
                 # net use: unidade e opções podem anteceder a senha, após o UNC.
                 if rede == 1 and valor.startswith('\\'):
@@ -152,6 +158,10 @@ def _senhas_programa(texto):
                     programa = 'mysql'
                 elif programa.startswith('mariadb'):
                     programa = 'mariadb'
+                elif 'sqlcmd' in programa:
+                    programa = 'sqlcmd'
+                elif 'sshpass' in programa:
+                    programa = 'sshpass'
                 sub = tokens[indice + 1][2].lower() if indice + 1 < len(tokens) else None
                 if programa in wrappers and sub in wrappers[programa] and indice + 2 < len(tokens) and nivel < 4:
                     a, b, _ = tokens[indice + 2]
@@ -159,6 +169,8 @@ def _senhas_programa(texto):
                         fila.append((a + 1, b - 1, nivel + 1))
                 if programa == 'net' and sub == 'use':
                     rede = 1
+                elif programa == 'net' and sub == 'user':
+                    senha_usuario = indice + 3
                 if (programa, sub) in SENHAS_PROGRAMA or (programa, None) in SENHAS_PROGRAMA:
                     novas = SENHAS_PROGRAMA.get((programa, sub), SENHAS_PROGRAMA.get((programa, None), ()))
                     # A tabela é fixa: reconhecer outro programa só acrescenta proteção.
@@ -168,15 +180,18 @@ def _senhas_programa(texto):
                 if valor == '--password-stdin' and stdin_pipe is not None:
                     intervalos.append((0, stdin_pipe))
                 for flag, junto in regras:
-                    if valor == flag or valor.startswith(flag + '='):
-                        if valor.startswith(flag + '='):
+                    comparado = valor.lower() if flag.startswith('/') else valor
+                    if comparado == flag or comparado.startswith(flag + '='):
+                        if comparado.startswith(flag + '='):
                             intervalo = _valor(texto, inicio + len(flag) + 1)
                         elif indice + 1 < len(tokens):
                             intervalo = (tokens[indice + 1][0], tokens[indice + 1][1])
                         else:
                             continue
                         intervalos.append(intervalo)
-                        oculto_ate = intervalo[1]
+                        # Uma flag consumida continua oculta e também é processada.
+                        if comparado.startswith(flag + '=') or not tokens[indice + 1][2].startswith('-'):
+                            oculto_ate = intervalo[1]
                         break
                     if junto and valor.startswith(flag) and len(valor) > len(flag):
                         intervalos.append((inicio + len(flag), fim))
@@ -235,7 +250,7 @@ def _mascarar_texto(texto, sequencias_longas=True):
 
     maiusculo = texto.upper()
     tem_nome = any(parte in maiusculo for parte in NOMES_SENSIVEIS + ('BEARER', 'BASIC', 'SECURESTRING'))
-    especiais = any(parte in maiusculo for parte in ('-U ', '--USER '))
+    especiais = '-U' in maiusculo
     if (tem_nome or especiais) and any(c in texto for c in ('=', ':', ' ', '\t', '\n')):
         oculto_ate = -1
         for match in _IDENT.finditer(texto):
@@ -262,8 +277,13 @@ def _mascarar_texto(texto, sequencias_longas=True):
                                 intervalo = _valor(texto, pos + 1)
             elif normal in ('BEARER', 'BASIC', 'CONVERTTO-SECURESTRING'):
                 intervalo = _valor(texto, pos)
-            elif normal in ('-U', '--USER'):
-                inicio = _espacos(texto, pos)
+            elif normal in ('-U', '--USER', '--PROXY-USER') or (nome.startswith('-u')
+                    and not nome.startswith('--') and len(nome) > 2):
+                junto = nome.startswith('-u') and not nome.startswith('--') and len(nome) > 2
+                inicio = match.start() + 2 if junto else _espacos(texto, pos)
+                if not junto and texto[inicio:inicio + 1] == '=':
+                    inicio = _espacos(texto, inicio + 1)
+                inicio_valor = inicio
                 if texto[inicio:inicio + 1] in ('"', "'"):
                     aspas = texto[inicio]
                     inicio += 1
@@ -273,7 +293,7 @@ def _mascarar_texto(texto, sequencias_longas=True):
                 else:
                     candidato = (inicio, _USUARIO.match(texto, inicio).end())
                 if ':' in texto[candidato[0]:candidato[1]]:
-                    intervalo = _valor(texto, pos)
+                    intervalo = _valor(texto, inicio_valor)
                 # Mesmo candidato recusado tem custo limitado e o cursor avança.
                 oculto_ate = match.end()
             elif sensivel(nome):

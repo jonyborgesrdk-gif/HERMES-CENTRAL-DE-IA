@@ -7,6 +7,10 @@ import ctypes
 import ipaddress
 import ntpath
 import os
+try:
+    from ..mascara import limpar_exibicao
+except ImportError:
+    from mascara import limpar_exibicao
 
 LIMITE = 5000
 MAX_TABELA = 16 * 1024 * 1024
@@ -135,7 +139,7 @@ class SistemaWindows:
             buffer = ctypes.create_unicode_buffer(tamanho.value)
             if not self.kernel.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(tamanho)):
                 return 'sem leitura'
-            return ntpath.basename(buffer[:tamanho.value]) or 'sem leitura'
+            return limpar_exibicao(ntpath.basename(buffer[:tamanho.value])) or 'sem leitura'
         finally:
             self.kernel.CloseHandle(handle)
 
@@ -183,7 +187,7 @@ def ler(ctx):
                 pid = linha['pid']
                 if pid not in nomes:
                     nomes[pid] = ('System Idle' if pid == 0 else 'System') if pid in (0, 4) else sistema.nome(pid)
-                linha['processo'] = ntpath.basename(nomes[pid]) or 'sem leitura'
+                linha['processo'] = limpar_exibicao(ntpath.basename(nomes[pid])) or 'sem leitura'
             itens.extend(linhas)
         return {'conexoes': agregar(itens, omitidas)}
     except (OSError, ValueError, TypeError, OverflowError, ctypes.ArgumentError):

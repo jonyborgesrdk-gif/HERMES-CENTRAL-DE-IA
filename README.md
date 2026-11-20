@@ -366,14 +366,16 @@ Controles, DEL/C1 e caracteres bidi são removidos. O tipo
 de tarefa usa vocabulário fixo e leva selo **inferência**, sem executar comandos.
 O mascarador oculta variáveis, flags, campos e headers sensíveis, credenciais em
 URLs, formatos conhecidos de tokens, PEM e sequências base64/hex isoladas de
-32 caracteres ou mais. Inclui PASS/PASSPHRASE/PASSWD/PIN, SIG/SIGNATURE, flags
-PowerShell, curl user:pass, mysql/sshpass/sqlcmd, setx, SetEnvironmentVariable,
+32 caracteres ou mais. Inclui PASS/PASSPHRASE/PASSWD/PIN, SIG/SIGNATURE e
+SENHA/CHAVE/SEGREDO/CREDENCIA, flags PowerShell, curl user:pass (separado,
+`--user=u:p`, `--proxy-user=u:p` e `-uU:P`), mysql/sshpass/sqlcmd, setx, SetEnvironmentVariable,
 atribuições em dicionários e JSON escapado. **UUID, hash Git de 40 hex, caminhos
 longos sem pontos (ex.: `/usr/local/lib/python3/site-packages`) e `Basic usage`
 também podem ser mascarados**, deliberadamente.
 Há tabela de senhas por programa/flag para docker login, az login, redis-cli,
 7z, zip/unzip, mysql/mariadb, sshpass, sqlcmd, ldapsearch/ldapmodify, ssh-keygen, openssl e
-net use. Docker login com `--password-stdin` oculta o lado esquerdo do pipe.
+net use, net user (senha após o usuário), schtasks `/RP` e psexec `-p`.
+Docker login com `--password-stdin` oculta o lado esquerdo do pipe.
 As regras se acumulam no trecho; reconhecer outro programa não substitui regras
 anteriores nem desliga a proteção de senha via pipe. Valores junto à flag são
 aceitos em docker/az login `-p`, ldapsearch/ldapmodify `-w`, ssh-keygen `-N/-P`
@@ -383,7 +385,8 @@ os índices do texto exibido; após `\`, crase, `^`, `|` ou `&` (ignorando espa�
 e CR), a quebra vira espaço e mantém a continuação. Uma segunda passagem converte
 aspas simples/duplas em espaços, sem mudar posições, e une os intervalos ocultos
 das duas passagens. O programa é reconhecido em qualquer token por
-basename, incluindo famílias mysql*/mariadb* e comandos após sudo, env, time,
+basename, incluindo famílias mysql*/mariadb* e nomes contendo sqlcmd/sshpass
+(`$SqlCmdPath`, `(Get-Command sqlcmd).Source`, `$SSHPASS_BIN`), e comandos após sudo, env, time,
 docker exec e kubectl exec. Comandos entre aspas em bash/sh -c/-lc, cmd /c e
 powershell -Command são tokenizados também (até quatro níveis). Net use aceita
 unidade, `*` e `/user:u` antes da senha.
@@ -406,13 +409,18 @@ Risco residual 1: continuação anexada à flag (`-p\` ou `--password=\` antes d
 Risco residual 2: argv em dict de ferramenta fora de `_SHELL` pode perder contexto na reserva JSON.
 Risco residual 3: em `-u`, dois-pontos após o limite de 256 caracteres pode impedir mascaramento.
 Risco residual 4: vigias `claude_projeto` continuam sem filtro de idade ou teto.
-Risco residual 5 (item 1 da revisão E27e): aliases arbitrários como `m -p…` e variáveis/expressões com nome inexato (`$SqlCmdPath`, `$SSHPASS_BIN`, `(Get-Command sqlcmd).Source`, `"$env:SQLCMD_PATH"`) não são resolvidos; só mysql*/mariadb* têm família por prefixo, e a regressão estreita em relação à d38c2e4 é aceita como risco residual.
-Risco residual 6 (item 2 da revisão E27e, R-1b): uma flag sem valor de outro programa reconhecido consome o token seguinte e pode deixar a senha de `-k` visível (ex.: `openssl enc -in $MYSQL_DUMP ... -p -k x`, variantes com `%MYSQL_DUMP%` ou `$zip` e `-p` ou `-P`).
-Risco residual 7: programas fora da tabela podem expor senhas: `net user`, `schtasks /RP`, `psexec -p`, `bcp -P`, `podman/nerdctl/helm/oras login -p`, `sqlplus u/senha@db`, `smbclient -U u%senha`, `plink/pscp -pw`, `xfreerdp /p:`, `mongosh -p`, `htpasswd -b` e `rar/unrar/7za/7zr/7zz -p`.
+Risco residual 5 (item 1 da revisão E27e): aliases arbitrários como `m -p…` não são resolvidos. A rodada E29 cobre as famílias contendo sqlcmd/sshpass, inclusive as variáveis e expressões dos exemplos auditados; apelidos sem o nome reconhecível continuam fora da heurística.
+Risco 6 histórico (item 2 da revisão E27e, R-1b), corrigido na rodada E29: um token consumido que começa com `-` fica oculto e também é processado, cobrindo `openssl enc -in $MYSQL_DUMP ... -p -k x` e as variantes com `%MYSQL_DUMP%` ou `$zip`. Isso não amplia o mascaramento para sintaxes arbitrárias de shell.
+Risco residual 7: programas fora da tabela podem expor senhas: `bcp -P`, `podman/nerdctl/helm/oras login -p`, `sqlplus u/senha@db`, `smbclient -U u%senha`, `plink/pscp -pw`, `xfreerdp /p:`, `mongosh -p`, `htpasswd -b` e `rar/unrar/7za/7zr/7zz -p`.
+Risco residual 7 — mn-B: `curl -U<u:p>` com valor junto (proxy-user) pode deixar a credencial visível; lacuna conhecida, não corrigida.
+Risco residual 7 — mn-C: `schtasks /S h /U u /P <senha>` e `PsExec64 -p <senha>` (nome não reconhecido) podem expor a senha; `net user /add bob <senha>` também pode expô-la, sob a hipótese não verificada de que o comando aceite essa ordem das opções.
+Risco residual 7 — E29 N6: senha de `net user` que começa com `/` não é ocultada, pois é confundida com opção; limitação conhecida, não corrigida.
 Risco residual 8: opções globais antes de `login` não são cobertas, como `docker --config d login -p` e `az --only-show-errors login -p`.
 Risco residual 9: senha por stdin sem `|` (here-string/heredoc) e pipes para programas que não são `docker login` podem vazar, como `docker login --password-stdin <<< x` e `echo x | sudo -S`.
 Risco residual 10 (falso positivo): um token com nome de programa da tabela (`--name mysql`, `/var/lib/mysql`, `mysql.sql` ou texto de commit) pode fazer `-p…` do mesmo trecho ser ocultado, inclusive `find -print/-path`.
-Ligar PAINEL_COMANDO só após a E29, com aceite explícito do usuário para os itens 1 e 2 ou sua correção.
+Ligar PAINEL_COMANDO só após a E29, com correção ou aceite explícito do usuário para os riscos 5 e 6 e ciência dos demais riscos residuais. As correções E29 cobrem os exemplos auditados de 5 e 6; aliases arbitrários continuam sem resolução.
+Risco residual mn-5: prompts de Agent/Task, argumentos MCP (inclusive mensagens/e-mails), WebFetch e outras ferramentas podem aparecer como JSON mascarado. Senhas em prosa e corpos por heredoc, `git apply` ou `patch` podem continuar visíveis; só o formato reconhecido `*** Begin Patch` vira uma lista de caminhos.
+Risco residual N-b: um token cortado na fronteira de 8.000 caracteres pode exibir um prefixo de segredo genérico se um bloco mascarado o preceder; o limite não equivale a sanitização completa.
 O mascaramento é conservador e incompleto: pode ocultar texto legítimo e deixar
 segredos de formatos não reconhecidos. O aviso fica visível na página local.
 A tabela é reconstruída somente quando o conteúdo muda; a idade é atualizada
@@ -426,6 +434,162 @@ erro constante. Não há subprocesso, rede, log de conteúdo ou estado persistid
 pela fonte. Sem a flag, ela não é registrada e o feed público fica idêntico.
 Desligar a flag impede novas leituras; se nenhuma outra seção gravar, um
 `local.json` anterior permanece no disco, conforme a E26.
+
+### Rede por sessão de agente (E28, opt-in local)
+
+`PAINEL_REDE_SESSAO=1` habilita a fonte no coletor (cadência de 5 s) e o listener
+local existente em `http://127.0.0.1:7422`. Somente o valor literal `1` liga a
+variável. O padrão é desligado; a ativação em produção continua condicionada à
+E29. Esta implementação não altera variáveis, serviços nem tarefas agendadas.
+
+A captura precisa de opt-in próprio: em um terminal de administrador use
+`C:\Python314\python.exe -I -B C:\COPIA-SO-ADMIN\painel-rede capturar --detalhe`, ou defina
+`PAINEL_REDE_SESSAO=1` apenas no ambiente desse processo de captura. A pasta de
+dados (`PAINEL_IAS_DIR`, padrão `%LOCALAPPDATA%\painel-ias`) deve existir e cumprir
+as proteções já exigidas por `painel-rede`. A sessão ETW, o mutex e o evento de
+parada têm nomes globais fixos: **não é possível rodar uma segunda captura só
+mudando a pasta**. Planeje a substituição da captura existente em uma janela
+autorizada; não inicie nem pare a tarefa de produção para experimentar esta função.
+
+O opt-in grava `rede-sessao.json` atomicamente na mesma pasta protegida de
+`rede-resumo.json`, nunca em `publico/`. O resumo público permanece igual.
+Na página local, “Rede por sessão de agente” mostra Claude Code, Codex, Grok,
+Hermes e cursor-agent: PID raiz, início do processo, quantidade de processos,
+bytes enviados/recebidos em 60 s e desde o início da captura. Cada sessão pode
+ser expandida para ver protocolo, porta local, endereço/porta remotos, basename
+do processo e os mesmos contadores. Esses bytes ETW TCP/UDP não incluem ICMP,
+outros protocolos nem todos os cabeçalhos de interface.
+
+A atribuição exige identidade PID + criação Win32 estável durante o ciclo e
+criado até pelo menos 2 s antes do snapshot anterior, além de
+ancestrais vivos com criação anterior à do filho; ciclos e cadeias de mais de
+64 processos são recusados. Sem uma ligação determinística a um transcript,
+o identificador de sessão é `null`: horário/produto não bastam. Processos sem
+criação legível, reutilizados, encerrados ou omitidos entram em “Outros”.
+Identidade atual válida, mas sem raiz de agente, entra no contador separado
+“não atribuídos” (`outros.nao_atribuidos`). São parcelas disjuntas; a segunda
+não é subconjunto do total de “Outros”. Históricos de raízes mortas também deixam de ser atribuídos a uma
+sessão viva. Não há leitura de cmdline, ambiente ou transcript para descobrir IDs.
+Risco residual E29 mn-A: os rótulos da linha “Outros” da página local estão invertidos em relação a este README: B (“total”) não inclui programas vivos que não são agentes, enquanto C, rotulado “sem vínculo confiável”, contém os de identidade confiável; apresentação conhecida, não corrigida.
+
+Agentes aninhados: subprocessos do mesmo agente somam na sessão mais externa.
+Por exemplo, `claude -p` iniciado pelo Claude soma no Claude externo; Codex
+iniciado pelo Claude vira uma sessão Codex própria. Essa é a regra adotada,
+não uma identificação determinística de cada transcript.
+
+Limites: 8.192 identidades de PID e 4.096 fluxos retidos, janela de 30
+ciclos de 2 s, arquivo/leitura de até 2 MiB; 100 sessões, 100 conexões por sessão
+e 2.000 conexões exibidas no total. Fluxos conservados mantêm totais após sair da
+janela enquanto a identidade estiver no snapshot atual. Identidades e fluxos
+ausentes e sem atividade na janela são despejados a cada ciclo; os totais por
+PID passam a `expirados.total`, incorporado a “Outros”. `expirados.fluxos_total`
+é uma contagem paralela dos fluxos removidos e não é somada novamente aos
+bytes por PID. Cortes de conexões não reduzem os totais por PID; após o teto
+de PIDs, os bytes vão ao agregado de identidade desconhecida. Os contadores de descarte da captura
+contam observações de fluxo/PID por ciclo (podem repetir uma conexão), e os
+omitidos da página contam linhas. Valores são saturados em 10^15 bytes por direção.
+Risco residual E29 MJ-A: fluxos de processos vivos não expiram; processos duradouros como svchost, navegador ou node podem encher o teto de 4.096 fluxos, fazendo conexões novas virarem `fluxos_omitidos`; os bytes por sessão continuam corretos, e o tempo até o teto não foi medido.
+
+Arquivo ausente apresenta “sem captura detalhada” com instrução; sinal com mais
+de 30 s fica “parado”, com idade e aviso. Não confunda atualização de `local.json`
+com atualização do sinal da captura. Arquivos inválidos ou maiores que o limite
+geram apenas erro constante no feed público. Endereços, portas e PIDs ficam no
+arquivo protegido e em `local.json`, servidos **somente em 127.0.0.1:7422**;
+não publique essa porta com proxy/Tailscale. A página usa DOM/textContent e o
+mesmo mecanismo CSP do listener local.
+
+Para desfazer: remova `PAINEL_REDE_SESSAO` dos ambientes do coletor/servidor e
+da captura; em uma janela autorizada, reinicie a captura sem `--detalhe`.
+Sem opt-in não há novas gravações de detalhe; o `rede-sessao.json` antigo e
+a seção `rede_sessao` em `local.json` podem permanecer. Consulte o rollback
+abaixo para remover os resíduos com os produtores parados.
+Não há remoção automática de dados ou alteração da tarefa agendada.
+
+Risco residual E28 m2: os ~21 ms da árvore de processos não medem o custo total
+do `--detalhe` elevado. Enumerar processos, montar/serializar o detalhe e gravar
+com fsync também consomem CPU; podem atingir o teto de 5% de um núcleo e acionar
+`pausado_carga`, interrompendo também novos bytes do resumo público. Falhas na
+montagem/gravação do detalhe são isoladas do laço, mas isso não garante custo
+aceitável. A captura detalhada real continua sem medição operacional.
+Risco residual E29 N1: durante `pausado_carga`, os processos continuam enumerados a cada 2 s; o custo não foi medido, mas a retomada é por tempo e essa enumeração não prolonga a pausa.
+Risco residual E29 N2: uma falha de `listar` por `OSError` produz snapshot vazio e envia identidades sem atividade para `expirados`; o total é preservado, mas a atribuição se perde.
+Risco residual E29 N3: `expirar` e `adicionar` rodam sem isolamento no laço; a proteção de C6d cobre somente a montagem/gravação do detalhe, não essas operações.
+Risco residual E29 N4: `expirados.janela` permanece sempre `[0, 0]`; o agregado conserva totais de entradas já sem atividade na janela.
+
+Risco residual E28 m5: `PAINEL_REDE_SESSAO=1` também liga o detalhe no capturador,
+mesmo sem `--detalhe`. Uma variável persistente de usuário pode ser herdada na
+próxima partida da tarefa agendada (a herança concreta não foi medida). Defina
+flags só no ambiente dos processos pretendidos e confira também o ambiente da
+captura ao desfazer; não configure a variável globalmente para ligar só a página.
+
+### Riscos operacionais e checklist de ativação (E29)
+
+mn-6: a 7422 não tem autenticação; outros processos/usuários locais podem ler os
+dados. Cabeçalhos de proxy conhecidos são recusados, mas encaminhamento TCP
+(`--tcp`, `--tls-terminated-tcp`, `ssh -L/-R`, portproxy e dev tunnels) pode
+preservar/forjar Host local e expor tudo. O comportamento real do Tailscale em
+modo HTTP não foi medido; não se promete que um encaminhamento dará 403.
+N-e/N-f/N-g: não há teto próprio de conexões na 7422 (DoS local), a saúde pública
+revela que a fonte está ligada e o listener 7421 mantém SO_REUSEADDR legado.
+
+mn-7: desligar as flags não apaga `local.json`, `rede-sessao.json` nem possíveis
+`.local.json.*.tmp`/`.rede-sessao.json.*.tmp` de interrupções abruptas. ACLs são
+herdados da pasta; desligar a coleta não revoga acesso aos arquivos existentes.
+
+MJ-4: a captura elevada carrega código da cópia do painel, incluindo `lib/`
+antes da stdlib. Uma pasta gravável por processos sem elevação permite trocar
+esse código. Usar o caminho absoluto do `python.exe` confirmado, com `-I -B`,
+a partir de uma cópia onde só administradores escrevem, e conferir também as
+permissões do interpretador/stdlib e da pasta de dados. `-I` sozinho não protege
+o `lib/` inserido pelo programa; o launcher `py` também não substitui a revisão
+dessas permissões. Nada disso foi alterado nesta rodada.
+E28 N5/N6: o snapshot de PPID e a consulta de criação podem observar instantes
+diferentes; recuo do relógio que deixe `desde > gerado_em` resulta em erro de
+leitura. A margem de 2 s reduz o risco de reuso e não elimina toda corrida.
+Risco residual E29 N5: `limpar_exibicao` não remove U+061C, U+200B–U+200D, U+2028/U+2029 nem U+FEFF; a limitação conhecida tem efeito apenas visual.
+
+Checklist para execução humana, após revisão competente do diff e dos riscos;
+não constitui autorização de reinício, alteração de proxy ou garantia de sigilo:
+
+1. Conferir os aceites E29 e os riscos residuais. Revisar permissões da cópia,
+   interpretador e dados; o exemplo `C:\Python314\python.exe` exige confirmação
+   local, não presume ACL segura.
+2. Conferir `tailscale serve status` e `tailscale funnel status`: só a 7421,
+   sem encaminhamento TCP. Conferir `netsh interface portproxy show all` vazio
+   e ausência de SSH -L/-R/dev tunnels apontando para a 7422. Esses comandos e
+   configurações não foram executados nem medidos nesta rodada.
+3. Opcional, somente com autorização separada: medir proxy HTTP numa instância
+   isolada em 7432/HTTPS 8443, de outro dispositivo, inclusive Host local forjado;
+   o critério esperado é 403 em `/local.json`. Retirar o proxy de teste depois.
+   Falha desse critério impede tratar a checagem de cabeçalhos como proteção.
+4. Definir uma flag por vez no ambiente do processo do servidor e coletor;
+   o Supervisor repassa seu ambiente. Não usar variável persistente de usuário.
+   Reiniciar produção somente em janela explicitamente autorizada.
+5. `PAINEL_CONEXOES=1`: conferir a página local em `http://127.0.0.1:7422/`,
+   `/local.json` da 7421 retornando 404 pela tailnet e somente saúde constante
+   em `fontes.conexoes` do feed público.
+6. `PAINEL_COMANDO=1`: conferir em sessão de teste tokens fictícios, `SENHA=x`
+   e `curl --user=a:b`. Aceitar os riscos do mascaramento heurístico; evitar
+   compartilhar a tela com a página local aberta.
+7. Detalhe ETW: somente em janela autorizada para substituir a captura única.
+   Um administrador encerra a captura anterior com `painel-rede parar` e inicia
+   a cópia só-admin pelo caminho absoluto de `python.exe -I -B`, com `--detalhe`.
+   Medir por pelo menos 1 h de uso normal CPU, frequência de `pausado_carga` e
+   tamanho do arquivo, quantidade de fluxos e `fluxos_omitidos` (MJ-A); idealmente, acompanhar um dia de uso. Carga excessiva/pausas ou crescimento inesperado exigem
+   rollback; só após avaliação e aceite ligar `PAINEL_REDE_SESSAO=1` no
+   servidor/coletor. Não houve essa medição nem ativação nesta rodada.
+8. Rollback autorizado: remover as flags dos ambientes, reiniciar servidor e
+   coletor; encerrar a captura detalhada e reiniciá-la sem `--detalhe` e sem a
+   variável em seu ambiente. Com os produtores parados e a pasta de dados real
+   conferida (`PAINEL_IAS_DIR` ou `%LOCALAPPDATA%\painel-ias`), apagar apenas
+   `local.json`, `rede-sessao.json` e os temporários correspondentes. No
+   PowerShell, usar `Remove-Item -LiteralPath <caminho absoluto revisado>` para
+   cada arquivo; listar e conferir cada `.local.json.*.tmp` e
+   `.rede-sessao.json.*.tmp` antes de apagá-lo, sem remoção recursiva.
+   A remoção de `local.json` apaga também as outras seções locais retidas.
+   Desligar uma seção só a retira na próxima gravação de outra seção ativa.
+   Código: eventual `git revert` do commit da etapa cabe ao responsável,
+   mediante autorização separada; não foi executado aqui.
 
 ## Solução de problemas
 
@@ -497,58 +661,3 @@ Os arquivos gerados (`publico/dados.*`, `quadro.json`, `estado.json`) e o seu `a
   licença original. O que mudou está em `cotas/ORIGEM.txt`.
 - O card em cápsula, a tarja de privacidade e o `publico/cartao-apoio.js` foram contribuição de fbtostadev.
 - Licença deste repositório: MIT (`LICENSE`).
-# Rede por sessão de agente (E28, opt-in local)
-
-`PAINEL_REDE_SESSAO=1` habilita a fonte no coletor (cadência de 5 s) e o listener
-local existente em `http://127.0.0.1:7422`. Somente o valor literal `1` liga a
-variável. O padrão é desligado; a ativação em produção continua condicionada à
-E29. Esta implementação não altera variáveis, serviços nem tarefas agendadas.
-
-A captura precisa de opt-in próprio: em um terminal de administrador use
-`py -3.14 -I -B painel-rede capturar --detalhe`, ou defina
-`PAINEL_REDE_SESSAO=1` apenas no ambiente desse processo de captura. A pasta de
-dados (`PAINEL_IAS_DIR`, padrão `%LOCALAPPDATA%\painel-ias`) deve existir e cumprir
-as proteções já exigidas por `painel-rede`. A sessão ETW, o mutex e o evento de
-parada têm nomes globais fixos: **não é possível rodar uma segunda captura só
-mudando a pasta**. Planeje a substituição da captura existente em uma janela
-autorizada; não inicie nem pare a tarefa de produção para experimentar esta função.
-
-O opt-in grava `rede-sessao.json` atomicamente na mesma pasta protegida de
-`rede-resumo.json`, nunca em `publico/`. O resumo público permanece igual.
-Na página local, “Rede por sessão de agente” mostra Claude Code, Codex, Grok,
-Hermes e cursor-agent: PID raiz, início do processo, quantidade de processos,
-bytes enviados/recebidos em 60 s e desde o início da captura. Cada sessão pode
-ser expandida para ver protocolo, porta local, endereço/porta remotos, basename
-do processo e os mesmos contadores. Esses bytes ETW TCP/UDP não incluem ICMP,
-outros protocolos nem todos os cabeçalhos de interface.
-
-A atribuição exige identidade PID + criação Win32 estável durante o ciclo e
-ancestrais vivos, com criação anterior à do filho; ciclos e cadeias de mais de
-64 processos são recusados. Sem uma ligação determinística a um transcript,
-o identificador de sessão é `null`: horário/produto não bastam. Processos sem
-criação legível, reutilizados, encerrados ou sem raiz verificável entram em
-“Outros programas / não atribuídos”; a parcela sem vínculo confiável fica
-explícita. Históricos de raízes mortas também deixam de ser atribuídos a uma
-sessão viva. Não há leitura de cmdline, ambiente ou transcript para descobrir IDs.
-
-Limites: 8.192 identidades de PID e 4.096 fluxos por captura, janela de 30
-ciclos de 2 s, arquivo/leitura de até 2 MiB; 100 sessões, 100 conexões por sessão
-e 2.000 conexões exibidas no total. Fluxos conservados mantêm totais após sair da
-janela. Cortes de conexões não reduzem os totais por PID; após o teto de PIDs,
-os bytes vão ao agregado não atribuído. Os contadores de descarte da captura
-contam observações de fluxo/PID por ciclo (podem repetir uma conexão), e os
-omitidos da página contam linhas. Valores são saturados em 10^15 bytes por direção.
-
-Arquivo ausente apresenta “sem captura detalhada” com instrução; sinal com mais
-de 30 s fica “parado”, com idade e aviso. Não confunda atualização de `local.json`
-com atualização do sinal da captura. Arquivos inválidos ou maiores que o limite
-geram apenas erro constante no feed público. Endereços, portas e PIDs ficam no
-arquivo protegido e em `local.json`, servidos **somente em 127.0.0.1:7422**;
-não publique essa porta com proxy/Tailscale. A página usa DOM/textContent e o
-mesmo mecanismo CSP do listener local.
-
-Para desfazer: remova `PAINEL_REDE_SESSAO` dos ambientes do coletor/servidor e
-da captura; em uma janela autorizada, reinicie a captura sem `--detalhe`.
-Sem opt-in não há novas gravações de detalhe; arquivos antigos podem permanecer
-na pasta protegida e ser removidos manualmente conforme a política local.
-Não há remoção automática de dados ou alteração da tarefa agendada.

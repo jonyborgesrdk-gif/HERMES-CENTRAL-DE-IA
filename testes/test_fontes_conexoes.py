@@ -165,6 +165,15 @@ class Fonte(unittest.TestCase):
             sistema.tabela = Mock(side_effect=erro)
             self.assertEqual(mod.ler({'conexoes_sistema': sistema}), {'erro': mod.ERRO_LER})
 
+    def test_e29_c6e_nome_limpo_em_todas_as_saidas(self):
+        sistema = SistemaFalso({('tcp', 4): tabela(tcp4(2)), ('udp', 4): tabela(udp4())})
+        sistema.nome.return_value = 'C:\\privado\\Ex\u202eemp\x1blo.exe'
+        saida = mod.ler({'conexoes_sistema': sistema})['conexoes']
+        self.assertEqual([p['processo'] for p in saida['itens']], ['Exemplo.exe', 'Exemplo.exe'])
+        self.assertEqual(saida['processos'][0]['processo'], 'Exemplo.exe')
+        for porta in saida['portas_abertas']:
+            self.assertEqual(porta['processos'][0]['processo'], 'Exemplo.exe')
+
     def test_windows_ausente(self):
         with patch.object(mod, 'os', SimpleNamespace(name='posix')), patch.object(mod, 'SistemaWindows') as criar:
             self.assertEqual(mod.ler({}), {'erro': mod.ERRO_WINDOWS})
@@ -197,6 +206,16 @@ class FronteiraCtypes(unittest.TestCase):
     def test_query_negada_fecha_handle(self):
         sistema = self.sistema()
         self.assertEqual(sistema.nome(123), 'sem leitura')
+        sistema.kernel.CloseHandle.assert_called_once_with(123)
+
+    def test_e29_c6e_nome_nativo_sem_controles_ou_bidi(self):
+        sistema = self.sistema()
+        def consultar(handle, flags, buffer, tamanho):
+            buffer.value = 'C:\\privado\\Ex\u202eemp\x1blo.exe'
+            tamanho._obj.value = len(buffer.value)
+            return True
+        sistema.kernel.QueryFullProcessImageNameW.side_effect = consultar
+        self.assertEqual(sistema.nome(123), 'Exemplo.exe')
         sistema.kernel.CloseHandle.assert_called_once_with(123)
 
     def test_query_basename_e_fecha_handle_em_excecao(self):

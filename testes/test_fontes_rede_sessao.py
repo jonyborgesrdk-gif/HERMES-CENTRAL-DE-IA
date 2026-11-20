@@ -65,8 +65,10 @@ class RedeSessao(unittest.TestCase):
                 if caso == 'sem_criacao': self.processos[3]['criado'] = None
                 saida = self.montar()
                 self.assertEqual(saida['sessoes'], [])
-                self.assertEqual(saida['outros']['total'], [100, 200])
-                self.assertEqual(saida['outros']['nao_atribuidos']['total'], [100, 200])
+                identidade_valida = caso not in ('pid_reutilizado', 'sem_criacao')
+                self.assertEqual(saida['outros']['total'], [0, 0] if identidade_valida else [100, 200])
+                self.assertEqual(saida['outros']['nao_atribuidos']['total'],
+                                 [100, 200] if identidade_valida else [0, 0])
 
     def test_cadeia_limitada_e_heranca_de_produto_nao_inventada(self):
         self.processos = {i: processo(i, i-1, i) for i in range(1, 70)}
@@ -120,3 +122,35 @@ class RedeSessao(unittest.TestCase):
         with patch.object(r, 'MAX_FLUXOS', 0), self.assertRaises(ValueError): self.montar()
         with patch.object(r, 'MAX_PROCESSOS', 1):
             self.assertEqual(len(r.snapshot(lambda _: list(self.processos.values()))), 1)
+
+    def test_e29_c6c_contadores_disjuntos_expirados_e_raiz_memorizada(self):
+        self.processos[4] = processo(4, seg=1)
+        self.d['pids'].extend([
+            dict(pid=4, criado=criado(1), janela=[1, 2], total=[10, 20]),
+            dict(pid=5, criado=None, janela=[3, 4], total=[30, 40])])
+        self.d['nao_atribuidos'] = dict(janela=[7, 8], total=[70, 80])
+        self.d['expirados'] = dict(janela=[0, 0], total=[9, 10], fluxos_total=[9, 10])
+        with patch.object(r, 'raiz', wraps=r.raiz) as resolver:
+            saida = self.montar()
+        self.assertEqual(resolver.call_count, len(self.processos))
+        self.assertEqual(saida['sessoes'][0]['total'], [100, 200])
+        self.assertEqual(saida['outros']['total'], [109, 130])
+        self.assertEqual(saida['outros']['janela'], [10, 12])
+        self.assertEqual(saida['outros']['nao_atribuidos']['total'], [10, 20])
+        self.assertEqual(saida['outros']['nao_atribuidos']['janela'], [1, 2])
+        self.assertEqual(saida['outros']['processos'], 1)
+        for valor in ([], dict(janela=[0, 0], total=[-1, 0])):
+            self.d['expirados'] = valor
+            with self.assertRaises(ValueError):
+                self.montar()
+
+    def test_e29_c6e_nome_sem_controles_ou_bidi(self):
+        self.processos[3]['nome'] = 'wo\u202erk\x1ber.exe'
+        self.assertEqual(self.montar()['sessoes'][0]['conexoes'][0]['processo'], 'worker.exe')
+
+    def test_e29_c7_mesmo_agente_externo_e_agente_diferente_proprio(self):
+        for agente, pid_raiz in (('claude', 1), ('codex', 2)):
+            with self.subTest(agente=agente):
+                self.processos[2] = processo(2, 1, 1, agente)
+                sessao = self.montar()['sessoes'][0]
+                self.assertEqual((sessao['agente'], sessao['pid_raiz']), (agente, pid_raiz))

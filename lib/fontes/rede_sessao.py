@@ -12,6 +12,10 @@ from collections import Counter
 from pathlib import Path
 
 from . import agora, diretorio, presenca_processos
+try:
+    from ..mascara import limpar_exibicao
+except ImportError:
+    from mascara import limpar_exibicao
 
 ARQUIVO = 'rede-sessao.json'
 MAX_ARQUIVO = 2 * 1024 * 1024
@@ -116,7 +120,10 @@ def montar(documento, processos, tabela, agora_s):
         raise ValueError(ERRO)
     desconhecidos = {k: par(sem_identidade.get(k)) for k in ('janela', 'total')}
     somar(outros, desconhecidos)
-    somar(outros['nao_atribuidos'], desconhecidos)
+    expirados = documento.get('expirados', vazio())
+    if not isinstance(expirados, dict):
+        raise ValueError(ERRO)
+    somar(outros, {k: par(expirados.get(k)) for k in ('janela', 'total')})
     for item in pids:
         if not isinstance(item, dict):
             raise ValueError(ERRO)
@@ -131,11 +138,11 @@ def montar(documento, processos, tabela, agora_s):
         destino = destinos.get(pid) if valido else None
         donos[ident] = destino
         if destino is None:
-            somar(outros, contagem)
-            outros['processos'] += 1
-            # Sem árvore/identidade confiável não se afirma que é outro produto.
-            if not valido or raiz(pid, processos, tabela) is None:
-                somar(outros['nao_atribuidos'], contagem)
+            # Contadores disjuntos: identidade válida sem raiz de agente versus
+            # identidade desconhecida/omitida. O resultado de raiz já foi memorizado.
+            somar(outros['nao_atribuidos'] if valido else outros, contagem)
+            if not valido:
+                outros['processos'] += 1
             continue
         agente, pid_raiz, criado_raiz = destino
         sessao = sessoes.setdefault(destino, dict(vazio(), agente=agente, pid_raiz=pid_raiz,
@@ -158,7 +165,7 @@ def montar(documento, processos, tabela, agora_s):
         endereco = str(ipaddress.ip_address(item['remoto']))
         c = {k: par(item.get(k)) for k in ('janela', 'total')}
         p = processos.get(ident[0], {})
-        nome = ntpath.basename(p.get('nome') or '')[:128] if donos[ident] is not None else ''
+        nome = limpar_exibicao(ntpath.basename(p.get('nome') or ''))[:128] if donos[ident] is not None else ''
         c.update(proto=item['proto'], local_porta=local, remoto=endereco,
                  remoto_porta=remoto, processo=nome)
         conexoes.append((donos[ident], c))

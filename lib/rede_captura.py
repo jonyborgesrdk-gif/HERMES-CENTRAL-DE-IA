@@ -55,6 +55,7 @@ ARQ_SESSAO = 'rede-sessao.json'
 MAX_DETALHE = 2 * 1024 * 1024
 MAX_FLUXOS_DETALHE = 4096
 MAX_PIDS_DETALHE = 8192
+MARGEM_REUSO_PID_S = 2.0
 MAX_BYTES = 10 ** 15
 MAX_CPU_PCT = 6400.0
 MAX_EVENTOS_S = 10 ** 7
@@ -349,6 +350,9 @@ class Detalhe:
     def __init__(self):
         self.pids, self.fluxos, self.fatias = {}, {}, {}
         self.nao_atribuidos = [0, 0]
+        # Total por PID é autoritativo; fluxos_total é uma contagem paralela,
+        # nunca somada de novo ao total de bytes expirados.
+        self.expirados = {'janela': [0, 0], 'total': [0, 0], 'fluxos_total': [0, 0]}
         self.fluxos_omitidos = self.pids_omitidos = 0
 
     @staticmethod
@@ -359,7 +363,7 @@ class Detalhe:
     def adicionar(self, ciclo, pid, criado, fluxo, coluna, tam):
         fatia = self.fatias.setdefault(ciclo, ({}, {}, [0, 0]))
         ident = (pid, criado)
-        if pid is None or ident not in self.pids and len(self.pids) >= MAX_PIDS_DETALHE:
+        if pid in (None, 0) or ident not in self.pids and len(self.pids) >= MAX_PIDS_DETALHE:
             self.nao_atribuidos[coluna] = min(MAX_BYTES, self.nao_atribuidos[coluna] + tam)
             fatia[2][coluna] = min(MAX_BYTES, fatia[2][coluna] + tam)
             self.pids_omitidos = min(MAX_BYTES, self.pids_omitidos + 1)
@@ -376,9 +380,25 @@ class Detalhe:
         self._somar(self.fluxos, chave, coluna, tam)
         self._somar(fatia[1], chave, coluna, tam)
 
-    def expirar(self, ciclo):
+    def expirar(self, ciclo, identidades):
         for c in [c for c in self.fatias if ciclo - c >= CICLOS_JANELA]:
             del self.fatias[c]
+        presentes = set((identidades or {}).items())
+        pids_ativos, fluxos_ativos = set(), set()
+        for pids, fluxos, _ in self.fatias.values():
+            pids_ativos.update(pids)
+            fluxos_ativos.update(fluxos)
+        for chave in list(self.fluxos):
+            if chave[1:3] not in presentes and chave not in fluxos_ativos:
+                total = self.fluxos.pop(chave)
+                for col in range(2):
+                    self.expirados['fluxos_total'][col] = min(
+                        MAX_BYTES, self.expirados['fluxos_total'][col] + total[col])
+        for ident in list(self.pids):
+            if ident not in presentes and ident not in pids_ativos:
+                total = self.pids.pop(ident)
+                for col in range(2):
+                    self.expirados['total'][col] = min(MAX_BYTES, self.expirados['total'][col] + total[col])
 
     def retrato(self, estado, agora_s, desde):
         jp, jf, nao = {}, {}, [0, 0]
@@ -401,6 +421,7 @@ class Detalhe:
         fluxos.sort(key=lambda f: -sum(f['janela']))
         return dict(schema=1, estado=estado, gerado_em=agora_s, desde=desde, janela_s=60,
             pids=pids, fluxos=fluxos, nao_atribuidos=dict(janela=nao, total=self.nao_atribuidos[:]),
+            expirados={k: v[:] for k, v in self.expirados.items()},
             fluxos_omitidos=self.fluxos_omitidos, pids_omitidos=self.pids_omitidos)
 
 
@@ -416,7 +437,9 @@ class Agregador:
         self._recusa = None
         self.detalhe = Detalhe() if detalhe else None
 
-    def fechar_ciclo(self, bruto, mapa, ciclo, identidades=None):
+    def fechar_ciclo(self, bruto, mapa, ciclo, identidades=None, atuais=None):
+        if self.detalhe is not None:
+            self.detalhe.expirar(ciclo, identidades if atuais is None else atuais)
         fatia = self._fatias.setdefault(ciclo, {})
         for (eid, pid, ender), tam in bruto.items():
             produto = mapa.get(pid, OUTROS)
@@ -458,8 +481,6 @@ class Agregador:
         for velho in [f for f, (c, _p) in self._fluxos.items() if ciclo - c >= CICLOS_JANELA]:
             del self._fluxos[velho]
         self.no_teto = self._recusa is not None and ciclo - self._recusa < CICLOS_JANELA
-        if self.detalhe is not None:
-            self.detalhe.expirar(ciclo)
 
     def retrato(self):
         janela = {}
@@ -647,10 +668,12 @@ def gravar_resumo(caminho_pasta, resumo):
                 pass
 
 
-def gravar_detalhe(pasta, detalhe):
+def gravar_detalhe(pasta, detalhe, estado=None, agora_s=None, desde=None):
     """Mesma pasta protegida/presa do resumo; corta só fluxos, nunca totais por PID."""
     temporario = None
     try:
+        if estado is not None:
+            detalhe = detalhe.retrato(estado, agora_s, desde)
         def serializar():
             return (json.dumps(detalhe, ensure_ascii=True, allow_nan=False,
                                separators=(',', ':')) + '\n').encode('ascii')
@@ -1170,9 +1193,10 @@ def capturar(pasta, sessao, listar, tabela, parar, relogio, cpu, dormir, agora, 
                         atuais = identidades()
                         estaveis = {pid: criado for pid, criado in atuais.items()
                                     if anteriores.get(pid) == criado
-                                    and criado / 10 ** 7 - 11644473600 <= limite_anterior}
+                                    and criado / 10 ** 7 - 11644473600
+                                    <= limite_anterior - MARGEM_REUSO_PID_S}
                         anteriores, limite_anterior = atuais, limite
-                    agregador.fechar_ciclo(bruto, mapa, ciclo, estaveis)
+                    agregador.fechar_ciclo(bruto, mapa, ciclo, estaveis, atuais if detalhe else None)
                     if cpu_pct is not None and controle.amostra(cpu_pct, relogio()) == "pausar":
                         sessao.fechar()
                         if not sessao.limpar_orfa():
@@ -1183,7 +1207,7 @@ def capturar(pasta, sessao, listar, tabela, parar, relogio, cpu, dormir, agora, 
                             break
                         pausado = True
                 else:
-                    agregador.fechar_ciclo({}, mapa, ciclo)
+                    agregador.fechar_ciclo({}, mapa, ciclo, atuais=identidades() if detalhe else None)
                     if controle.deve_retomar(relogio()):
                         motivo = sessao.abrir(retorno)
                         if motivo is not None:
@@ -1212,16 +1236,16 @@ def capturar(pasta, sessao, listar, tabela, parar, relogio, cpu, dormir, agora, 
                         agregador.retrato(), ultima if ultima is not None else 0.0, eventos_s,
                         0 if pausado else sessao.perdidos(), retoma))
                     if detalhe:
-                        gravar_detalhe(pasta.caminho, agregador.detalhe.retrato(
-                            'pausado_carga' if pausado else 'ativo', agora_s, desde))
+                        gravar_detalhe(pasta.caminho, agregador.detalhe,
+                            'pausado_carga' if pausado else 'ativo', agora_s, desde)
             codigo = 1 if saiu_por_abrir else 0
     except Exception:
         codigo = 1
     finally:
         if detalhe and agregador is not None and desde is not None:
             try:
-                gravar_detalhe(pasta.caminho, agregador.detalhe.retrato(
-                    'erro' if codigo else 'encerrado', agora(), desde))
+                gravar_detalhe(pasta.caminho, agregador.detalhe,
+                    'erro' if codigo else 'encerrado', agora(), desde)
             except Exception:
                 pass
         try:

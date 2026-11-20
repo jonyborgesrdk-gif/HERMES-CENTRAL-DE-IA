@@ -66,6 +66,48 @@ class Mascara(unittest.TestCase):
         self.assertEqual(mascarar(nome, sequencias_longas=False), nome)
         self.assertEqual(mascarar('sk-tokenFalso123', sequencias_longas=False), OCULTO)
 
+    def test_e29_c1_flag_consumida_tambem_processada(self):
+        for variavel, flag in (('$MYSQL_DUMP', '-p'), ('%MYSQL_DUMP%', '-p'), ('$zip', '-P')):
+            with self.subTest(variavel=variavel):
+                saida = mascarar('openssl enc -in ' + variavel + ' -out a.enc ' + flag + ' -k hunter2')
+                self.assertNotIn('hunter2', saida)
+                self.assertNotIn('-k', saida)
+
+    def test_e29_c2_familias_sqlcmd_e_sshpass_por_substring(self):
+        for comando in ('& $SqlCmdPath -S . -U sa -P hunter2',
+                        '& (Get-Command sqlcmd).Source -P hunter2',
+                        '& "$env:SQLCMD_PATH" -P hunter2', '$SSHPASS_BIN -p hunter2 ssh h'):
+            with self.subTest(comando=comando):
+                self.assertNotIn('hunter2', mascarar(comando))
+
+    def test_e29_c3_nomes_sensiveis_portugues(self):
+        for nome in ('SENHA', 'CHAVE', 'SEGREDO', 'CREDENCIA'):
+            for forma in ('%s=hunter2', '$%s = "hunter2"', '--%s hunter2', '{"%s":"hunter2"}'):
+                with self.subTest(nome=nome, forma=forma):
+                    self.assertNotIn('hunter2', mascarar(forma % nome))
+
+    def test_e29_c4_credenciais_usuario_coladas_e_separadas(self):
+        for opcao in ('--user=u:hunter2', '--proxy-user=u:hunter2', '-uU:hunter2',
+                      '--user="john doe:hunter2"', '--proxy-user "john doe:hunter2"',
+                      '-u"john doe:hunter2"', '-u u:hunter2'):
+            with self.subTest(opcao=opcao):
+                self.assertNotIn('hunter2', mascarar('curl ' + opcao + ' https://x'))
+
+    def test_e29_c4b_senhas_windows(self):
+        for comando in ('net user admin hunter2 /add', 'NET USER admin "hunter2"',
+                        'schtasks /create /tn t /tr x /ru u /RP hunter2',
+                        'schtasks /change /tn t /rP hunter2', 'psexec -u u -p hunter2 cmd'):
+            with self.subTest(comando=comando):
+                self.assertNotIn('hunter2', mascarar(comando))
+
+    def test_e29_falsos_positivos_continuam_visiveis(self):
+        for comando in ('docker run -p 8080:80', 'ssh -p 22', 'mkdir -p a/b', '-P3306',
+                        '7z x a.zip -oC:/out', 'sqlcmd -E', 'git commit -m wip',
+                        'npm run build -- -p 3000', 'chmod -R u+w x', 'grep -u x',
+                        'echo chave_publica.pem'):
+            with self.subTest(comando=comando):
+                self.assertEqual(mascarar(comando), comando)
+
     def test_argv_direto_do_probe_mantem_contexto(self):
         self.assertNotIn('hunter2', mascarar(['docker', 'login', '-p', 'hunter2']))
 
