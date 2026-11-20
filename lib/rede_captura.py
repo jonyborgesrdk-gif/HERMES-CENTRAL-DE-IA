@@ -389,7 +389,7 @@ class Detalhe:
             pids_ativos.update(pids)
             fluxos_ativos.update(fluxos)
         for chave in list(self.fluxos):
-            if chave[1:3] not in presentes and chave not in fluxos_ativos:
+            if chave not in fluxos_ativos:
                 total = self.fluxos.pop(chave)
                 for col in range(2):
                     self.expirados['fluxos_total'][col] = min(
