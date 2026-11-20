@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Mostra e registra os erros de ferramenta dos agentes (Claude Code e Codex) que o coletor capturou com
+"""Mostra e registra os erros de ferramenta dos agentes (Claude Code, Codex, Grok e Hermes) que o coletor capturou com
 PAINEL_ERROS=1.
 
 Cada ocorrência tem um identificador curto (10 caracteres hexadecimais) e um estado:
@@ -12,12 +12,12 @@ Cada ocorrência tem um identificador curto (10 caracteres hexadecimais) e um es
 
 Uso:
   painel-erro listar [--estado aberto|corrigido|verificado|sem_tratamento|contado|todos]
-                     [--agente claude|codex] [--limite N] [--json]
+                     [--agente claude|codex|grok|hermes] [--limite N] [--json]
                                    lista as ocorrências, da mais recente para a mais antiga
                                    (padrão: --estado aberto e --limite 50, de 1 a 500)
   painel-erro ver ID [--bytes N]   mostra a entrada da ferramenta e o erro, lidos do transcript, com os
                                    segredos trocados por [oculto] (padrão: 4000 caracteres por bloco,
-                                   de 200 a 20000)
+                                   de 200 a 20000); para Grok e Hermes só há classe e código
   painel-erro corrigido ID [--nota TEXTO]
                                    registra que o erro foi corrigido (nota de até 280 caracteres)
   painel-erro verificado ID --tipo teste|comando --comando TEXTO --codigo N --saida ARQUIVO
@@ -48,6 +48,7 @@ CABECALHO = ("ID", "IDADE", "AGENTE", "FERRAMENTA", "CLASSE", "CÓDIGO", "ESTADO
 CORTE = " … (cortado)"
 SEM_OCORRENCIAS = "nenhuma ocorrência registrada (a captura liga com PAINEL_ERROS=1 no coletor)"
 SEM_TEXTO = "texto indisponível: o transcript mudou ou foi apagado"
+SEM_TEXTO_AGENTE = "texto não guardado para este agente (só classe e código)"
 RE_ID = re.compile(r"[0-9a-f]{10}")
 
 
@@ -125,6 +126,9 @@ def ver(dir_dados, args, agora_s):
     print("id: %s" % oc["id"])
     print("agente: %s | ferramenta: %s | classe: %s | código: %s | estado: %s" % (
         oc["agente"], oc["ferramenta"], oc["classe"], codigo_de(oc["codigo"]), situacao))
+    if oc["agente"] in ("grok", "hermes"):
+        print(SEM_TEXTO_AGENTE)
+        return 0
     print("transcript: %s" % limpar_saida(oc["arquivo"]))
     texto = registro.ler_texto(oc)
     if texto is None:

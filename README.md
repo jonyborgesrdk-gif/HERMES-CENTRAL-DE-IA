@@ -224,6 +224,38 @@ Com `PAINEL_REDE=1` a seção de agentes ganha o bloco "Rede · por programa · 
 
 O painel não cria tarefa agendada nem serviço; iniciar a captura junto com o Windows é uma mudança permanente no sistema e fica por conta do dono.
 
+## Canal local para dados sensíveis (E26a)
+
+No servidor, `PAINEL_CONEXOES=1`, `PAINEL_COMANDO=1` ou `PAINEL_REDE_SESSAO=1`
+habilita um segundo listener, sempre em `127.0.0.1`. Sem nenhuma delas exatamente
+`1`, nenhum socket ou log adicional é criado. Abra `http://127.0.0.1:7422/` na
+própria máquina; esta etapa mostra apenas `gerado_em` e as chaves de topo.
+`PAINEL_PORTA_LOCAL` aceita inteiro de 1024 a 65535 diferente da porta principal;
+valor inválido usa 7422 com aviso constante. Se a porta resultante, inclusive o
+padrão 7422, coincidir com a principal, o listener local não sobe e registra
+aviso constante. A porta local não permite reutilização e usa bind exclusivo
+no Windows; porta ocupada desabilita só o listener local.
+
+A página fica em `publico_local/`, fora de `publico/`, e lê apenas `local.json`
+do diretório `PAINEL_IAS_DIR` ou `%LOCALAPPDATA%\painel-ias`, limitado a 4 MiB e a
+um objeto JSON. Sem leitura válida, responde 503. Não há ligação no painel
+principal nem publicação desses dados em `dados.json` ou na sentinela.
+Se o diretório de dados resolvido for `publico/` ou estiver dentro dele, o
+listener local não sobe, com aviso constante; configure os dados fora da raiz
+pública. A página local recebe CSP estrita com hashes SHA-256 calculados do
+script e estilo inline ao carregar o arquivo. Na parada, o servidor aguarda o
+fio local por até 5 s; se exceder, registra aviso constante e o processo pode
+encerrar mesmo assim (fios locais daemon).
+
+A porta separada é necessária porque `tailscale serve` repassa o Host do
+cliente: checar Host na 7421 não distingue acesso local de tailnet. **Mantenha
+o encaminhamento Tailscale somente para a porta principal; nunca encaminhe a
+porta local.** O listener local ignora `PAINEL_HOSTS` e recusa cabeçalhos de
+proxy/Tailscale. Para desligar, remova as três variáveis e inicie novamente o
+servidor sob seu controle; para desfazer o código, reverta o futuro commit E26a.
+Risco residual: o bind da porta principal (7421) mantém o comportamento de
+reutilização anterior; a exclusividade desta etapa vale só para a porta local.
+
 ## Solução de problemas
 
 - **A página diz que os dados estão velhos.** O `./painel.sh` não está rodando. Suba de novo.

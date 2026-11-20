@@ -35,6 +35,9 @@ class Transcripts:
         self.codex = self.raiz / "codex"
         self.arq_claude = self.claude / "projeto-sintetico" / (IDENTIFICADORES[1] + ".jsonl")
         self.arq_codex = self.codex / "2026" / "11" / "01" / "rollout-sintetico.jsonl"
+        self.grok = self.raiz / "grok"                          # E30: raiz do Grok vazia (lida, sem sessão)
+        (self.grok / "sessions").mkdir(parents=True)
+        self.hermes_db = self.raiz / "hermes" / "state.db"      # E30: ausente = Hermes sem leitura
         for arq in (self.arq_claude, self.arq_codex):
             arq.parent.mkdir(parents=True)
         self.acrescentar(self.arq_claude, {"type": "user", "timestamp": iso(T - 60),
@@ -44,7 +47,8 @@ class Transcripts:
 
     def ctx(self, agora):
         return {"dir": str(self.dados), "claude_projects_dir": self.claude,
-                "codex_sessions_dir": self.codex, "agora": agora}
+                "codex_sessions_dir": self.codex, "grok_dir": self.grok, "hermes_db": self.hermes_db,
+                "agora": agora}
 
     @staticmethod
     def acrescentar(arq, *linhas):
@@ -84,6 +88,7 @@ class FonteErrosTests(unittest.TestCase):
         self.assertEqual(resumo["contagens"], dict.fromkeys(mod.registro.ESTADOS, 0))
         self.assertEqual(resumo["por_classe"], dict.fromkeys(mod.registro.CLASSES, 0))
         self.assertEqual(resumo["por_agente"], dict.fromkeys(mod.registro.AGENTES, 0))
+        self.assertEqual(resumo["sem_leitura"], ["hermes"])
         self.assertEqual(resumo["ultimas_24h"], 0)
         self.assertEqual(resumo["itens"], [])
         self.t.erro_claude(T + 30)

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painel local — dados sensíveis</title>
+<style>
+  body { font: 1rem/1.6 system-ui, sans-serif; max-width: 48rem; margin: 3rem auto; padding: 0 1rem; }
+  .aviso { border: 2px solid #865500; padding: 1rem; background: #fff5da; color: #382400; }
+  dt { font-weight: bold; }
+  dd { margin: 0 0 1rem; overflow-wrap: anywhere; }
+</style>
+<h1>Painel local — dados sensíveis</h1>
+<p class="aviso">Esta página só abre nesta máquina (127.0.0.1). Pode conter comandos, PIDs e endereços.</p>
+<dl>
+  <dt>Gerado em</dt><dd id="gerado">sem leitura</dd>
+  <dt>Chaves de topo presentes</dt><dd><ul id="chaves"></ul></dd>
+</dl>
+<script>
+  'use strict';
+  const gerado = document.getElementById('gerado');
+  const chaves = document.getElementById('chaves');
+  async function atualizar() {
+    try {
+      const resposta = await fetch('/local.json', {cache: 'no-store'});
+      if (!resposta.ok) throw new Error('sem leitura');
+      const dados = await resposta.json();
+      if (!dados || typeof dados !== 'object' || Array.isArray(dados)) throw new Error('sem leitura');
+      gerado.textContent = typeof dados.gerado_em === 'string' || typeof dados.gerado_em === 'number'
+        ? String(dados.gerado_em) : 'sem leitura';
+      chaves.replaceChildren();
+      for (const chave of Object.keys(dados)) {
+        const item = document.createElement('li');
+        item.textContent = chave;
+        chaves.appendChild(item);
+      }
+    } catch (_) {
+      gerado.textContent = 'sem leitura';
+      chaves.replaceChildren();
+    }
+  }
+  atualizar();
+  setInterval(atualizar, 5000);
+</script>
+</html>

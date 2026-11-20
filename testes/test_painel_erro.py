@@ -445,6 +445,25 @@ class PainelErro(unittest.TestCase):
         self.assertNotIn("Traceback", err)
         self.assertEqual((arq_estado.read_bytes(), arq_registro.read_bytes()), antes)
 
+    # N1: Grok e Hermes não guardam texto; ver diz isso e não mostra o caminho do arquivo ou do banco
+    def test_65_ver_grok_e_hermes_sem_texto_e_sem_caminho(self):
+        constante = "texto não guardado para este agente (só classe e código)"
+        self.assertIn("claude|codex|grok|hermes", Path(RAIZ / "painel-erro").read_text(encoding="utf-8").split('"""')[1])
+        ocs = {}
+        for agente, arquivo in (("grok", "C:/caminho-secreto-grok/events.jsonl"), ("hermes", "C:/caminho-secreto-hermes/state.db")):
+            chave = agente + "-chave-1"
+            ident = reg.id_de(agente, chave)
+            ocs[ident] = {"id": ident, "agente": agente, "ferramenta": "comando", "classe": "outra", "codigo": None,
+                          "hora": self.hora, "arquivo": arquivo, "offset": 0, "chave": chave}
+        reg._gravar_ocorrencias(self.dados, {"versao": reg.VERSAO, "criado_em": self.t0, "arquivos": {}, "ocorrencias": ocs})
+        for ident, oc in ocs.items():
+            codigo, out, err = self.rodar("ver", ident)
+            self.assertEqual(codigo, 0, err)
+            self.assertIn(constante, out)
+            self.assertNotIn("transcript:", out)
+            self.assertNotIn("caminho-secreto", out + err)
+            self.assertIn("agente: " + oc["agente"], out)
+
 
 if __name__ == "__main__":
     unittest.main()

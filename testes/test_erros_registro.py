@@ -648,7 +648,7 @@ class ErrosRegistroTests(unittest.TestCase):
             oc("d000000002", agora - 500, classe="interrompido", ferramenta="nenhuma", codigo=None),
             oc("d000000003", agora - 600, classe="api", ferramenta="nenhuma", codigo=429),
             oc("f000000001", agora - 100, classe="inventada"),
-            oc("f000000002", agora - 100, agente="grok"),
+            oc("f000000002", agora - 100, agente="cursor"),
             oc("f000000003", agora - 100, ferramenta="martelo"),
         ]
         estado = {"versao": 1, "criado_em": T, "arquivos": {}, "ocorrencias": {o["id"]: o for o in lista}}
@@ -674,7 +674,8 @@ class ErrosRegistroTests(unittest.TestCase):
         self.assertEqual(resumo["por_classe"], {"permissao_negada": 1, "interrompido": 1, "codigo_saida": 4,
                                                 "edicao": 1, "arquivo": 1, "tempo_esgotado": 1, "validacao": 1,
                                                 "api": 1, "outra": 1})
-        self.assertEqual(resumo["por_agente"], {"claude": 11, "codex": 1})
+        self.assertEqual(resumo["por_agente"], {"claude": 11, "codex": 1, "grok": 0, "hermes": 0})
+        self.assertEqual(resumo["sem_leitura"], [])
         self.assertEqual(resumo["ultimas_24h"], 9)
         self.assertEqual([i["id"] for i in resumo["itens"]],
                          ["a000000001", "a000000002", "a000000004", "a000000003",
