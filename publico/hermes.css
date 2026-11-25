@@ -493,3 +493,74 @@ th{padding:9px}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
 }
 .source-summary.warn .dot{color:var(--orange)}
+
+/* Layout refinement: readable type, balanced overview, bounded operational lists. */
+body{font-size:16px}
+.content{max-width:1680px;padding:32px clamp(20px,3vw,48px)}
+.topbar{padding-inline:clamp(20px,3vw,48px)}
+.page-heading{margin-bottom:28px}
+.page-heading h1{font-size:32px;letter-spacing:-1px;font-weight:650}
+.page-heading p{font-size:14px;margin-top:8px}
+.eyebrow{font-size:11px;letter-spacing:1.2px}
+.nav a,.workspace b,.button{font-size:14px}
+.nav a{padding-block:13px}
+.workspace small,.brand-sub,.nav-label,.side-action,.breadcrumb,.live-chip{font-size:12px}
+.icon-button{width:38px;height:38px}
+.button{min-height:40px;border-radius:9px}
+.stats{gap:16px;margin-bottom:24px}
+.stat{padding:22px;min-height:148px}
+.stat-title{font-size:14px}
+.stat-value{font-size:34px;font-weight:600;margin-block:14px 8px}
+.stat-foot{font-size:12px;line-height:1.6}
+.dashboard-row{align-items:start;gap:24px;margin-bottom:24px;grid-template-columns:minmax(0,1.65fr) minmax(310px,1fr)}
+.panel-head{padding:22px 22px 18px}
+.panel-title h2{font-size:17px;font-weight:600}
+.panel-desc,.badge,.text-button,.panel-footer{font-size:12px}
+.agent-toolbar{padding:0 22px 18px;flex-wrap:wrap}
+.tab,.tab span{font-size:12px}
+.tab{padding:7px 10px}
+.search{max-width:190px;flex:1;min-width:125px}
+.search input{height:36px;font-size:13px;padding-left:30px}
+.search>.icon{top:11px}
+th{font-size:11px;letter-spacing:.06em;padding-block:13px}
+td{font-size:13px;padding-block:14px}
+.agent-name strong{font-size:14px}
+.agent-name small,.status,.provider-name small{font-size:12px}
+.agent-logo{width:34px;height:34px}
+.agents-panel>.table-scroll{max-height:380px;overflow:auto;scrollbar-width:thin}
+.agents-panel>.table-scroll thead{position:sticky;top:0;background:var(--panel-soft);z-index:1}
+.presence-head{font-size:12px;line-height:1.6;padding:14px 22px;flex-wrap:wrap}
+#errors>.table-scroll{max-height:220px;overflow:auto;scrollbar-width:thin}
+#errors{background:color-mix(in srgb,var(--panel-soft) 35%,var(--panel))}
+#errors-nota,#errors-resumo,#network-nota{white-space:normal;overflow-wrap:anywhere}
+.provider-name{font-size:14px}
+.provider-header{gap:10px}
+.providers{padding:0 22px 20px}
+.provider{padding-block:16px}
+.provider-label,.provider-reset,.provider-account,.quota-label,.quota-reset{font-size:12px;line-height:1.6}
+.services-grid{gap:14px}
+.service{padding:18px}
+.service h3{font-size:15px}
+.service p,.service .status,.services-foot,.footer{font-size:12px}
+.compact-select{font-size:13px;min-height:36px}
+.cost-body{gap:24px}
+.cost-total{font-size:32px}
+.breakdown-label,.breakdown-label strong,.breakdown-title,.neutral-label{font-size:12px}
+.panel{box-shadow:0 4px 20px #0000000a}
+.panel-footer{line-height:1.6}
+@media(min-width:1001px) and (max-width:1220px){.sidebar{width:190px}.shell{margin-left:190px}.stats{grid-template-columns:repeat(4,minmax(0,1fr))}.stat{padding:16px;min-height:154px}.stat-title{font-size:12px}.stat-value{font-size:29px}.stat-foot{font-size:11px}.dashboard-row{grid-template-columns:minmax(0,1.5fr) minmax(280px,1fr);gap:16px}}
+@media(max-width:1000px){.dashboard-row{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.usage-panel .providers{gap:20px}.agents-panel>.table-scroll{max-height:420px}}
+@media(max-width:720px){.content{padding:24px 16px}.page-heading{gap:12px;flex-wrap:wrap}.page-heading h1{font-size:28px}.page-heading p{font-size:14px;max-width:none}.heading-actions{padding-top:0}.heading-actions .button{font-size:13px}.eyebrow{font-size:10px}.stats{gap:12px}.stat{padding:16px;min-height:148px}.stat-title{font-size:12px}.stat-value{font-size:30px}.stat-foot{font-size:11px}.panel-head{padding:18px 16px}.panel-title h2{font-size:16px}.agent-toolbar{padding-inline:16px}.tab,.tab span{font-size:12px}.search{max-width:none}.agent-name strong{font-size:13px;max-width:130px}.agent-name small{font-size:11px}.status{font-size:12px}.presence-head{padding-inline:16px}.usage-panel .providers{grid-template-columns:1fr}.cost-body{grid-template-columns:1fr}.services-grid{grid-template-columns:1fr}.services-grid>.service:last-child{grid-column:auto}.service p,.service .status,.services-foot,.footer{font-size:12px}.live-chip{font-size:11px}.topbar{padding-inline:16px}}
+/* Black and orange palette. Theme selection and semantic status colors remain available. */
+:root,[data-theme=dark]{--bg:#080808;--side:#0c0c0c;--panel:#141414;--panel-soft:#1c1c1c;--hover:#26201a;--line:#303030;--text:#f7f7f7;--muted:#b8b8b8;--faint:#999999;--accent:#ff8a24;--accent-soft:#321c0a;--orange:#ff8a24;--blue:#d6d6d6}
+[data-theme=light]{--bg:#f5f5f5;--side:#fff;--panel:#fff;--panel-soft:#ededed;--hover:#fff0e3;--line:#d9d9d9;--text:#171717;--muted:#555;--faint:#666;--accent:#b84c00;--accent-soft:#ffead8;--orange:#b84c00}
+.brand-mark,[data-theme=light] .brand-mark{color:var(--accent)}
+.stat:first-child,[data-theme=light] .stat:first-child{background:linear-gradient(120deg,var(--accent-soft),var(--panel) 75%);border-color:var(--accent)}
+.nav a.active{background:var(--accent-soft);color:var(--accent);box-shadow:inset 3px 0 var(--accent)}
+.agent-logo,.provider-logo,[data-theme=light] .agent-logo,[data-theme=light] .provider-logo{background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 38%,var(--line));color:var(--accent)}
+#refresh-button{background:var(--accent);border-color:var(--accent);color:#17100a;font-weight:650}
+#refresh-button:hover{filter:brightness(1.1)}
+.tabs,[data-theme=light] .tabs{background:var(--bg)}
+.chart-bar,[data-theme=light] .chart-bar{background:color-mix(in srgb,var(--accent) 65%,var(--panel))}
+.chart-bar:last-child,[data-theme=light] .chart-bar:last-child{background:var(--accent)}
+.track,[data-theme=light] .track{background:var(--line)}
